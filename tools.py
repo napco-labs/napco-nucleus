@@ -268,6 +268,55 @@ async def read_file_tool(args):
 
 
 @tool(
+    "write_file",
+    "Write (or overwrite) a full file under a sibling project. Creates parent dirs as needed. Use for whole-file rewrites. For small edits, prefer edit_file.",
+    {"project": str, "path": str, "content": str},
+)
+async def write_file_tool(args):
+    full = _resolve_in_project(args["project"], args["path"])
+    if not full:
+        return _text({"error": "Invalid project or path."})
+    os.makedirs(os.path.dirname(full), exist_ok=True)
+    with open(full, "w", encoding="utf-8", newline="") as f:
+        f.write(args["content"])
+    return _text({
+        "project": args["project"],
+        "path": args["path"],
+        "bytes_written": len(args["content"].encode("utf-8")),
+        "action": "written",
+    })
+
+
+@tool(
+    "edit_file",
+    "Edit a file by exact string replacement. old_string must match exactly once. Safer than write_file for small changes.",
+    {"project": str, "path": str, "old_string": str, "new_string": str},
+)
+async def edit_file_tool(args):
+    full = _resolve_in_project(args["project"], args["path"])
+    if not full:
+        return _text({"error": "Invalid project or path."})
+    if not os.path.isfile(full):
+        return _text({"error": f"File not found: {args['path']}"})
+    with open(full, "r", encoding="utf-8") as f:
+        content = f.read()
+    old = args["old_string"]
+    new = args["new_string"]
+    count = content.count(old)
+    if count == 0:
+        return _text({"error": "old_string not found in file."})
+    if count > 1:
+        return _text({"error": f"old_string matches {count} places — make it unique."})
+    with open(full, "w", encoding="utf-8", newline="") as f:
+        f.write(content.replace(old, new, 1))
+    return _text({
+        "project": args["project"],
+        "path": args["path"],
+        "action": "edited",
+    })
+
+
+@tool(
     "generate_pdf_report",
     "Generate the consolidated PDF report from collected results. Returns the PDF path.",
     {},
@@ -323,11 +372,14 @@ ALL_TOOLS = [
     run_e2e_tests_tool,
     list_project_files_tool,
     read_file_tool,
+    write_file_tool,
+    edit_file_tool,
     generate_pdf_report_tool,
     send_email_report_tool,
 ]
 
 TOOL_NAMES = [
     "run_load_tests", "run_api_tests", "run_integration_tests", "run_e2e_tests",
-    "list_project_files", "read_file", "generate_pdf_report", "send_email_report",
+    "list_project_files", "read_file", "write_file", "edit_file",
+    "generate_pdf_report", "send_email_report",
 ]
