@@ -316,6 +316,220 @@ async def edit_file_tool(args):
     })
 
 
+# ─── Non-destructive probe list for check_all_endpoints_health ──────────
+# Each tuple: (method, path_template, probe_type)
+#   probe_type "list"        — expect 200, probes a list/collection GET
+#   probe_type "get_by_id"   — expect 200|400|404 with a bogus id (endpoint wired up?)
+#   probe_type "post_empty"  — send {} or bad payload, expect 400/422 (endpoint wired up?)
+#   probe_type "put_bogus"   — PUT to a bogus id, expect 200|204|400|404 (accepts request)
+#   probe_type "delete_bogus"— DELETE bogus id, expect 200|204|400|404|405|500 (reachable)
+_ALL_ENDPOINT_PROBES = [
+    # Auth
+    ("POST", "/api/account/login", "special_login"),
+    ("POST", "/api/Account/RefreshToken", "post_empty"),
+    ("POST", "/api/Account/DealerLogin", "post_empty"),
+    # Organization
+    ("GET", "/api/PartitionGroup?page=1&pageSize=1", "list"),
+    ("POST", "/api/PartitionGroup", "post_empty"),
+    ("DELETE", "/api/PartitionGroup/99999999", "delete_bogus"),
+    ("GET", "/api/DepartmentInfo?page=1&pageSize=1", "list"),
+    ("POST", "/api/DepartmentInfo", "post_empty"),
+    ("GET", "/api/DepartmentInfo/Details?id=99999999", "get_by_id"),
+    ("PUT", "/api/DepartmentInfo/99999999", "put_bogus"),
+    ("DELETE", "/api/DepartmentInfo/99999999", "delete_bogus"),
+    ("GET", "/api/LocationInfo?page=1&pageSize=1", "list"),
+    ("POST", "/api/LocationInfo", "post_empty"),
+    ("GET", "/api/LocationInfo/Details?id=99999999", "get_by_id"),
+    ("PUT", "/api/LocationInfo/99999999", "put_bogus"),
+    ("DELETE", "/api/LocationInfo/99999999", "delete_bogus"),
+    ("GET", "/api/Schedule?page=1&pageSize=1", "list"),
+    ("POST", "/api/Schedule", "post_empty"),
+    ("GET", "/api/Schedule/Details?id=99999999", "get_by_id"),
+    ("PUT", "/api/Schedule/99999999", "put_bogus"),
+    ("DELETE", "/api/Schedule/99999999", "delete_bogus"),
+    ("GET", "/api/Holiday?page=1&pageSize=1", "list"),
+    ("POST", "/api/Holiday", "post_empty"),
+    ("GET", "/api/Holiday/Details?id=99999999", "get_by_id"),
+    ("PUT", "/api/Holiday/99999999", "put_bogus"),
+    ("DELETE", "/api/Holiday/99999999", "delete_bogus"),
+    # Hardware
+    ("GET", "/api/Panel?page=1&pageSize=1", "list"),
+    ("GET", "/api/Panel/Details?id=99999999", "get_by_id"),
+    ("GET", "/api/Reader?page=1&pageSize=1", "list"),
+    ("GET", "/api/Reader/Details?id=99999999", "get_by_id"),
+    # Access control
+    ("GET", "/api/FacilityCode?page=1&pageSize=1", "list"),
+    ("POST", "/api/FacilityCode", "post_empty"),
+    ("GET", "/api/FacilityCode/Details?id=99999999", "get_by_id"),
+    ("PUT", "/api/FacilityCode/99999999", "put_bogus"),
+    ("DELETE", "/api/FacilityCode/99999999", "delete_bogus"),
+    ("GET", "/api/AccessGroup?page=1&pageSize=1", "list"),
+    ("POST", "/api/AccessGroup", "post_empty"),
+    ("GET", "/api/AccessGroup/Details?id=99999999", "get_by_id"),
+    ("PUT", "/api/AccessGroup/99999999", "put_bogus"),
+    ("DELETE", "/api/AccessGroup/99999999", "delete_bogus"),
+    ("GET", "/api/Role?page=1&pageSize=1", "list"),
+    ("POST", "/api/Role", "post_empty"),
+    ("GET", "/api/Role/Details?id=99999999", "get_by_id"),
+    ("DELETE", "/api/Role/99999999", "delete_bogus"),
+    ("GET", "/api/Operator?page=1&pageSize=1", "list"),
+    ("POST", "/api/Operator", "post_empty"),
+    ("GET", "/api/Operator/Details?id=99999999", "get_by_id"),
+    ("PUT", "/api/Operator/99999999", "put_bogus"),
+    ("DELETE", "/api/Operator/99999999", "delete_bogus"),
+    ("GET", "/api/BadgeFormat?page=1&pageSize=1", "list"),
+    ("GET", "/api/BadgeFormat/Details?id=99999999", "get_by_id"),
+    # People & badges
+    ("GET", "/api/Person?page=1&pageSize=1", "list"),
+    ("POST", "/api/Person", "post_empty"),
+    ("POST", "/api/Person/Search", "post_empty"),
+    ("GET", "/api/Person/Details?id=99999999", "get_by_id"),
+    ("PUT", "/api/Person/99999999", "put_bogus"),
+    ("DELETE", "/api/Person/99999999", "delete_bogus"),
+    ("GET", "/api/PersonImage?page=1&pageSize=1", "list"),
+    ("POST", "/api/PersonImage", "post_empty"),
+    ("PUT", "/api/PersonImage/99999999", "put_bogus"),
+    ("DELETE", "/api/PersonImage/99999999", "delete_bogus"),
+    ("GET", "/api/Badge?page=1&pageSize=1", "list"),
+    ("POST", "/api/Badge", "post_empty"),
+    ("POST", "/api/Badge/Search", "post_empty"),
+    ("GET", "/api/Badge/Details?id=99999999", "get_by_id"),
+    ("PUT", "/api/Badge/99999999", "put_bogus"),
+    ("DELETE", "/api/Badge/99999999", "delete_bogus"),
+    ("GET", "/api/BadgeAccess?page=1&pageSize=1", "list"),
+    ("POST", "/api/BadgeAccess", "post_empty"),
+    ("GET", "/api/BadgeAccess/Details?id=99999999", "get_by_id"),
+    ("PUT", "/api/BadgeAccess/99999999", "put_bogus"),
+    ("DELETE", "/api/BadgeAccess/99999999", "delete_bogus"),
+    # Events & runtime
+    ("GET", "/api/Event?page=1&pageSize=1&fromDate=2023-01-01 00:00:00.000&toDate=2030-12-31 23:59:59.999", "list"),
+    ("GET", "/api/Event/EventClassDefinations", "list"),
+    ("POST", "/api/Event/AddOtherEvent", "post_empty"),
+    ("PUT", "/api/Event/Acknowledge/99999999", "put_bogus"),
+    ("GET", "/api/Audit?page=1&pageSize=1", "list"),
+    ("GET", "/api/DeviceStatus/panel", "list"),
+    ("POST", "/api/ManualDoor/Execute", "post_empty"),
+    ("POST", "/api/ManualRelay/Execute", "post_empty"),
+]
+
+
+@tool(
+    "check_all_endpoints_health",
+    "Non-destructively probe EVERY API endpoint (78 total) and report healthy/slow/unhealthy. Uses bogus IDs and empty bodies — creates no data. Runs in ~20-60 seconds. Ideal morning / pre-deployment smoke check.",
+    {},
+)
+async def check_all_endpoints_health_tool(_args):
+    import base64
+    import requests
+    from datetime import datetime
+
+    base_url = os.getenv("BASE_URL")
+    client_id = os.getenv("CLIENT_ID")
+    client_secret = os.getenv("CLIENT_SECRET")
+    api_key = os.getenv("API_KEY")
+    username = os.getenv("USER_ID")
+    password = os.getenv("PASSWORD")
+    account = os.getenv("COMPANY_ID")
+    if not all([base_url, client_id, client_secret, api_key, username, password, account]):
+        return _text({"error": "Missing required env vars — check MVP-Access-API-Test/.env"})
+
+    basic = base64.b64encode(f"{client_id}:{client_secret}".encode()).decode()
+    basic_headers = {"Authorization": f"Basic {basic}", "api-key": api_key, "Content-Type": "application/json"}
+
+    # Log in
+    try:
+        lr = requests.post(
+            f"{base_url}/api/account/login",
+            json={"userName": username, "password": password, "account": int(account)},
+            headers=basic_headers, timeout=10,
+        )
+    except Exception as e:
+        return _text({"error": f"Login failed: {e}", "base_url": base_url})
+    if lr.status_code != 200:
+        return _text({"error": f"Login returned {lr.status_code}", "body": lr.text[:300]})
+    token = lr.json().get("token") or lr.json().get("Token")
+    bearer_headers = {"Authorization": f"Bearer {token}", "api-key": api_key, "Content-Type": "application/json"}
+
+    PERF = 2.0
+    results = []
+    for method, path, probe in _ALL_ENDPOINT_PROBES:
+        if probe == "special_login":
+            # Already probed above; record success explicitly.
+            results.append({
+                "method": method, "path": path, "probe": probe,
+                "status": lr.status_code, "elapsed_s": round(lr.elapsed.total_seconds(), 3),
+                "verdict": "healthy" if lr.status_code == 200 else "broken",
+            })
+            continue
+
+        kwargs = {"headers": bearer_headers, "timeout": 30}
+        if method == "POST":
+            kwargs["json"] = {}
+        elif method == "PUT":
+            kwargs["json"] = {}
+
+        try:
+            r = requests.request(method, f"{base_url}{path}", **kwargs)
+            elapsed = r.elapsed.total_seconds()
+            status = r.status_code
+        except requests.exceptions.Timeout:
+            results.append({"method": method, "path": path, "probe": probe,
+                            "status": None, "elapsed_s": None, "verdict": "timeout"})
+            continue
+        except Exception as e:
+            results.append({"method": method, "path": path, "probe": probe,
+                            "status": None, "elapsed_s": None,
+                            "verdict": "exception", "error": str(e)[:200]})
+            continue
+
+        # Decide verdict based on probe type
+        if probe == "list":
+            verdict = "healthy" if status == 200 else f"unhealthy_{status}"
+        elif probe == "get_by_id":
+            verdict = "healthy" if status in (200, 400, 404) else f"unhealthy_{status}"
+        elif probe == "post_empty":
+            # Expect 400 for bad payload. 401/403 = endpoint blocked us (still reachable).
+            # 200/201 means API silently accepted {} which is a validation bug.
+            if status in (400, 401, 403, 422):
+                verdict = "healthy"
+            elif status in (200, 201):
+                verdict = "validation_gap"  # accepted empty body — bad
+            else:
+                verdict = f"unhealthy_{status}"
+        elif probe == "put_bogus":
+            verdict = "healthy" if status in (200, 204, 400, 404, 422) else f"unhealthy_{status}"
+        elif probe == "delete_bogus":
+            verdict = "healthy" if status in (200, 204, 400, 404, 405, 500) else f"unhealthy_{status}"
+        else:
+            verdict = "unknown_probe"
+
+        # Layer on a perf warning
+        if verdict == "healthy" and elapsed > PERF:
+            verdict = "slow"
+
+        results.append({
+            "method": method, "path": path, "probe": probe,
+            "status": status, "elapsed_s": round(elapsed, 3),
+            "verdict": verdict,
+        })
+
+    # Aggregate counts
+    counts = {}
+    for r in results:
+        counts[r["verdict"]] = counts.get(r["verdict"], 0) + 1
+
+    return _text({
+        "base_url": base_url,
+        "checked_at": datetime.now().isoformat(timespec="seconds"),
+        "total_endpoints": len(results),
+        "counts": counts,
+        "slowest": sorted([r for r in results if r["elapsed_s"] is not None],
+                          key=lambda x: -x["elapsed_s"])[:5],
+        "unhealthy": [r for r in results if r["verdict"] not in ("healthy",)],
+        "results": results,
+    })
+
+
 @tool(
     "list_known_bugs",
     "List all entries in integration-tests/known_bugs.py (xfail markers) with their reasons — useful for triage / bug-review meetings and for deciding which API bugs to prioritize.",
@@ -794,6 +1008,7 @@ async def send_email_report_tool(args):
 ALL_TOOLS = [
     # Pre-flight
     check_api_health_tool,
+    check_all_endpoints_health_tool,
     # Test execution
     run_load_tests_tool, run_api_tests_tool, run_integration_tests_tool,
     run_tests_by_pattern_tool, find_flaky_tests_tool, run_e2e_tests_tool,
@@ -810,7 +1025,7 @@ ALL_TOOLS = [
 ]
 
 TOOL_NAMES = [
-    "check_api_health",
+    "check_api_health", "check_all_endpoints_health",
     "run_load_tests", "run_api_tests", "run_integration_tests",
     "run_tests_by_pattern", "find_flaky_tests", "run_e2e_tests",
     "list_project_files", "read_file", "write_file", "edit_file",
