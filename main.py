@@ -15,6 +15,13 @@ import logging
 import argparse
 import anyio
 
+# Force UTF-8 on Windows console so arrows/emojis in agent output don't crash.
+try:
+    sys.stdout.reconfigure(encoding="utf-8")
+    sys.stderr.reconfigure(encoding="utf-8")
+except Exception:
+    pass
+
 from dotenv import load_dotenv
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
