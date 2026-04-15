@@ -317,6 +317,26 @@ async def edit_file_tool(args):
 
 
 @tool(
+    "clean_reports_folder",
+    "Delete all existing PDF / JSON / CSV report artifacts in the API-Test reports/ folder before a fresh run. Use when the user asks for a clean report or fresh output.",
+    {},
+)
+async def clean_reports_folder_tool(_args):
+    import glob
+    deleted = []
+    for pattern in ("*.pdf", "*.csv", "*.json", "*.xlsx"):
+        for f in glob.glob(os.path.join(config.REPORTS_DIR, pattern)):
+            try:
+                os.remove(f)
+                deleted.append(os.path.basename(f))
+            except Exception as e:
+                logger.warning(f"Failed to delete {f}: {e}")
+    # Reset the in-memory report_paths so subsequent generate_pdf_report starts clean
+    STATE["report_paths"] = []
+    return _text({"deleted": deleted, "deleted_count": len(deleted)})
+
+
+@tool(
     "generate_pdf_report",
     "Generate the consolidated PDF report from collected results. Returns the PDF path.",
     {},
@@ -374,6 +394,7 @@ ALL_TOOLS = [
     read_file_tool,
     write_file_tool,
     edit_file_tool,
+    clean_reports_folder_tool,
     generate_pdf_report_tool,
     send_email_report_tool,
 ]
@@ -381,5 +402,5 @@ ALL_TOOLS = [
 TOOL_NAMES = [
     "run_load_tests", "run_api_tests", "run_integration_tests", "run_e2e_tests",
     "list_project_files", "read_file", "write_file", "edit_file",
-    "generate_pdf_report", "send_email_report",
+    "clean_reports_folder", "generate_pdf_report", "send_email_report",
 ]
