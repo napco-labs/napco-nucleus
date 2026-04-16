@@ -16,7 +16,13 @@ from datetime import datetime
 from claude_agent_sdk import tool
 
 # ---- Peer project locations ------------------------------------------------
-PROJECTS_ROOT = r"E:\Projects"
+# Default to the parent folder of THIS project so a sibling layout works out
+# of the box on any machine. Override with MVP_PROJECTS_ROOT if your projects
+# live somewhere else.
+_DEFAULT_PROJECTS_ROOT = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), "..")
+)
+PROJECTS_ROOT = os.getenv("MVP_PROJECTS_ROOT", _DEFAULT_PROJECTS_ROOT)
 API_TEST_PROJECT = os.path.join(PROJECTS_ROOT, "MVP-Access-API-Test")
 E2E_PROJECTS = {
     "full":    os.path.join(PROJECTS_ROOT, "MVP-Access-E2E-Test"),
@@ -37,6 +43,11 @@ from run_all_tests import (  # noqa: E402
 )
 from report_generator import generate_pdf_report as _generate_pdf  # noqa: E402
 from email_sender import send_report_email  # noqa: E402
+import history         # noqa: E402 — per-run snapshot store + regression/flaky analysis
+import coverage as _coverage  # noqa: E402 — swagger-vs-tests coverage
+import bug_reporter   # noqa: E402 — markdown bug-draft generator
+import patch_generator # noqa: E402 — self-healing unified-diff patches
+import teams_notifier # noqa: E402 — optional digest to Microsoft Teams webhook
 
 logger = logging.getLogger(__name__)
 
@@ -123,9 +134,35 @@ def _resolve_in_project(project_key: str, rel_path: str):
 # ---------------------------------------------------------------------------
 # @tool definitions
 # ---------------------------------------------------------------------------
+def _format_users(n):
+    return f"{n // 1000}K" if n >= 1000 and n % 1000 == 0 else str(n)
+
+
+def _parse_run_time_seconds(s):
+    s = (s or "").strip().lower()
+    unit = s[-1] if s and s[-1] in ("s", "m", "h") else "s"
+    try:
+        n = int(s[:-1] if unit in ("s", "m", "h") else s)
+    except ValueError:
+        return 0
+    return n * {"s": 1, "m": 60, "h": 3600}[unit]
+
+
+def _load_test_description():
+    tiers = "/".join(_format_users(t["users"]) for t in config.LOAD_TEST_TIERS)
+    rt = config.LOCUST_RUN_TIME
+    total_sec = _parse_run_time_seconds(rt) * len(config.LOAD_TEST_TIERS)
+    total_min = max(1, round(total_sec / 60))
+    return (
+        f"Run Locust load tests across all tiers ({tiers} users, {rt} each). "
+        f"Returns per-tier summary. Takes ~{total_min} min total. "
+        f"Call AT MOST ONCE per run."
+    )
+
+
 @tool(
     "run_load_tests",
-    "Run Locust load tests across all tiers (1K/10K/50K users). Returns per-tier summary. Takes 10+ min. Call AT MOST ONCE per run.",
+    _load_test_description(),
     {},
 )
 async def run_load_tests_tool(_args):
@@ -958,33 +995,114 @@ async def clean_reports_folder_tool(_args):
 
 @tool(
     "generate_pdf_report",
-    "Generate the consolidated PDF report from collected results. Returns the PDF path.",
-    {},
+    "Generate the consolidated PDF report from collected results. Pass a 2-3 "
+    "paragraph executive summary (plain text, blank line between paragraphs) "
+    "as `summary` — it renders right after the title page so developers see "
+    "the headline findings before drilling into details. Returns the PDF path.",
+    {"summary": str},
 )
-async def generate_pdf_report_tool(_args):
+async def generate_pdf_report_tool(args):
     os.makedirs(config.REPORTS_DIR, exist_ok=True)
     timestamp = STATE["started_at"].strftime("%Y%m%d_%H%M%S")
     path = os.path.join(config.REPORTS_DIR, f"Test_Report_{timestamp}.pdf")
 
-    load_list = STATE["load"] or []
-    api_result = STATE["api"] or {
-        "status": "SKIPPED", "total": 0, "passed": 0, "failed": 0,
-        "skipped": 0, "duration_ms": 0, "requests": [], "failures": [],
-    }
-    integ_result = STATE["integration"] or {
-        "status": "SKIPPED", "total": 0, "passed": 0, "failed": 0,
-        "skipped": 0, "errors": 0, "duration": 0, "tests": [], "failures": [],
-    }
+    # Pass None (not a SKIPPED placeholder) for tests that weren't run, so the
+    # PDF generator can omit those sections entirely.
+    summary = (args or {}).get("summary") if isinstance(args, dict) else None
+
+    load_list = STATE["load"] or None
+    api_result = STATE["api"]
+    integ_result = STATE["integration"]
+    e2e_result = STATE["e2e"]
+
+    # Snapshot first so it includes today's data, then compare against the
+    # previous snapshot (strictly older than the one we just wrote) to get
+    # regressions. Flaky tests scan recent history including today.
+    snap_path = history.save_snapshot(
+        load_list, api_result, integ_result, e2e_result, STATE["started_at"]
+    )
+    with open(snap_path, encoding="utf-8") as f:
+        current_snap = json.load(f)
+    prev_snap = history.load_previous_snapshot(before_path=snap_path)
+    regressions = history.compute_regressions(current_snap, prev_snap)
+    flaky = history.compute_flaky_tests()
+    coverage_report = _coverage.build_coverage_report()
 
     _generate_pdf(
         load_results_list=load_list,
         api_results=api_result,
         integration_results=integ_result,
+        e2e_results=e2e_result,
         output_path=path,
         run_date=STATE["started_at"],
+        summary=summary,
+        regressions=regressions if prev_snap else None,
+        flaky_tests=flaky,
+        coverage=coverage_report,
     )
     STATE["report_paths"].append(path)
-    return _text({"pdf_path": path, "exists": os.path.exists(path)})
+
+    # Drop any failures into a paste-ready markdown triage doc and attach it
+    # alongside the PDF when we email.
+    drafts_path = bug_reporter.write_bug_drafts(
+        load_list, api_result, integ_result, e2e_result, STATE["started_at"]
+    )
+    if drafts_path:
+        STATE["report_paths"].append(drafts_path)
+
+    # Self-healing: generate git-applicable patches for fixable failures
+    # (validation format errors, etc.) and attach them too.
+    failures = list(bug_reporter.iter_failures(
+        load_list, api_result, integ_result, e2e_result
+    ))
+    patches = patch_generator.generate_patches(failures)
+    patch_path = patch_generator.write_patch_file(patches, STATE["started_at"])
+    if patch_path:
+        STATE["report_paths"].append(patch_path)
+
+    return _text({
+        "pdf_path": path,
+        "exists": os.path.exists(path),
+        "bug_drafts": drafts_path,
+        "test_patches": patch_path,
+        "patch_count": len(patches),
+        "regressions": len(regressions) if regressions else 0,
+        "flaky_tests": len(flaky),
+        "coverage_pct": (coverage_report or {}).get("coverage_pct"),
+    })
+
+
+@tool(
+    "send_teams_digest",
+    "Post a short test-run digest to the TEAMS_WEBHOOK_URL env var (Microsoft Teams incoming webhook). Renders as a MessageCard with pass/fail counts, worst load tier, and regression count. Silent no-op if TEAMS_WEBHOOK_URL isn't set.",
+    {},
+)
+async def send_teams_digest_tool(_args):
+    pdf_path = STATE["report_paths"][0] if STATE["report_paths"] else None
+    snap_paths = sorted(glob.glob(os.path.join(
+        config.REPORTS_DIR, "history", "*.json")))
+    prev = history.load_previous_snapshot(before_path=snap_paths[-1]) if snap_paths else None
+    current = None
+    if snap_paths:
+        try:
+            with open(snap_paths[-1], encoding="utf-8") as f:
+                current = json.load(f)
+        except (OSError, json.JSONDecodeError):
+            pass
+    regressions = history.compute_regressions(current, prev) if current else []
+    flaky = history.compute_flaky_tests()
+
+    res = teams_notifier.post_digest(
+        load_results_list=STATE["load"] or None,
+        api_results=STATE["api"],
+        integration_results=STATE["integration"],
+        e2e_results=STATE["e2e"],
+        regressions=regressions,
+        flaky_tests=flaky,
+        pdf_path=pdf_path,
+        run_date=STATE["started_at"],
+    )
+    return _text(res)
 
 
 @tool(
@@ -1018,7 +1136,7 @@ ALL_TOOLS = [
     git_diff_tool, git_commit_and_push_tool, recent_commits_tool,
     # Reporting + telemetry
     tail_nightly_log_tool, clean_reports_folder_tool, generate_pdf_report_tool,
-    send_email_report_tool,
+    send_email_report_tool, send_teams_digest_tool,
     # Management / triage
     list_known_bugs_tool, test_inventory_tool,
     compare_with_last_run_tool, draft_standup_update_tool,
@@ -1031,7 +1149,7 @@ TOOL_NAMES = [
     "list_project_files", "read_file", "write_file", "edit_file",
     "git_diff", "git_commit_and_push", "recent_commits",
     "tail_nightly_log", "clean_reports_folder", "generate_pdf_report",
-    "send_email_report",
+    "send_email_report", "send_teams_digest",
     "list_known_bugs", "test_inventory",
     "compare_with_last_run", "draft_standup_update",
 ]

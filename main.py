@@ -57,6 +57,23 @@ Guidelines:
   - After tests run, interpret failures in plain language before generating
     the report. Flag regressions or suspicious patterns.
   - Always generate the PDF report before emailing.
+  - generate_pdf_report now also produces bug-draft markdown and a
+    self-healing .patch file (if fixable validation errors were detected).
+    Both get attached to the email automatically — mention them in the
+    executive summary so developers know to look at the attachments.
+  - After emailing, call send_teams_digest to drop a short card in the Teams
+    channel (no-ops automatically if TEAMS_WEBHOOK_URL isn't configured).
+  - When calling generate_pdf_report, ALWAYS pass a 2-3 paragraph executive
+    summary as the `summary` argument. Write it for a developer audience:
+      • Paragraph 1 — the headline verdict (what worked, what broke, the
+        capacity ceiling if it's a load test). If regressions vs last run are
+        detected (the report has a Regressions section), lead with them.
+      • Paragraph 2 — the most important specific findings (which endpoints
+        regressed, the failure rate at each tier, any clear backend bugs vs.
+        load-generator artifacts). Call out any flaky tests surfaced in the
+        report so developers know which results to trust.
+      • Paragraph 3 (optional) — recommended next steps for the dev team.
+    Plain text only, blank line between paragraphs. No markdown.
   - Be concise in status updates. Save detail for the email summary.
 
 Write permissions (write_file, edit_file):
@@ -80,8 +97,12 @@ async def run_agent(user_prompt: str, verbose: bool = True) -> None:
     allowed = [f"mcp__mvp-tester__{n}" for n in agent_tools.TOOL_NAMES]
 
     # Point at the user's installed claude.exe (which is logged in), not the
-    # SDK's bundled copy (which has no login session).
-    user_claude = os.path.expandvars(r"%USERPROFILE%\.local\bin\claude.exe")
+    # SDK's bundled copy (which has no login session). Override with
+    # CLAUDE_CLI_PATH if claude.exe lives somewhere non-standard.
+    user_claude = os.getenv(
+        "CLAUDE_CLI_PATH",
+        os.path.expandvars(r"%USERPROFILE%\.local\bin\claude.exe"),
+    )
 
     options_kwargs = {
         "system_prompt": SYSTEM_PROMPT,
