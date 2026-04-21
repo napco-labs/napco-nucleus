@@ -69,7 +69,7 @@ jobs:
       # can download it by predictable name via gh run download.
       - name: Upload reports
         if: always()
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: load-test-results
           path: api-test/reports/*
