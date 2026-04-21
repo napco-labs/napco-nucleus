@@ -5,7 +5,7 @@ name: MVP Access API Functional Test
 
 on:
   schedule:
-    - cron: '0 17 * * *'    # 23:00 Bangladesh time
+    - cron: '0 19 * * *'    # 01:00 BDT — gives local API 2h to recover from load test
   workflow_dispatch: {}
 
 concurrency:

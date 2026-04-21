@@ -6,7 +6,7 @@ name: MVP Access E2E Test
 
 on:
   schedule:
-    - cron: '0 17 * * *'    # 23:00 Bangladesh time
+    - cron: '30 18 * * *'   # 00:30 BDT — independent of local API; can run during load recovery
   workflow_dispatch: {}
 
 concurrency:
