@@ -29,8 +29,10 @@ jobs:
       TEAM_EMAILS: ${{ secrets.TEAM_EMAILS }}
       EMAIL_SUBJECT: "MVP Access - E2E Test Report"
 
-      # Playwright side — BASE_URL is overridden inside run_e2e_tests()
-      # from E2E_BASE_URL so Playwright sees the public staging host.
+      # Playwright side — Release-Test-style config reads PORTAL_URL
+      # (fallback to hardcoded staging). E2E_BASE_URL is still passed
+      # in case run_e2e_tests() needs to override via BASE_URL.
+      PORTAL_URL: ${{ secrets.E2E_BASE_URL }}
       E2E_BASE_URL: ${{ secrets.E2E_BASE_URL }}
       MVP_ACCOUNT: ${{ secrets.MVP_ACCOUNT }}
       MVP_USERNAME: ${{ secrets.MVP_USERNAME }}
