@@ -38,6 +38,18 @@ jobs:
       MVP_USERNAME: ${{ secrets.MVP_USERNAME }}
       MVP_PASSWORD: ${{ secrets.MVP_PASSWORD }}
 
+      # tests/data/config.ts calls requireEnv() on all of these —
+      # missing any causes Playwright to crash on config load with
+      # 0/0 tests. They were already uploaded as secrets during the
+      # initial bulk upload; just need to be passed through.
+      API_BASE_URL: ${{ secrets.API_BASE_URL }}
+      API_KEY: ${{ secrets.API_KEY }}
+      CLIENT_ID: ${{ secrets.CLIENT_ID }}
+      CLIENT_SECRET: ${{ secrets.CLIENT_SECRET }}
+      COMPANY_ID: ${{ secrets.COMPANY_ID }}
+      USER_ID: ${{ secrets.USER_ID }}
+      PASSWORD: ${{ secrets.PASSWORD }}
+
     steps:
       - name: Checkout AI-Agent (self)
         uses: actions/checkout@v5
