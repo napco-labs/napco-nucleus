@@ -1,0 +1,102 @@
+name: MVP Access E2E Test
+
+# Runs the Playwright E2E suite against the public staging URL
+# (https://staging.mvpaccess.online), generates a focused PDF,
+# emails to TEAM_EMAILS.
+
+on:
+  schedule:
+    - cron: '0 17 * * *'    # 23:00 Bangladesh time
+  workflow_dispatch: {}
+
+concurrency:
+  group: mvp-e2e-test
+  cancel-in-progress: false
+
+jobs:
+  run:
+    name: Run E2E Tests (Playwright)
+    runs-on: [self-hosted, Windows]
+    timeout-minutes: 45
+
+    env:
+      # Reporting + SMTP side
+      SMTP_HOST: ${{ secrets.SMTP_HOST }}
+      SMTP_PORT: ${{ secrets.SMTP_PORT }}
+      SMTP_USER: ${{ secrets.SMTP_USER }}
+      SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+      EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
+      TEAM_EMAILS: ${{ secrets.TEAM_EMAILS }}
+      EMAIL_SUBJECT: "MVP Access - E2E Test Report"
+
+      # Playwright side — BASE_URL is overridden inside run_e2e_tests()
+      # from E2E_BASE_URL so Playwright sees the public staging host.
+      E2E_BASE_URL: ${{ secrets.E2E_BASE_URL }}
+      MVP_ACCOUNT: ${{ secrets.MVP_ACCOUNT }}
+      MVP_USERNAME: ${{ secrets.MVP_USERNAME }}
+      MVP_PASSWORD: ${{ secrets.MVP_PASSWORD }}
+
+    steps:
+      - name: Checkout AI-Agent (self)
+        uses: actions/checkout@v5
+        with:
+          path: ai-agent
+
+      - name: Checkout MVP-Access-API-Test (for run_one.py + reporting)
+        uses: actions/checkout@v5
+        with:
+          repository: titucse/MVP-Access-API-Test
+          token: ${{ secrets.CROSS_REPO_PAT }}
+          path: api-test
+
+      - name: Checkout MVP-Access-E2E-Test (Playwright suite)
+        uses: actions/checkout@v5
+        with:
+          repository: titucse/MVP-Access-E2E-Test
+          token: ${{ secrets.CROSS_REPO_PAT }}
+          path: e2e-test
+
+      - name: Set up Python 3.13
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+          cache: 'pip'
+          cache-dependency-path: api-test/requirements.txt
+
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v5
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: e2e-test/package-lock.json
+
+      - name: Install Python deps
+        working-directory: api-test
+        run: pip install -r requirements.txt
+
+      - name: Install E2E npm deps
+        working-directory: e2e-test
+        run: npm ci
+
+      - name: Install Playwright chromium
+        working-directory: e2e-test
+        run: npx playwright install --with-deps chromium
+
+      - name: Ensure reports directory
+        shell: bash
+        run: mkdir -p api-test/reports
+
+      - name: Run E2E Tests
+        working-directory: api-test
+        env:
+          E2E_PROJECT_DIR: ${{ github.workspace }}/e2e-test
+        run: python agent/run_one.py --type e2e
+        timeout-minutes: 35
+
+      - name: Upload reports
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: e2e-test-reports-${{ github.run_number }}
+          path: api-test/reports/*
+          retention-days: 30

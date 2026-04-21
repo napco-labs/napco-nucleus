@@ -1,0 +1,76 @@
+name: MVP Access API Integration Test
+
+# Runs pytest integration tests against the local API, generates a
+# focused PDF, emails to TEAM_EMAILS.
+
+on:
+  schedule:
+    - cron: '0 17 * * *'    # 23:00 Bangladesh time
+  workflow_dispatch: {}
+
+concurrency:
+  group: mvp-integration-test
+  cancel-in-progress: false
+
+jobs:
+  run:
+    name: Run Integration Tests (pytest)
+    runs-on: [self-hosted, Windows]
+    timeout-minutes: 30
+
+    env:
+      BASE_URL: ${{ secrets.API_BASE_URL }}
+      COMPANY_ID: ${{ secrets.COMPANY_ID }}
+      USER_ID: ${{ secrets.USER_ID }}
+      PASSWORD: ${{ secrets.PASSWORD }}
+      CLIENT_ID: ${{ secrets.CLIENT_ID }}
+      CLIENT_SECRET: ${{ secrets.CLIENT_SECRET }}
+      API_KEY: ${{ secrets.API_KEY }}
+      SMTP_HOST: ${{ secrets.SMTP_HOST }}
+      SMTP_PORT: ${{ secrets.SMTP_PORT }}
+      SMTP_USER: ${{ secrets.SMTP_USER }}
+      SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+      EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
+      TEAM_EMAILS: ${{ secrets.TEAM_EMAILS }}
+      EMAIL_SUBJECT: "MVP Access API - Integration Test Report"
+
+    steps:
+      - name: Checkout AI-Agent (self)
+        uses: actions/checkout@v5
+        with:
+          path: ai-agent
+
+      - name: Checkout MVP-Access-API-Test
+        uses: actions/checkout@v5
+        with:
+          repository: titucse/MVP-Access-API-Test
+          token: ${{ secrets.CROSS_REPO_PAT }}
+          path: api-test
+
+      - name: Set up Python 3.13
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+          cache: 'pip'
+          cache-dependency-path: api-test/requirements.txt
+
+      - name: Install Python deps
+        working-directory: api-test
+        run: pip install -r requirements.txt
+
+      - name: Ensure reports directory
+        shell: bash
+        run: mkdir -p api-test/reports
+
+      - name: Run Integration Tests
+        working-directory: api-test
+        run: python agent/run_one.py --type integration
+        timeout-minutes: 20
+
+      - name: Upload reports
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: integration-test-reports-${{ github.run_number }}
+          path: api-test/reports/*
+          retention-days: 30

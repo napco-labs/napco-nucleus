@@ -1,0 +1,90 @@
+name: MVP Access API Functional Test
+
+# Runs the Newman/Postman API functional test collection against the
+# local API, generates a focused PDF, emails to TEAM_EMAILS.
+
+on:
+  schedule:
+    - cron: '0 17 * * *'    # 23:00 Bangladesh time
+  workflow_dispatch: {}
+
+concurrency:
+  group: mvp-api-functional-test
+  cancel-in-progress: false
+
+jobs:
+  run:
+    name: Run API Functional Tests (Newman)
+    runs-on: [self-hosted, Windows]
+    timeout-minutes: 30
+
+    env:
+      BASE_URL: ${{ secrets.API_BASE_URL }}
+      COMPANY_ID: ${{ secrets.COMPANY_ID }}
+      USER_ID: ${{ secrets.USER_ID }}
+      PASSWORD: ${{ secrets.PASSWORD }}
+      CLIENT_ID: ${{ secrets.CLIENT_ID }}
+      CLIENT_SECRET: ${{ secrets.CLIENT_SECRET }}
+      API_KEY: ${{ secrets.API_KEY }}
+      DEALER_USERNAME: ${{ secrets.DEALER_USERNAME }}
+      DEALER_PASSWORD: ${{ secrets.DEALER_PASSWORD }}
+      DEALER_ACCOUNT: ${{ secrets.DEALER_ACCOUNT }}
+      SMTP_HOST: ${{ secrets.SMTP_HOST }}
+      SMTP_PORT: ${{ secrets.SMTP_PORT }}
+      SMTP_USER: ${{ secrets.SMTP_USER }}
+      SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+      EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
+      TEAM_EMAILS: ${{ secrets.TEAM_EMAILS }}
+      EMAIL_SUBJECT: "MVP Access API - Functional Test Report"
+
+    steps:
+      - name: Checkout AI-Agent (self)
+        uses: actions/checkout@v5
+        with:
+          path: ai-agent
+
+      - name: Checkout MVP-Access-API-Test
+        uses: actions/checkout@v5
+        with:
+          repository: titucse/MVP-Access-API-Test
+          token: ${{ secrets.CROSS_REPO_PAT }}
+          path: api-test
+
+      - name: Set up Python 3.13
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+          cache: 'pip'
+          cache-dependency-path: api-test/requirements.txt
+
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v5
+        with:
+          node-version: '20'
+
+      - name: Install Python deps
+        working-directory: api-test
+        run: pip install -r requirements.txt
+
+      - name: Install Newman
+        shell: bash
+        run: |
+          npm install -g newman
+          echo "NEWMAN_PATH=$(npm prefix -g)/newman" >> $GITHUB_ENV
+
+      - name: Ensure reports directory
+        shell: bash
+        run: mkdir -p api-test/reports
+
+      - name: Run API Functional Tests
+        working-directory: api-test
+        run: python agent/run_one.py --type api
+        timeout-minutes: 20
+
+      - name: Upload reports
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: api-functional-test-reports-${{ github.run_number }}
+          path: api-test/reports/*
+          retention-days: 30
