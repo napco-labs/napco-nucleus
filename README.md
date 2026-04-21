@@ -1,5 +1,6 @@
 # MVP Access AI Agent
 
+[![Build + Deploy](https://github.com/titucse/MVP-Access-AI-Agent/actions/workflows/build-deploy.yml/badge.svg)](https://github.com/titucse/MVP-Access-AI-Agent/actions/workflows/build-deploy.yml)
 [![Load Test](https://github.com/titucse/MVP-Access-AI-Agent/actions/workflows/load-test.yml/badge.svg)](https://github.com/titucse/MVP-Access-AI-Agent/actions/workflows/load-test.yml)
 [![API Functional](https://github.com/titucse/MVP-Access-AI-Agent/actions/workflows/api-functional-test.yml/badge.svg)](https://github.com/titucse/MVP-Access-AI-Agent/actions/workflows/api-functional-test.yml)
 [![API Integration](https://github.com/titucse/MVP-Access-AI-Agent/actions/workflows/integration-test.yml/badge.svg)](https://github.com/titucse/MVP-Access-AI-Agent/actions/workflows/integration-test.yml)

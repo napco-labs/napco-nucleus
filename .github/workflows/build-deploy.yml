@@ -1,0 +1,175 @@
+name: MVP Access CI/CD — Build + Deploy to IIS
+
+# Daily pipeline that:
+#   1. Pulls latest MVP Access application code from on-prem TFS
+#   2. Builds the solution on the "builder" self-hosted Windows runner
+#   3. Deploys the build output to the IIS server over a UNC share
+#   4. Emails a deploy-complete notification
+#
+# Runs at 22:00 BDT (16:00 UTC) so the build + deploy finishes
+# before the 23:59 BDT E2E tests pick up the fresh deployment.
+
+on:
+  schedule:
+    - cron: '0 16 * * *'    # 22:00 BDT
+  workflow_dispatch: {}
+
+concurrency:
+  group: mvp-access-build-deploy
+  cancel-in-progress: false
+
+jobs:
+  build-deploy:
+    name: Pull, Build, Deploy
+    # Runs on the second self-hosted Windows machine registered with the
+    # 'builder' label (to avoid competing with the test runner).
+    runs-on: [self-hosted, Windows, builder]
+    timeout-minutes: 60
+
+    env:
+      # TFS
+      TFS_URL:           ${{ secrets.TFS_URL }}            # e.g. http://tfs.company.local:8080/tfs/DefaultCollection
+      TFS_PROJECT_PATH:  ${{ secrets.TFS_PROJECT_PATH }}   # e.g. $/MVPAccess/Main
+      TFS_USERNAME:      ${{ secrets.TFS_USERNAME }}
+      TFS_PASSWORD:      ${{ secrets.TFS_PASSWORD }}
+
+      # Build
+      SOLUTION_FILE:     ${{ secrets.SOLUTION_FILE }}      # e.g. src\MVPAccess.sln (relative to workspace root)
+
+      # Deploy
+      IIS_DEPLOY_PATH:   ${{ secrets.IIS_DEPLOY_PATH }}    # e.g. \\iis-server\c$\inetpub\wwwroot\MVPAccess
+
+      # Email
+      SMTP_HOST:         ${{ secrets.SMTP_HOST }}
+      SMTP_PORT:         ${{ secrets.SMTP_PORT }}
+      SMTP_USER:         ${{ secrets.SMTP_USER }}
+      SMTP_PASSWORD:     ${{ secrets.SMTP_PASSWORD }}
+      EMAIL_FROM:        ${{ secrets.EMAIL_FROM }}
+      TEAM_EMAILS:       ${{ secrets.TEAM_EMAILS }}
+
+    steps:
+      - name: Prepare workspace
+        shell: pwsh
+        run: |
+          $workspace = "C:\ci-workspace\MVPAccess"
+          if (Test-Path $workspace) { Remove-Item $workspace -Recurse -Force }
+          New-Item -ItemType Directory -Path $workspace -Force | Out-Null
+          "WORKSPACE=$workspace" | Out-File -FilePath $env:GITHUB_ENV -Append
+          Write-Host "Workspace: $workspace"
+
+      - name: Locate tf.exe + MSBuild
+        shell: pwsh
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          if (-not (Test-Path $vswhere)) {
+            throw "vswhere.exe not found. Install Visual Studio Build Tools on this runner."
+          }
+          $vsRoot = & $vswhere -latest -property installationPath
+          if (-not $vsRoot) { throw "No Visual Studio installation found." }
+
+          $tfExe = Get-ChildItem $vsRoot -Recurse -Filter "tf.exe" -ErrorAction SilentlyContinue |
+                   Where-Object { $_.FullName -like "*CommonExtensions\Microsoft\TeamFoundation\Team Explorer\*" } |
+                   Select-Object -First 1 -ExpandProperty FullName
+          if (-not $tfExe) { throw "tf.exe not found. Install the 'Team Explorer' component of Visual Studio." }
+
+          $msbuild = & $vswhere -latest -requires Microsoft.Component.MSBuild `
+                     -find "MSBuild\**\Bin\MSBuild.exe" | Select-Object -First 1
+          if (-not $msbuild) { throw "MSBuild not found. Install the MSBuild component of Visual Studio Build Tools." }
+
+          "TF_EXE=$tfExe"         | Out-File -FilePath $env:GITHUB_ENV -Append
+          "MSBUILD_EXE=$msbuild"  | Out-File -FilePath $env:GITHUB_ENV -Append
+          Write-Host "tf.exe: $tfExe"
+          Write-Host "MSBuild: $msbuild"
+
+      - name: Pull latest from TFS
+        shell: pwsh
+        run: |
+          $ws = "CI-MVPAccess-$env:COMPUTERNAME"
+          $login = "$env:TFS_USERNAME,$env:TFS_PASSWORD"
+
+          # Remove any stale workspace registration with the same name
+          & $env:TF_EXE workspace /delete $ws /collection:$env:TFS_URL /login:$login /noprompt 2>&1 | Out-Null
+
+          # Create a fresh workspace mapping
+          & $env:TF_EXE workspace /new $ws /collection:$env:TFS_URL /login:$login /noprompt
+          & $env:TF_EXE workfold /map $env:TFS_PROJECT_PATH $env:WORKSPACE `
+              /workspace:$ws /collection:$env:TFS_URL /login:$login
+
+          # Get latest
+          & $env:TF_EXE get $env:WORKSPACE /recursive /version:T /noprompt /login:$login
+          if ($LASTEXITCODE -ne 0) { throw "tf get failed with exit code $LASTEXITCODE" }
+          Write-Host "Pulled latest from $env:TFS_PROJECT_PATH into $env:WORKSPACE"
+
+      - name: NuGet restore + build (Release)
+        shell: pwsh
+        run: |
+          $sln = Join-Path $env:WORKSPACE $env:SOLUTION_FILE
+          if (-not (Test-Path $sln)) { throw "Solution not found: $sln" }
+
+          Write-Host "Restoring packages..."
+          & $env:MSBUILD_EXE $sln /t:Restore /p:Configuration=Release /m /nologo
+          if ($LASTEXITCODE -ne 0) { throw "NuGet restore failed." }
+
+          Write-Host "Building (Release) + publishing to file system..."
+          $publish = Join-Path $env:WORKSPACE "publish"
+          & $env:MSBUILD_EXE $sln `
+              /p:Configuration=Release `
+              /p:DeployOnBuild=true `
+              /p:WebPublishMethod=FileSystem `
+              /p:publishUrl="$publish" `
+              /m /nologo
+          if ($LASTEXITCODE -ne 0) { throw "Build failed." }
+
+          "PUBLISH_DIR=$publish" | Out-File -FilePath $env:GITHUB_ENV -Append
+          Write-Host "Build output: $publish"
+
+      - name: Deploy to IIS (UNC copy)
+        shell: pwsh
+        run: |
+          if (-not (Test-Path $env:PUBLISH_DIR)) {
+            throw "Publish folder missing: $env:PUBLISH_DIR"
+          }
+          if (-not (Test-Path $env:IIS_DEPLOY_PATH)) {
+            throw "IIS target UNC path not reachable: $env:IIS_DEPLOY_PATH (check SMB perms + network)"
+          }
+
+          # Optional graceful shutdown: drop an app_offline.htm on target
+          # so IIS returns 503 during copy instead of serving half-copied files.
+          $offline = Join-Path $env:IIS_DEPLOY_PATH "app_offline.htm"
+          "<h1>MVP Access — deploying, back in ~30s</h1>" | Out-File -FilePath $offline -Encoding utf8 -Force
+
+          try {
+            # /MIR mirrors source -> target (deletes removed files).
+            # Exclude App_Data to preserve uploads/logs.
+            robocopy $env:PUBLISH_DIR $env:IIS_DEPLOY_PATH /MIR /XD App_Data /R:3 /W:5 /NP
+            # robocopy exit codes 0-7 are success; 8+ is failure
+            if ($LASTEXITCODE -ge 8) { throw "robocopy failed (exit $LASTEXITCODE)" }
+          }
+          finally {
+            # Always remove the offline marker so IIS serves the new app
+            if (Test-Path $offline) { Remove-Item $offline -Force }
+          }
+          Write-Host "Deploy complete: $env:IIS_DEPLOY_PATH"
+
+      - name: Send deploy-complete email
+        if: always()
+        shell: pwsh
+        run: |
+          $status = if ('${{ job.status }}' -eq 'success') { 'SUCCESS ✅' } else { 'FAILED ❌' }
+          $subject = "MVP Access Build + Deploy — $status ($(Get-Date -Format 'yyyy-MM-dd HH:mm'))"
+          $body = @"
+Daily build + deploy pipeline ran on runner $env:COMPUTERNAME.
+
+Status: $status
+Run:    ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+Timing: build at 22:00 BDT, tests at 23:59 BDT pick up this deployment.
+"@
+
+          $smtpUser = $env:SMTP_USER
+          $smtpPass = ConvertTo-SecureString $env:SMTP_PASSWORD -AsPlainText -Force
+          $cred = New-Object System.Management.Automation.PSCredential($smtpUser, $smtpPass)
+          $to = $env:TEAM_EMAILS -split ','
+
+          Send-MailMessage -From $env:EMAIL_FROM -To $to -Subject $subject -Body $body `
+            -SmtpServer $env:SMTP_HOST -Port $env:SMTP_PORT -UseSsl -Credential $cred -BodyAsHtml:$false
