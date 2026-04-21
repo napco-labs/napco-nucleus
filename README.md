@@ -1,5 +1,11 @@
 # MVP Access AI Agent
 
+[![Load Test](https://github.com/titucse/MVP-Access-AI-Agent/actions/workflows/load-test.yml/badge.svg)](https://github.com/titucse/MVP-Access-AI-Agent/actions/workflows/load-test.yml)
+[![API Functional](https://github.com/titucse/MVP-Access-AI-Agent/actions/workflows/api-functional-test.yml/badge.svg)](https://github.com/titucse/MVP-Access-AI-Agent/actions/workflows/api-functional-test.yml)
+[![API Integration](https://github.com/titucse/MVP-Access-AI-Agent/actions/workflows/integration-test.yml/badge.svg)](https://github.com/titucse/MVP-Access-AI-Agent/actions/workflows/integration-test.yml)
+[![E2E](https://github.com/titucse/MVP-Access-AI-Agent/actions/workflows/e2e-test.yml/badge.svg)](https://github.com/titucse/MVP-Access-AI-Agent/actions/workflows/e2e-test.yml)
+[![Daily Digest](https://github.com/titucse/MVP-Access-AI-Agent/actions/workflows/api-digest.yml/badge.svg)](https://github.com/titucse/MVP-Access-AI-Agent/actions/workflows/api-digest.yml)
+
 AI-powered test orchestration agent for the MVP Access API + E2E test projects.
 
 Uses the [Claude Agent SDK](https://github.com/anthropics/claude-agent-sdk-python),

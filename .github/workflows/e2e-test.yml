@@ -27,6 +27,9 @@ jobs:
       SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
       EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
       TEAM_EMAILS: ${{ secrets.TEAM_EMAILS }}
+      # Optional — enables AI-triage + Teams/Slack alerts (silent no-op if unset)
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      TEAMS_WEBHOOK_URL: ${{ secrets.TEAMS_WEBHOOK_URL }}
       EMAIL_SUBJECT: "MVP Access - E2E Test Report"
 
       # Playwright side — Release-Test-style config reads PORTAL_URL

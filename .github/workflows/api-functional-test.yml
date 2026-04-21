@@ -36,6 +36,9 @@ jobs:
       # No email from this workflow — api-digest.yml consolidates all 3.
       EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
       TEAM_EMAILS: ${{ secrets.TEAM_EMAILS }}
+      # Optional — enables AI-triage + Teams/Slack alerts (silent no-op if unset)
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      TEAMS_WEBHOOK_URL: ${{ secrets.TEAMS_WEBHOOK_URL }}
 
     steps:
       - name: Checkout AI-Agent (self)
