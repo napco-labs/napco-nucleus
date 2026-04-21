@@ -30,9 +30,11 @@ jobs:
       SMTP_PORT: ${{ secrets.SMTP_PORT }}
       SMTP_USER: ${{ secrets.SMTP_USER }}
       SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+      # No email from this workflow — api-digest.yml consolidates all 3
+      # API workflows into one daily email. SMTP vars still needed
+      # because run_one.py imports email_sender at module load.
       EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
       TEAM_EMAILS: ${{ secrets.TEAM_EMAILS }}
-      EMAIL_SUBJECT: "MVP Access API - Load Test Report"
 
     steps:
       - name: Checkout AI-Agent (self)
@@ -64,13 +66,15 @@ jobs:
 
       - name: Run Load Tests
         working-directory: api-test
-        run: python agent/run_one.py --type load
+        run: python agent/run_one.py --type load --no-email
         timeout-minutes: 150
 
+      # Fixed artifact name (no run_number suffix) so api-digest.yml
+      # can download it by predictable name via gh run download.
       - name: Upload reports
         if: always()
         uses: actions/upload-artifact@v5
         with:
-          name: load-test-reports-${{ github.run_number }}
+          name: load-test-results
           path: api-test/reports/*
-          retention-days: 30
+          retention-days: 7

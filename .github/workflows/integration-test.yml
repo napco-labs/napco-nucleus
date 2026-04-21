@@ -30,9 +30,9 @@ jobs:
       SMTP_PORT: ${{ secrets.SMTP_PORT }}
       SMTP_USER: ${{ secrets.SMTP_USER }}
       SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+      # No email from this workflow — api-digest.yml consolidates all 3.
       EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
       TEAM_EMAILS: ${{ secrets.TEAM_EMAILS }}
-      EMAIL_SUBJECT: "MVP Access API - Integration Test Report"
 
     steps:
       - name: Checkout AI-Agent (self)
@@ -64,13 +64,13 @@ jobs:
 
       - name: Run Integration Tests
         working-directory: api-test
-        run: python agent/run_one.py --type integration
+        run: python agent/run_one.py --type integration --no-email
         timeout-minutes: 20
 
       - name: Upload reports
         if: always()
         uses: actions/upload-artifact@v5
         with:
-          name: integration-test-reports-${{ github.run_number }}
+          name: integration-test-results
           path: api-test/reports/*
-          retention-days: 30
+          retention-days: 7

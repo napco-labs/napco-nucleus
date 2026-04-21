@@ -1,0 +1,98 @@
+name: MVP Access API Digest
+
+# Consolidates the 3 API test workflow results (Load + Functional +
+# Integration) into ONE PDF with an executive summary at the top, and
+# emails TEAM_EMAILS. Runs after all 3 are expected to be complete.
+#
+# Each API workflow uploads an artifact with a predictable name
+# (load-test-results / api-functional-test-results /
+# integration-test-results). This workflow looks up the latest
+# completed run of each and downloads those 3 artifacts.
+
+on:
+  schedule:
+    # Load:  17:00 UTC  finishes ~18:00
+    # Func:  19:00 UTC  finishes ~19:05
+    # Integ: 20:00 UTC  finishes ~20:05
+    # Digest: 21:00 UTC — all 3 done by now.
+    - cron: '0 21 * * *'
+  workflow_dispatch: {}
+
+concurrency:
+  group: mvp-api-digest
+  cancel-in-progress: false
+
+jobs:
+  digest:
+    name: Consolidate 3 API reports into 1 email
+    # Runs on ubuntu-latest (not self-hosted) because it only needs
+    # internet to download artifacts + send SMTP email — no local API
+    # access required. Keeps the self-hosted runner free.
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    env:
+      GH_TOKEN: ${{ secrets.CROSS_REPO_PAT }}
+      SMTP_HOST: ${{ secrets.SMTP_HOST }}
+      SMTP_PORT: ${{ secrets.SMTP_PORT }}
+      SMTP_USER: ${{ secrets.SMTP_USER }}
+      SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+      EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
+      TEAM_EMAILS: ${{ secrets.TEAM_EMAILS }}
+      EMAIL_SUBJECT: "MVP Access API - Daily Comprehensive Digest"
+
+    steps:
+      - name: Checkout MVP-Access-API-Test (for reporting code)
+        uses: actions/checkout@v5
+        with:
+          repository: titucse/MVP-Access-API-Test
+          token: ${{ secrets.CROSS_REPO_PAT }}
+          path: api-test
+
+      - name: Set up Python 3.13
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+          cache: 'pip'
+          cache-dependency-path: api-test/requirements.txt
+
+      - name: Install Python deps
+        working-directory: api-test
+        run: pip install -r requirements.txt
+
+      - name: Download artifacts from latest 3 API workflow runs
+        shell: bash
+        run: |
+          set -e
+          mkdir -p artifacts
+          REPO="titucse/MVP-Access-AI-Agent"
+          for wf in load-test.yml api-functional-test.yml integration-test.yml; do
+            run_id=$(gh run list \
+              --repo "$REPO" \
+              --workflow "$wf" \
+              --status completed \
+              --limit 1 \
+              --json databaseId \
+              --jq '.[0].databaseId')
+            if [ -z "$run_id" ] || [ "$run_id" = "null" ]; then
+              echo "No completed runs yet for $wf — section will be missing from digest."
+              continue
+            fi
+            echo "Downloading artifacts from $wf run $run_id"
+            gh run download "$run_id" --repo "$REPO" --dir "artifacts/$wf" || \
+              echo "Artifact download failed for $wf run $run_id"
+          done
+          echo "--- Artifacts tree ---"
+          find artifacts -type f | head -60 || true
+
+      - name: Consolidate + email
+        working-directory: api-test
+        run: python agent/consolidate_api_digest.py --artifacts-dir ../artifacts
+
+      - name: Upload consolidated digest PDF
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: api-comprehensive-digest-${{ github.run_number }}
+          path: api-test/reports/*.pdf
+          retention-days: 30
