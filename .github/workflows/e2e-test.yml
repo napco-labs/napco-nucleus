@@ -82,10 +82,6 @@ jobs:
         working-directory: e2e-test
         run: npx playwright install --with-deps chromium
 
-      - name: Ensure reports directory
-        shell: bash
-        run: mkdir -p api-test/reports
-
       - name: Run E2E Tests
         working-directory: api-test
         env:

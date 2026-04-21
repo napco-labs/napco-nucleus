@@ -58,10 +58,6 @@ jobs:
         working-directory: api-test
         run: pip install -r requirements.txt
 
-      - name: Ensure reports directory
-        shell: bash
-        run: mkdir -p api-test/reports
-
       - name: Run Integration Tests
         working-directory: api-test
         run: python agent/run_one.py --type integration --no-email

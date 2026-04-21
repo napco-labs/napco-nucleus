@@ -66,15 +66,11 @@ jobs:
         working-directory: api-test
         run: pip install -r requirements.txt
 
+      # Newman installs as newman.cmd on Windows; npm's global bin is on
+      # PATH automatically, so run_all_tests.py's shutil.which("newman")
+      # fallback locates it. No NEWMAN_PATH needed.
       - name: Install Newman
-        shell: bash
-        run: |
-          npm install -g newman
-          echo "NEWMAN_PATH=$(npm prefix -g)/newman" >> $GITHUB_ENV
-
-      - name: Ensure reports directory
-        shell: bash
-        run: mkdir -p api-test/reports
+        run: npm install -g newman
 
       - name: Run API Functional Tests
         working-directory: api-test
