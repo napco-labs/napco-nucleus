@@ -5,7 +5,7 @@ name: MVP Access API Load Test
 
 on:
   schedule:
-    - cron: '0 17 * * *'    # 23:00 BDT — longest, runs first
+    - cron: '59 17 * * *'    # 23:59 BDT
   workflow_dispatch: {}
 
 concurrency:

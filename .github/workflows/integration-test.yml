@@ -5,7 +5,7 @@ name: MVP Access API Integration Test
 
 on:
   schedule:
-    - cron: '0 20 * * *'    # 02:00 BDT — after API functional, API fresh
+    - cron: '59 17 * * *'    # 23:59 BDT
   workflow_dispatch: {}
 
 concurrency:
