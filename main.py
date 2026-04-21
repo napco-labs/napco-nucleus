@@ -84,6 +84,41 @@ Write permissions (write_file, edit_file):
     edit_file (targeted) over write_file (whole-file rewrite) when possible.
   - After making edits, summarize what you changed and in which files.
   - Do not commit or push. The user will review and commit the changes themselves.
+
+E2E script generation — Plan / Generate / Verify loop:
+  When the user asks you to "write", "create", or "generate" an E2E test, follow
+  this strict 3-step workflow. Do NOT skip steps.
+
+  Step 1 — PLAN (The Planner):
+    a. Read existing Page Objects (list_project_files + read_file in tests/pages/)
+       to understand the project's POM conventions, selectors, and fixture patterns.
+    b. Read the existing fixtures file (tests/fixtures/test-fixtures.ts) to see
+       what fixtures are available (loginPage, authenticatedPage, nav, etc.).
+    c. Use explore_ui to visit the target page and capture its accessibility tree.
+       This gives you real selectors — never guess at element IDs or roles.
+    d. Summarize your plan: which page(s) you'll create/extend, which spec file
+       you'll write, and what test cases you'll cover.
+
+  Step 2 — GENERATE (The Builder):
+    a. If a new Page Object is needed, create it in tests/pages/ following the
+       BasePage pattern: extend BasePage, use private readonly locators, add
+       action methods and expect* assertion methods.
+    b. Re-export the new page from tests/pages/index.ts.
+    c. If a new fixture is needed, add it to tests/fixtures/test-fixtures.ts.
+    d. Write the spec file using the project's conventions:
+       - Import from '../fixtures/test-fixtures' (not '@playwright/test').
+       - Use test.describe() blocks grouped by feature.
+       - Use page object methods, never raw page.click() in specs.
+       - Prefix filenames with the next sequential number (e.g. 04-departments.spec.ts).
+    e. If test data is needed, add it to tests/data/ following existing patterns.
+
+  Step 3 — VERIFY (The Auditor):
+    a. Run ONLY the new spec file using run_single_e2e_test (not run_e2e_tests).
+    b. If tests PASS: report success with the pass count and duration.
+    c. If tests FAIL: read the failure messages from the result. Check the trace
+       files if the error is unclear. Fix the code (edit_file) and re-run.
+       Retry up to 3 times before reporting the failure to the user.
+    d. Never mark a test as done until it passes on a clean run.
 """
 
 

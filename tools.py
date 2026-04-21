@@ -1123,6 +1123,180 @@ async def send_email_report_tool(args):
     })
 
 
+# ---------------------------------------------------------------------------
+# E2E Script Generation — Plan / Generate / Verify tools
+# ---------------------------------------------------------------------------
+
+@tool(
+    "explore_ui",
+    "Navigate to a page in the MVP Access app and return its accessibility snapshot "
+    "(roles, names, states). Use this BEFORE writing any E2E test so you base selectors "
+    "on real DOM, not guesses. 'suite' is full|easy|release (determines baseURL). "
+    "'path' is the URL path e.g. '/Default.aspx'. If 'login_first' is true (default), "
+    "the agent logs in before navigating.",
+    {"suite": str, "path": str, "login_first": bool},
+)
+async def explore_ui_tool(args):
+    suite = args.get("suite", "full")
+    project_dir = E2E_PROJECTS.get(suite)
+    if not project_dir or not os.path.isdir(project_dir):
+        return _text({"error": f"Unknown E2E suite: {suite}"})
+
+    url_path = args.get("path", "/")
+    login_first = args.get("login_first", True)
+
+    # Build a tiny Node script that launches Playwright, optionally logs in,
+    # navigates to the target page, and dumps the accessibility tree.
+    script = """
+const { chromium } = require('playwright');
+(async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage({ viewport: { width: 1920, height: 1080 } });
+  const baseURL = process.env.BASE_URL || 'https://staging.mvpaccess.online';
+"""
+    if login_first:
+        script += """
+  // Log in first
+  await page.goto(baseURL + '/Login.aspx');
+  await page.locator('#txtAccount').fill(process.env.COMPANY_ID || '');
+  await page.locator('#txtUserName').fill(process.env.USER_ID || '');
+  await page.locator('#txtPassword').fill(process.env.PASSWORD || '');
+  await page.evaluate(() => {
+    const btn = document.getElementById('btnLogin');
+    if (btn) btn.click();
+  });
+  await page.waitForURL(url => !url.toString().includes('Login.aspx'), { timeout: 15000 }).catch(() => {});
+  await page.waitForLoadState('networkidle').catch(() => {});
+"""
+    script += f"""
+  // Navigate to target
+  await page.goto(baseURL + '{url_path}');
+  await page.waitForLoadState('networkidle').catch(() => {{}});
+  // Dump accessibility snapshot
+  const snapshot = await page.accessibility.snapshot();
+  console.log(JSON.stringify(snapshot, null, 2));
+  await browser.close();
+}})();
+"""
+    try:
+        proc = subprocess.run(
+            ["node", "-e", script],
+            cwd=project_dir,
+            capture_output=True, text=True,
+            timeout=60, shell=True,
+            env={**os.environ, "NODE_PATH": os.path.join(project_dir, "node_modules")},
+        )
+        stdout = (proc.stdout or "").strip()
+        if proc.returncode != 0:
+            return _text({
+                "error": "Playwright exploration failed",
+                "stderr": (proc.stderr or "")[-500:],
+                "stdout": stdout[-500:],
+            })
+        try:
+            tree = json.loads(stdout)
+        except json.JSONDecodeError:
+            tree = None
+        return _text({
+            "suite": suite,
+            "path": url_path,
+            "logged_in": login_first,
+            "accessibility_tree": tree,
+            "raw_length": len(stdout),
+        })
+    except subprocess.TimeoutExpired:
+        return _text({"error": "Timed out exploring the UI (60s limit)"})
+    except Exception as e:
+        return _text({"error": str(e)})
+
+
+@tool(
+    "run_single_e2e_test",
+    "Run a SINGLE Playwright spec file with tracing ON and return structured results. "
+    "Use this to verify a newly-written test passes for the right reasons. "
+    "'suite' is full|easy|release. 'spec_file' is relative to tests/ "
+    "(e.g. '04-departments.spec.ts'). Returns pass/fail, failure messages, and trace path.",
+    {"suite": str, "spec_file": str},
+)
+async def run_single_e2e_test_tool(args):
+    suite = args.get("suite", "full")
+    project_dir = E2E_PROJECTS.get(suite)
+    if not project_dir or not os.path.isdir(project_dir):
+        return _text({"error": f"Unknown E2E suite: {suite}"})
+
+    spec = args.get("spec_file", "")
+    spec_path = os.path.join(project_dir, "tests", spec)
+    if not os.path.isfile(spec_path):
+        return _text({"error": f"Spec not found: tests/{spec}"})
+
+    trace_dir = os.path.join(project_dir, "test-results")
+    cmd = [
+        "npx", "playwright", "test",
+        f"tests/{spec}",
+        "--project=chromium",
+        "--reporter=json",
+        "--trace", "on",
+        "--retries", "0",  # no retries — we want the raw result
+    ]
+
+    result = {
+        "suite": suite, "spec_file": spec, "status": "FAILED",
+        "total": 0, "passed": 0, "failed": 0,
+        "duration_s": 0, "failures": [], "trace_dir": trace_dir,
+    }
+
+    try:
+        proc = subprocess.run(
+            cmd, cwd=project_dir, capture_output=True, text=True,
+            timeout=120, shell=True,
+        )
+        stdout = proc.stdout or ""
+        try:
+            report = json.loads(stdout)
+        except json.JSONDecodeError:
+            idx = stdout.find("{")
+            report = json.loads(stdout[idx:]) if idx >= 0 else {}
+
+        stats = report.get("stats", {})
+        result["total"] = stats.get("expected", 0) + stats.get("unexpected", 0) + stats.get("skipped", 0)
+        result["passed"] = stats.get("expected", 0)
+        result["failed"] = stats.get("unexpected", 0)
+        result["duration_s"] = round(stats.get("duration", 0) / 1000.0, 1)
+
+        # Extract failure messages
+        def walk(suites):
+            for s in suites or []:
+                for sp in s.get("specs", []):
+                    for t in sp.get("tests", []):
+                        for r in t.get("results", []):
+                            if r.get("status") in ("failed", "timedOut"):
+                                err = (r.get("error") or {}).get("message", "")
+                                result["failures"].append({
+                                    "test": sp.get("title", ""),
+                                    "error": err[:500],
+                                    "status": r.get("status"),
+                                })
+                yield from walk(s.get("suites"))
+        list(walk(report.get("suites", [])))
+
+        if result["total"] > 0 and result["failed"] == 0:
+            result["status"] = "PASSED"
+        elif result["failed"] > 0:
+            result["status"] = "PARTIAL"
+
+        # Find trace zip files
+        traces = glob.glob(os.path.join(trace_dir, "**", "trace.zip"), recursive=True)
+        result["trace_files"] = [os.path.relpath(t, project_dir).replace("\\", "/") for t in traces[-3:]]
+
+    except subprocess.TimeoutExpired:
+        result["status"] = "TIMEOUT"
+    except Exception as e:
+        logger.exception("run_single_e2e_test error")
+        result["error"] = str(e)
+
+    return _text(result)
+
+
 ALL_TOOLS = [
     # Pre-flight
     check_api_health_tool,
@@ -1130,6 +1304,8 @@ ALL_TOOLS = [
     # Test execution
     run_load_tests_tool, run_api_tests_tool, run_integration_tests_tool,
     run_tests_by_pattern_tool, find_flaky_tests_tool, run_e2e_tests_tool,
+    # E2E script generation (Plan / Generate / Verify)
+    explore_ui_tool, run_single_e2e_test_tool,
     # Code review + edits
     list_project_files_tool, read_file_tool, write_file_tool, edit_file_tool,
     # Source control
@@ -1146,6 +1322,7 @@ TOOL_NAMES = [
     "check_api_health", "check_all_endpoints_health",
     "run_load_tests", "run_api_tests", "run_integration_tests",
     "run_tests_by_pattern", "find_flaky_tests", "run_e2e_tests",
+    "explore_ui", "run_single_e2e_test",
     "list_project_files", "read_file", "write_file", "edit_file",
     "git_diff", "git_commit_and_push", "recent_commits",
     "tail_nightly_log", "clean_reports_folder", "generate_pdf_report",
