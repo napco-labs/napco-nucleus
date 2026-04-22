@@ -211,7 +211,10 @@ async def run_e2e_tests_tool(args):
     result = {
         "suite": suite, "status": "FAILED",
         "total": 0, "passed": 0, "failed": 0, "skipped": 0,
-        "duration_s": 0, "failure_samples": [],
+        "duration_s": 0,
+        "environment": {},
+        "failures": [],           # rich shape — feeds the PDF failure cards
+        "failure_samples": [],    # legacy shape — kept for back-compat
     }
 
     try:
@@ -235,19 +238,90 @@ async def run_e2e_tests_tool(args):
         result["skipped"] = stats.get("skipped", 0)
         result["duration_s"] = round(stats.get("duration", 0) / 1000.0, 1)
 
+        # Environment block — pulled from .env (Playwright config falls back
+        # to staging if PORTAL_URL isn't set, so we do the same here).
+        result["environment"] = {
+            "base_url": (
+                os.getenv("PORTAL_URL")
+                or os.getenv("BASE_URL")
+                or "https://staging.mvpaccess.online"
+            ),
+            "browser": "Chromium (Desktop Chrome)",
+            "viewport": "1920x1080",
+            "project": (report.get("config") or {}).get("name") or "chromium",
+        }
+
+        # Dedupe failures by (file, line, title) so a retried-and-still-failed
+        # test surfaces as ONE card with a `max_retry` chip rather than
+        # N separate cards. We also pick up the `attachments` block so the
+        # PDF can embed the latest screenshot + trace per failing test.
+        failures_by_key: dict = {}
+
         def walk(suites):
             for s in suites or []:
-                for spec in s.get("specs", []):
-                    for test in spec.get("tests", []):
-                        for res in test.get("results", []):
-                            if res.get("status") in ("failed", "timedOut"):
-                                err = (res.get("error") or {}).get("message", "")
-                                result["failure_samples"].append({
-                                    "name": spec.get("title", ""),
-                                    "message": err[:300],
-                                })
+                for spec in s.get("specs", []) or []:
+                    spec_file = spec.get("file") or ""
+                    spec_line = spec.get("line")
+                    spec_title = spec.get("title", "")
+                    for test in spec.get("tests", []) or []:
+                        for res in test.get("results", []) or []:
+                            status = res.get("status")
+                            if status not in ("failed", "timedOut"):
+                                continue
+                            err_msg = (res.get("error") or {}).get("message") or ""
+                            attachments = res.get("attachments") or []
+                            shot = next(
+                                (a.get("path") for a in attachments
+                                 if a.get("name") == "screenshot" and a.get("path")),
+                                None,
+                            )
+                            trace = next(
+                                (a.get("path") for a in attachments
+                                 if a.get("name") == "trace" and a.get("path")),
+                                None,
+                            )
+                            key = (spec_file, spec_line, spec_title)
+                            existing = failures_by_key.get(key)
+                            retry = int(res.get("retry") or 0)
+                            duration_ms = int(res.get("duration") or 0)
+                            # Build a local repro command the developer can paste
+                            repro = (
+                                f"cd {os.path.basename(project_dir)} && "
+                                f"npx playwright test {spec_file}"
+                                + (f":{spec_line}" if spec_line else "")
+                                + " --headed --project=chromium"
+                            )
+                            if existing is None:
+                                failures_by_key[key] = {
+                                    "title": spec_title,
+                                    "file": spec_file,
+                                    "line": spec_line,
+                                    "status": status,
+                                    "max_retry": retry,
+                                    "duration_ms": duration_ms,
+                                    "error": err_msg,
+                                    "screenshot_path": shot,
+                                    "trace_path": trace,
+                                    "repro_command": repro,
+                                }
+                            else:
+                                existing["max_retry"] = max(existing["max_retry"], retry)
+                                # Prefer retry-run artifacts (they usually have the trace)
+                                if retry > 0:
+                                    if shot:  existing["screenshot_path"] = shot
+                                    if trace: existing["trace_path"] = trace
+                                if err_msg and not existing["error"]:
+                                    existing["error"] = err_msg
                 yield from walk(s.get("suites"))
         list(walk(report.get("suites", [])))
+
+        result["failures"] = list(failures_by_key.values())
+        # Back-compat legacy field — top 5 samples for any caller that still
+        # reads `failure_samples` (e.g. the old PDF renderer).
+        result["failure_samples"] = [
+            {"name": f["title"], "message": (f.get("error") or "")[:300]}
+            for f in result["failures"][:5]
+        ]
 
         if result["total"] > 0 and result["failed"] == 0:
             result["status"] = "PASSED"
@@ -261,8 +335,12 @@ async def run_e2e_tests_tool(args):
         result["error"] = str(e)
 
     STATE["e2e"] = result
-    summary = dict(result)
-    summary["failure_samples"] = result["failure_samples"][:5]
+    # Trim the returned summary so the agent's context doesn't balloon with
+    # screenshot paths on every call. The full rich dict stays in STATE for
+    # the PDF renderer.
+    summary = {k: v for k, v in result.items() if k != "failures"}
+    summary["failure_samples"] = result["failure_samples"]
+    summary["failure_count"] = len(result["failures"])
     return _text(summary)
 
 
@@ -685,6 +763,286 @@ async def compare_with_last_run_tool(_args):
         "fixed": fixed[:20],
         "new_tests_count": len(new_tests),
         "removed_tests_count": len(removed),
+    })
+
+
+# ─── RCA classifier (analyze_test_failures) ─────────────────────────────
+#
+# Cascading heuristics for failure classification. Order matters — first
+# match wins; patterns are matched against a lower-cased error string.
+# Each entry: (regex, class, owner_hint, rationale).
+#
+# Classes:
+#   env       — network / DNS / TLS / server-down (the test never got a fair
+#               chance, so don't blame the backend code or the test code)
+#   data      — auth / fixture / pre-condition setup failed
+#   test_bug  — selector breakage, import/syntax error in the test itself
+#   real_bug  — 5xx, assertion mismatch on a healthy connection
+#   flaky     — historically intermittent; cross-referenced from history.py
+#   known_bug — already tracked in integration-tests/known_bugs.py
+_FAILURE_HEURISTICS: list[tuple[str, str, str, str]] = [
+    (r"readtimeout|read timed out|timeouterror: timed out|connectionrefused|"
+     r"econnrefused|max retries exceeded|connection aborted|connection reset|"
+     r"name or service not known|no route to host|network is unreachable|"
+     r"no such host|getaddrinfo failed|nameresolutionerror",
+     "env", "infra/backend",
+     "Network/connection failure — target host unreachable or timing out"),
+    (r"ssl: certificate|certificate verify failed|sslerror",
+     "env", "infra",
+     "TLS / certificate problem — likely env config, not a test bug"),
+    (r"login failed|invalid credentials|authentication failed|"
+     r"missing client_id|missing api[- ]?key",
+     "data", "qa-data-setup",
+     "Auth/credential setup failed before the test could run"),
+    (r"locator\.[a-z]+: timeout|element\([^)]*\) not found|"
+     r"strict mode violation|no element matches selector|"
+     r"page\.goto: timeout|expected to be visible.*timeout|"
+     r"test timeout of \d+ms exceeded",
+     "test_bug", "qa-tests",
+     "Playwright selector/locator issue — fragile test code"),
+    (r"importerror|modulenotfounderror|syntaxerror|indentationerror",
+     "test_bug", "qa-tests",
+     "Python import/syntax error in the test code"),
+    (r"\b50[023]\b.*server error|"
+     r"assertionerror.*expected\s+(?:200|201|204).*\b500\b|"
+     r"\binternalservererror\b|500 internal server error",
+     "real_bug", "backend",
+     "Server returned 5xx — backend defect"),
+    (r"assertionerror|expected.*to (?:equal|be|have)",
+     "real_bug", "backend",
+     "Assertion mismatch — investigate as backend behaviour change"),
+]
+
+
+def _classify_failure(test_name: str, error_text: str,
+                      known_patterns, flaky_lookup: dict) -> dict:
+    """Cascade: known → flaky → heuristics → default real_bug."""
+    import re as _re
+    text = error_text or ""
+    haystack = f"{test_name} {text}"
+
+    if known_patterns and any(p.search(haystack) for p in known_patterns):
+        return {"class": "known_bug", "owner": "tracked",
+                "rationale": "Matches an entry in integration-tests/known_bugs.py"}
+
+    if test_name and test_name in flaky_lookup:
+        pct = flaky_lookup[test_name]
+        return {"class": "flaky", "owner": "qa-investigation",
+                "rationale": f"Stability {pct}% over last 10 runs"}
+
+    low = text.lower()
+    for pattern, klass, owner, why in _FAILURE_HEURISTICS:
+        if _re.search(pattern, low):
+            return {"class": klass, "owner": owner, "rationale": why}
+
+    return {"class": "real_bug", "owner": "backend",
+            "rationale": "Uncategorized failure — review manually"}
+
+
+def _load_pytest_failures() -> list[dict]:
+    path = os.path.join(config.REPORTS_DIR, "pytest_report.json")
+    if not os.path.isfile(path):
+        return []
+    try:
+        with open(path) as f:
+            data = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return []
+    out = []
+    for t in data.get("tests", []):
+        outcome = t.get("outcome")
+        if outcome not in ("failed", "error"):
+            continue
+        nodeid = t.get("nodeid", "?")
+        msg = ""
+        for stage in ("call", "setup", "teardown"):
+            stage_data = t.get(stage) or {}
+            crash = stage_data.get("crash") or {}
+            if crash.get("message"):
+                msg = crash["message"]
+                break
+            if not msg and stage_data.get("longrepr"):
+                msg = stage_data["longrepr"]
+        out.append({
+            "test": nodeid.split("::", 1)[-1],
+            "error": (msg or "")[:800],
+            "source": "pytest",
+            "outcome": outcome,
+        })
+    return out
+
+
+def _load_newman_failures() -> list[dict]:
+    path = os.path.join(config.REPORTS_DIR, "newman_report.json")
+    if not os.path.isfile(path):
+        return []
+    try:
+        with open(path) as f:
+            data = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return []
+    out = []
+    for fail in (data.get("run", {}).get("failures") or []):
+        err = fail.get("error") or {}
+        src = fail.get("source") or {}
+        parent = fail.get("parent") or {}
+        out.append({
+            "test": f"{parent.get('name', '')} — {src.get('name', '') or err.get('test', '')}".strip(" —"),
+            "error": (err.get("message") or err.get("name") or "")[:800],
+            "source": "newman",
+            "outcome": "failed",
+        })
+    return out
+
+
+def _load_playwright_failures() -> list[dict]:
+    out = []
+    for suite, root in E2E_PROJECTS.items():
+        for candidate in (
+            os.path.join(root, "reports", "results.json"),
+            os.path.join(root, "test-results", "results.json"),
+        ):
+            if not os.path.isfile(candidate):
+                continue
+            try:
+                with open(candidate) as f:
+                    data = json.load(f)
+            except (OSError, json.JSONDecodeError):
+                continue
+
+            def _walk(suites):
+                for s in suites or []:
+                    for spec in s.get("specs", []) or []:
+                        for test in spec.get("tests", []) or []:
+                            for res in test.get("results", []) or []:
+                                if res.get("status") in ("failed", "timedOut"):
+                                    err = (res.get("error") or {}).get("message") or ""
+                                    out.append({
+                                        "test": f"[{suite}] {spec.get('title', '')}",
+                                        "error": err[:800],
+                                        "source": f"playwright-{suite}",
+                                        "outcome": res.get("status"),
+                                    })
+                    yield from _walk(s.get("suites"))
+            list(_walk(data.get("suites", [])))
+            break
+    return out
+
+
+@tool(
+    "analyze_test_failures",
+    "Read the latest test artifacts (pytest_report.json, newman_report.json, "
+    "Playwright results.json across the 3 E2E projects) and classify each "
+    "failure as real_bug | flaky | env | data | test_bug | known_bug. "
+    "Returns counts per class, top collapsed root causes, action "
+    "recommendations, and the per-failure list with rationale + owner hint. "
+    "Pure read; no test execution; runs in seconds. Use after a run (or on "
+    "artifacts copied from CI) to know what to actually act on. Optional "
+    "max_failures_per_class caps the per-class detail list (default 5).",
+    {"max_failures_per_class": int},
+)
+async def analyze_test_failures_tool(args):
+    cap = int((args or {}).get("max_failures_per_class") or 5)
+
+    known_patterns = bug_reporter._known_bug_patterns()
+    flaky_lookup = {}
+    try:
+        for f in history.compute_flaky_tests():
+            flaky_lookup[f["name"]] = f["stability_pct"]
+    except Exception as e:
+        logger.warning(f"compute_flaky_tests failed: {e}")
+
+    failures = (
+        _load_pytest_failures()
+        + _load_newman_failures()
+        + _load_playwright_failures()
+    )
+
+    if not failures:
+        return _text({
+            "scope": "latest_artifacts",
+            "total_failures": 0,
+            "message": "No failures found in the latest reports — either "
+                       "the suite is green or no run artifacts exist yet.",
+        })
+
+    classified = []
+    for f in failures:
+        verdict = _classify_failure(
+            f["test"], f["error"], known_patterns, flaky_lookup,
+        )
+        classified.append({**f, **verdict})
+
+    counts: dict = {}
+    for f in classified:
+        counts[f["class"]] = counts.get(f["class"], 0) + 1
+
+    cause_groups: dict = {}
+    for f in classified:
+        key = (f["class"], f["rationale"])
+        g = cause_groups.setdefault(key, {
+            "class": f["class"], "rationale": f["rationale"],
+            "owner": f["owner"], "count": 0,
+            "sample_test": f["test"],
+            "sample_error": f["error"][:200],
+        })
+        g["count"] += 1
+    top_causes = sorted(cause_groups.values(), key=lambda x: -x["count"])[:5]
+
+    actions = []
+    if counts.get("env", 0) >= 5:
+        actions.append(
+            f"Likely env outage: {counts['env']} env-class failures. "
+            "Run check_api_health before re-running the suite."
+        )
+    if counts.get("real_bug", 0) > 0:
+        actions.append(
+            f"{counts['real_bug']} real bug(s) — see top_root_causes for "
+            "clusters; owner: backend."
+        )
+    if counts.get("flaky", 0) > 0:
+        actions.append(
+            f"{counts['flaky']} flaky test(s) — confirm with find_flaky_tests "
+            "before filing."
+        )
+    if counts.get("test_bug", 0) > 0:
+        actions.append(
+            f"{counts['test_bug']} test-code issue(s) — owner: qa-tests."
+        )
+    if counts.get("data", 0) > 0:
+        actions.append(
+            f"{counts['data']} data/setup failure(s) — likely auth/fixture; "
+            "owner: qa-data-setup."
+        )
+    if counts.get("known_bug", 0) > 0:
+        actions.append(
+            f"{counts['known_bug']} known-bug hit(s) — already tracked, no "
+            "new action needed."
+        )
+    if not actions:
+        actions.append("Review the failure list manually — heuristic rules "
+                       "did not fire confidently.")
+
+    by_class: dict = {}
+    for f in classified:
+        by_class.setdefault(f["class"], []).append({
+            "test": f["test"],
+            "source": f["source"],
+            "owner": f["owner"],
+            "rationale": f["rationale"],
+            "error": f["error"][:200],
+        })
+    for k in by_class:
+        by_class[k] = by_class[k][:cap]
+
+    return _text({
+        "scope": "latest_artifacts",
+        "sources_seen": sorted({f["source"] for f in failures}),
+        "total_failures": len(classified),
+        "by_class": dict(sorted(counts.items(), key=lambda x: -x[1])),
+        "top_root_causes": top_causes,
+        "actions": actions,
+        "failures_by_class": by_class,
     })
 
 
@@ -1315,7 +1673,8 @@ ALL_TOOLS = [
     send_email_report_tool, send_teams_digest_tool,
     # Management / triage
     list_known_bugs_tool, test_inventory_tool,
-    compare_with_last_run_tool, draft_standup_update_tool,
+    compare_with_last_run_tool, analyze_test_failures_tool,
+    draft_standup_update_tool,
 ]
 
 TOOL_NAMES = [
@@ -1328,5 +1687,5 @@ TOOL_NAMES = [
     "tail_nightly_log", "clean_reports_folder", "generate_pdf_report",
     "send_email_report", "send_teams_digest",
     "list_known_bugs", "test_inventory",
-    "compare_with_last_run", "draft_standup_update",
+    "compare_with_last_run", "analyze_test_failures", "draft_standup_update",
 ]
