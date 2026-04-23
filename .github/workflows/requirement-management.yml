@@ -57,18 +57,20 @@ jobs:
 
       # The MVPACCESS runner service isn't elevated, so
       # actions/setup-python@v6 fails writing HKLM registry keys during
-      # its install path. The VM already has a system Python (3.11+),
-      # so we use it directly — our deps (claude-agent-sdk, requests,
-      # python-dotenv) don't require a specific minor version.
+      # its install path, AND `python` isn't on this service account's
+      # PATH. We use the Windows Python launcher `py` instead — it lives
+      # at C:\Windows\py.exe and is on the system-wide PATH regardless
+      # of the calling user account. `py -3` selects the latest
+      # installed Python 3.x (3.13 on this VM).
       - name: Report Python version
-        run: python --version
+        run: py -3 --version
 
       - name: Install Python dependencies
-        run: pip install -r requirements.txt
+        run: py -3 -m pip install -r requirements.txt
 
       - name: Poll requirement emails (IMAP)
         if: ${{ github.event.inputs.skip_email_poll != 'true' }}
-        run: python requirements_inbox.py
+        run: py -3 requirements_inbox.py
 
       - name: Process inbox and publish to GitLab
         shell: pwsh
@@ -77,7 +79,7 @@ jobs:
           if ($env:DRY_RUN -eq 'true') {
             $prompt = "DRY RUN: Read the inbox and split into ~3-hour tasks, but DO NOT call publish_tasks_to_gitlab. Instead print the proposed task list as JSON so I can review before publishing."
           }
-          python main.py $prompt
+          py -3 main.py $prompt
 
       - name: Commit inbox + state changes
         if: always()
