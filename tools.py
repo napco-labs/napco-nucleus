@@ -176,6 +176,16 @@ def _parse_run_time_seconds(s):
 
 
 def _load_test_description():
+    # Sibling MVP-Access-API-Test/agent may not be on sys.path (e.g. on a
+    # CI runner that checks out only this repo for the Requirement
+    # Management workflow). Fall back to a generic description rather
+    # than crashing at module-import time.
+    if config is None:
+        return (
+            "Run Locust load tests across all tiers. Requires the sibling "
+            "MVP-Access-API-Test project to be available; will fail at call "
+            "time if not. Call AT MOST ONCE per run."
+        )
     tiers = "/".join(_format_users(t["users"]) for t in config.LOAD_TEST_TIERS)
     rt = config.LOCUST_RUN_TIME
     total_sec = _parse_run_time_seconds(rt) * len(config.LOAD_TEST_TIERS)
