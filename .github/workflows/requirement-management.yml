@@ -55,9 +55,13 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - uses: actions/setup-python@v6
-        with:
-          python-version: '3.11'
+      # The MVPACCESS runner service isn't elevated, so
+      # actions/setup-python@v6 fails writing HKLM registry keys during
+      # its install path. The VM already has a system Python (3.11+),
+      # so we use it directly — our deps (claude-agent-sdk, requests,
+      # python-dotenv) don't require a specific minor version.
+      - name: Report Python version
+        run: python --version
 
       - name: Install Python dependencies
         run: pip install -r requirements.txt
