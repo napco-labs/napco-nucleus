@@ -45,12 +45,18 @@ jobs:
     timeout-minutes: 25
 
     env:
-      # IMAP + GitLab creds come from the runner's .env (loaded by
-      # each Python script), not from GHA secrets. Keeps the secret
-      # surface on a single machine Mohammad controls, and matches
-      # how the rest of this agent authenticates.
       DRY_RUN: ${{ github.event.inputs.dry_run }}
       SKIP_EMAIL_POLL: ${{ github.event.inputs.skip_email_poll }}
+      # IMAP for requirement-email ingestion.
+      REQ_IMAP_HOST: ${{ secrets.REQ_IMAP_HOST }}
+      REQ_IMAP_USER: ${{ secrets.REQ_IMAP_USER }}
+      REQ_IMAP_PASSWORD: ${{ secrets.REQ_IMAP_PASSWORD }}
+      REQ_SENDER_ALLOWLIST: ${{ secrets.REQ_SENDER_ALLOWLIST }}
+      # GitLab backlog destination.
+      GITLAB_HOST: ${{ secrets.GITLAB_HOST }}
+      GITLAB_PROJECT_ID: ${{ secrets.GITLAB_PROJECT_ID }}
+      GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
+      GITLAB_DEFAULT_LABELS: ${{ secrets.GITLAB_DEFAULT_LABELS }}
 
     steps:
       - uses: actions/checkout@v5
