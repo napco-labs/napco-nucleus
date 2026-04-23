@@ -193,24 +193,46 @@ def poll_requirement_inbox(dry_run: bool = False, since_uid: str | None = None) 
         if uidvalidity:
             email_state[f"{user}:{mailbox}:uidvalidity"] = uidvalidity
 
-        # Search for UIDs strictly greater than since_uid.
+        # Server-side SEARCH: one query per allowlisted sender restricted
+        # to UIDs greater than the last checkpoint. This avoids fetching
+        # the 7k+ bodies we'd otherwise pull down just to filter by From
+        # header (which timed out the first real run on 7,889 messages).
         search_since = str(int(since_uid) + 1) if since_uid.isdigit() else "1"
-        typ, data = m.uid("SEARCH", None, f"UID {search_since}:*")
-        if typ != "OK":
-            return {"error": f"IMAP SEARCH failed: {typ}", "ingested": 0}
+        uid_from: dict[str, str] = {}  # uid -> lowercased sender it matched
+        for sender in sorted(allowlist):
+            typ, data = m.uid("SEARCH", None, "FROM", f'"{sender}"',
+                              "UID", f"{search_since}:*")
+            if typ != "OK":
+                logger.warning(f"IMAP SEARCH FROM {sender} failed: {typ}")
+                continue
+            for uid_bytes in (data[0] or b"").split():
+                uid = uid_bytes.decode()
+                # SEARCH UID x:* may return UIDs <= x when x exceeds the
+                # highest existing UID (GMail quirk). Guard explicitly.
+                try:
+                    if int(uid) < int(search_since):
+                        continue
+                except ValueError:
+                    pass
+                uid_from.setdefault(uid, sender.lower())
 
-        uids = (data[0] or b"").split()
         ingested = 0
         skipped_offlist = 0
         max_uid_seen = int(since_uid or "0")
         written_files: list[str] = []
 
-        for uid_bytes in uids:
-            uid = uid_bytes.decode()
-            try:
-                max_uid_seen = max(max_uid_seen, int(uid))
-            except ValueError:
-                pass
+        # We still need the highest UID we've SEEN so the checkpoint
+        # advances past non-matching messages too. One cheap SEARCH ALL
+        # with UID range gives us that boundary without body fetches.
+        typ, all_uids = m.uid("SEARCH", None, "UID", f"{search_since}:*")
+        if typ == "OK":
+            for b in (all_uids[0] or b"").split():
+                try:
+                    max_uid_seen = max(max_uid_seen, int(b.decode()))
+                except ValueError:
+                    pass
+
+        for uid in sorted(uid_from.keys(), key=lambda x: int(x) if x.isdigit() else 0):
             typ, msg_data = m.uid("FETCH", uid, "(RFC822)")
             if typ != "OK" or not msg_data or not msg_data[0]:
                 continue
@@ -223,6 +245,8 @@ def poll_requirement_inbox(dry_run: bool = False, since_uid: str | None = None) 
             from_hdr = _decode(msg.get("From"))
             from_addr = _extract_from_address(from_hdr)
             if from_addr not in allowlist:
+                # Shouldn't happen — SEARCH FROM matched — but belt-and-
+                # suspenders in case of alias/display-name parsing drift.
                 skipped_offlist += 1
                 continue
 
