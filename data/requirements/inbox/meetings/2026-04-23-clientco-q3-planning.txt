@@ -1,0 +1,31 @@
+# source: meetings
+# from: client-meeting-transcript
+# received: 2026-04-23T10:00:00Z
+# subject: Q3 planning call with ClientCo
+
+[Transcript fragment — Q3 planning call]
+
+Client (Anna, PM): "Two things we need by end of Q3.
+
+First, SSO through Azure AD on the staging site so our auditors can sign in
+with their company accounts. No more shared logins. Users should land on the
+dashboard directly after auth, no extra click. Keep the existing
+email/password as a fallback for service accounts.
+
+Second, the customer-export endpoint keeps timing out for accounts with more
+than 10,000 rows. Please make it async — queue the export, email the user a
+link when it's ready. Show a 'we'll email you' banner after they click
+Export. Also those notification emails should come from
+support@clientco.example, not no-reply."
+
+Mohammad: "Got it. Anything else?"
+
+Client: "Yes — the admin audit log needs a filter by user + date range. Right
+now we have to scroll through 2,000 rows to find anything. Basic UI, no
+charts needed."
+
+Mohammad: "Okay, that's three chunks of work. I'll have the team break them
+down and get back with estimates by Friday."
+
+Client: "Thanks. Also — low priority, but the CSV export header row is
+missing the 'created_at' column. Small fix whenever."
