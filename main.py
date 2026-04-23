@@ -182,6 +182,15 @@ Step-by-step the agent MUST follow:
      processed: N files → M tasks → K new issues in GitLab." The
      Teams channel then has a running log of each backlog update.
 
+Output language rule (important):
+  - Task titles, descriptions, and acceptance criteria MUST be written in
+    English, even if the source transcript / email is in Bangla, Malay,
+    or any other language. Translate meaning, not literal words — a
+    Bangla requirement about adding a filter should become an English
+    task describing the filter.
+  - Preserve proper nouns, endpoint names, field names, and client
+    phrasing verbatim where it helps a developer understand scope.
+
 Output tone rules for task titles + descriptions:
   - Plain developer English. No marketing voice, no "streamline / align
     / optimize" jargon.
