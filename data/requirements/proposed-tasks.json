@@ -1,0 +1,227 @@
+{
+  "generated_at": "2026-04-23T21:07:23.881911",
+  "tasks": [
+    {
+      "title": "Load MVP EZ limits from web.config + shared clamp helper",
+      "description": "Salman's email (Apr 22) asks us to drive the MVP EZ limits from web.config keys (OperatorLimit, DoorLimit, StandardBadgeLimit, BLECredentialLimit, NFCCredentialLimit, BadgesPerPerson). Before wiring into any validation paths, add a single configuration reader and a shared helper that returns the effective cap per the rules in the email: min(service plan, web.config), or the web.config value when the service plan value is 0 (unlimited). All later limit tasks depend on this helper.",
+      "acceptance_criteria": [
+        "web.config keys OperatorLimit=200, DoorLimit=50, StandardBadgeLimit=200, BLECredentialLimit=200, NFCCredentialLimit=200, BadgesPerPerson=4 are read at startup",
+        "Shared helper returns the web.config value when the plan value is 0",
+        "Shared helper returns min(web.config, plan) when plan value > 0",
+        "Unit tests cover each rule variant (plan=0, plan<config, plan>config)"
+      ],
+      "estimate_hours": 3,
+      "source_ref": "data/requirements/inbox/email/2026-04-23T12-42-uid29025-fwd-mvpez-limit-updates-enhancements.txt",
+      "labels": [
+        "limits",
+        "backend"
+      ]
+    },
+    {
+      "title": "Apply new caps to Operators, Standard Badges, Doors",
+      "description": "Using the helper from the limits-plumbing task, enforce the caps in the Operator, Standard Badge, and Door creation/validation paths. Per Salman's email, Operators and Standard Badges should default to the web.config value (200) when the service plan is 0 (unlimited); Doors should always take the lower of web.config (50) and the service plan.",
+      "acceptance_criteria": [
+        "Operator creation blocked above effective cap; plan==0 falls back to 200",
+        "Standard Badge creation blocked above effective cap; plan==0 falls back to 200",
+        "Door creation blocked above min(50, plan)",
+        "Validation error messages name the limit and the effective value"
+      ],
+      "estimate_hours": 3,
+      "source_ref": "data/requirements/inbox/email/2026-04-23T12-42-uid29025-fwd-mvpez-limit-updates-enhancements.txt",
+      "labels": [
+        "limits",
+        "backend"
+      ]
+    },
+    {
+      "title": "Apply new caps to BLE and NFC credentials",
+      "description": "Enforce BLECredentialLimit=200 and NFCCredentialLimit=200 in credential issuance. Per the email, both should always use the lower of the web.config value and the service-plan value (no 'plan=0 means unlimited' fallback for these two).",
+      "acceptance_criteria": [
+        "BLE credential issuance blocked above min(web.config, plan)",
+        "NFC credential issuance blocked above min(web.config, plan)",
+        "Error messages mention which cap was hit",
+        "Existing BLE/NFC tests updated to cover the new caps"
+      ],
+      "estimate_hours": 3,
+      "source_ref": "data/requirements/inbox/email/2026-04-23T12-42-uid29025-fwd-mvpez-limit-updates-enhancements.txt",
+      "labels": [
+        "limits",
+        "backend"
+      ]
+    },
+    {
+      "title": "Enforce Badges-per-Person total cap of 4",
+      "description": "Per the email, a person can have at most 4 badges across Standard, BLE, and NFC combined (web.config key BadgesPerPerson). Validate this on every badge-assignment path so the total never exceeds the cap regardless of badge type.",
+      "acceptance_criteria": [
+        "Sum of Standard+BLE+NFC badges for a person blocked above BadgesPerPerson (default 4)",
+        "Check runs on single-assignment, transfer, and bulk-import paths",
+        "Unit tests cover mixed-type combinations summing to 3/4/5",
+        "Clear error message identifies the person and current badge count"
+      ],
+      "estimate_hours": 3,
+      "source_ref": "data/requirements/inbox/email/2026-04-23T12-42-uid29025-fwd-mvpez-limit-updates-enhancements.txt",
+      "labels": [
+        "limits",
+        "backend"
+      ]
+    },
+    {
+      "title": "Add BLE credential re-generation action",
+      "description": "Per the 'Additional Enhancements' section of the email, users need a way to regenerate an existing BLE credential without deleting and recreating the person. Add a button/link on the BLE credential row that invalidates the current secret and issues a fresh one.",
+      "acceptance_criteria": [
+        "Regenerate button visible on each BLE credential row",
+        "Clicking rotates the credential secret and returns the new value to the UI",
+        "Old credential is immediately invalid on readers",
+        "Action is audited with user id and timestamp"
+      ],
+      "estimate_hours": 3,
+      "source_ref": "data/requirements/inbox/email/2026-04-23T12-42-uid29025-fwd-mvpez-limit-updates-enhancements.txt",
+      "labels": [
+        "ble",
+        "frontend",
+        "backend"
+      ]
+    },
+    {
+      "title": "Cascade delete person with all associated data",
+      "description": "The email lists the exact tables that need cleanup when a person is deleted: remove OperatorId from DevicePartitions, delete rows from BadgeAccess and BadgeUpdate, delete from Person, and remove PersonId from DevicePartitions. Wrap everything in a single transaction so a partial delete can't leave dangling rows.",
+      "acceptance_criteria": [
+        "Delete-person action removes rows from Person, BadgeAccess, BadgeUpdate",
+        "OperatorId and PersonId cleared from DevicePartitions for that person",
+        "All work runs in one DB transaction; any failure rolls back the whole delete",
+        "UI shows a confirmation prompt warning the action is destructive"
+      ],
+      "estimate_hours": 3,
+      "source_ref": "data/requirements/inbox/email/2026-04-23T12-42-uid29025-fwd-mvpez-limit-updates-enhancements.txt",
+      "labels": [
+        "backend",
+        "ui"
+      ]
+    },
+    {
+      "title": "Add User Manual menu item opening bundled PDF",
+      "description": "Short meeting clip (2026-04-23 21-01-57) asks for a foreground menu button that opens the user manual as a PDF. Add a top-level menu entry (e.g. Help -> User Manual) that opens the bundled PDF in the platform's default viewer.",
+      "acceptance_criteria": [
+        "New menu item labeled 'User Manual' in the Help/main menu",
+        "Clicking opens the bundled PDF in the OS default PDF viewer",
+        "Works on all currently supported OS targets"
+      ],
+      "estimate_hours": 2,
+      "source_ref": "data/requirements/inbox/meetings/2026-04-23-2026-04-23-21-01-57.txt",
+      "labels": [
+        "ui"
+      ]
+    },
+    {
+      "title": "Add File-menu item to browse local media folder",
+      "description": "Meeting transcript (Teams 2026-04-23 at 8.16.01 PM, in Bangla) describes adding a new sub-menu under the File menu. Clicking it should open a local folder picker so the user can browse a folder containing PDFs, videos, and MP3 files, list them, and select one to open.",
+      "acceptance_criteria": [
+        "New sub-menu item under File (name configurable)",
+        "Clicking opens a native folder picker",
+        "After selection, UI lists contained PDF / video / MP3 files",
+        "Selecting a file opens it in the platform's default application"
+      ],
+      "estimate_hours": 3,
+      "source_ref": "data/requirements/inbox/meetings/2026-04-23-Teams-2026-04-23-at-8-16-01-PM.txt",
+      "labels": [
+        "ui"
+      ]
+    },
+    {
+      "title": "Add Azure AD SSO happy-path on staging",
+      "description": "Q3 planning call: auditors need to sign in on the staging site with their Azure AD company accounts instead of shared logins. Scaffold the OIDC integration (app registration, redirect URIs, token handling) and wire the happy path so a successful SSO lands the user on /dashboard with no extra click.",
+      "acceptance_criteria": [
+        "Azure AD app registered; client id/secret/tenant read from staging config",
+        "'Sign in with Azure AD' option on staging login page",
+        "Successful SSO creates or links a local user and redirects to /dashboard",
+        "Failed SSO shows an actionable error on the login page"
+      ],
+      "estimate_hours": 3,
+      "source_ref": "data/requirements/inbox/meetings/2026-04-23-clientco-q3-planning.txt",
+      "labels": [
+        "auth",
+        "sso"
+      ]
+    },
+    {
+      "title": "Preserve email/password fallback alongside SSO",
+      "description": "Per the Q3 call, service accounts still need email/password sign-in after SSO ships. Keep the legacy flow enabled in parallel, make it visually secondary on the login page, and add tests that both paths work independently.",
+      "acceptance_criteria": [
+        "Email/password form still present on staging login page",
+        "Service-account users flagged to bypass SSO enforcement",
+        "Integration tests cover SSO-only, password-only, and mixed-tenant cases",
+        "Docs updated describing when to use which path"
+      ],
+      "estimate_hours": 3,
+      "source_ref": "data/requirements/inbox/meetings/2026-04-23-clientco-q3-planning.txt",
+      "labels": [
+        "auth",
+        "sso"
+      ]
+    },
+    {
+      "title": "Convert customer-export endpoint to async queued job",
+      "description": "Client reports the customer-export endpoint times out for accounts with more than 10,000 rows. Move the export off the request thread: enqueue a background job, persist export status, produce the file in object storage, and return immediately so the request no longer blocks.",
+      "acceptance_criteria": [
+        "POST /customer-export returns 202 with a job id",
+        "Worker generates the CSV and uploads it to storage",
+        "Job-status table tracks queued/running/done/failed",
+        "Exports for 10k+ row accounts complete without timing out"
+      ],
+      "estimate_hours": 3,
+      "source_ref": "data/requirements/inbox/meetings/2026-04-23-clientco-q3-planning.txt",
+      "labels": [
+        "backend",
+        "exports"
+      ]
+    },
+    {
+      "title": "Email export-ready link + 'we'll email you' banner",
+      "description": "Once the async export job completes, email the requesting user a download link. The UI should show a 'we'll email you when it's ready' banner after the user clicks Export. All export notification emails must come from support@clientco.example instead of no-reply.",
+      "acceptance_criteria": [
+        "Banner appears on Export click, dismissable",
+        "Email sent on job completion with a signed download link",
+        "Download link expires after a documented TTL",
+        "From-address is support@clientco.example across export notifications"
+      ],
+      "estimate_hours": 3,
+      "source_ref": "data/requirements/inbox/meetings/2026-04-23-clientco-q3-planning.txt",
+      "labels": [
+        "frontend",
+        "backend",
+        "exports"
+      ]
+    },
+    {
+      "title": "Add user + date-range filter to admin audit log",
+      "description": "Per the Q3 call, admins currently scroll ~2,000 rows to find anything in the audit log. Add two filters to the existing admin audit-log page: a user picker (typeahead) and a date-range picker. Server-side query must use the filters; no charts required.",
+      "acceptance_criteria": [
+        "User filter supports typeahead on username/email",
+        "Date-range filter has preset ranges (24h / 7d / 30d / custom)",
+        "Server-side query pushes both filters into the DB",
+        "Filters persist in the URL for sharing"
+      ],
+      "estimate_hours": 3,
+      "source_ref": "data/requirements/inbox/meetings/2026-04-23-clientco-q3-planning.txt",
+      "labels": [
+        "admin",
+        "ui"
+      ]
+    },
+    {
+      "title": "Add created_at column to CSV export header",
+      "description": "Low-priority client ask from the Q3 call: the CSV export header row is missing the created_at column. Add it to the header and value rows; header order should match the order used elsewhere if one exists.",
+      "acceptance_criteria": [
+        "CSV header includes created_at",
+        "Value rows emit ISO-8601 timestamp for created_at",
+        "Existing CSV snapshot tests updated"
+      ],
+      "estimate_hours": 1,
+      "source_ref": "data/requirements/inbox/meetings/2026-04-23-clientco-q3-planning.txt",
+      "labels": [
+        "exports",
+        "bug"
+      ]
+    }
+  ]
+}
