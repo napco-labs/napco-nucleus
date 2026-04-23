@@ -35,19 +35,43 @@ _API_AGENT_DIR = os.path.join(API_TEST_PROJECT, "agent")
 if _API_AGENT_DIR not in sys.path:
     sys.path.insert(0, _API_AGENT_DIR)
 
-import config  # noqa: E402 — from MVP-Access-API-Test/agent/
-from run_all_tests import (  # noqa: E402
-    run_load_tests_multi,
-    run_api_tests,
-    run_integration_tests,
-)
-from report_generator import generate_pdf_report as _generate_pdf  # noqa: E402
-from email_sender import send_report_email  # noqa: E402
-import history         # noqa: E402 — per-run snapshot store + regression/flaky analysis
-import coverage as _coverage  # noqa: E402 — swagger-vs-tests coverage
-import bug_reporter   # noqa: E402 — markdown bug-draft generator
-import patch_generator # noqa: E402 — self-healing unified-diff patches
-import teams_notifier # noqa: E402 — optional digest to Microsoft Teams webhook
+# Sibling MVP-Access-API-Test/agent imports — only present in a full
+# local checkout, not when this repo alone is checked out on a CI
+# runner. Wrapped in try/except so the file still imports (and new
+# dimensions like Requirement Management still work) when the sibling
+# is absent; the test-orchestration tools will fail at call time with
+# a clear error if invoked without the sibling.
+_TEST_INFRA_AVAILABLE = False
+try:
+    import config  # noqa: E402 — from MVP-Access-API-Test/agent/
+    from run_all_tests import (  # noqa: E402
+        run_load_tests_multi,
+        run_api_tests,
+        run_integration_tests,
+    )
+    from report_generator import generate_pdf_report as _generate_pdf  # noqa: E402
+    from email_sender import send_report_email  # noqa: E402
+    import history         # noqa: E402 — per-run snapshot store + regression/flaky analysis
+    import coverage as _coverage  # noqa: E402 — swagger-vs-tests coverage
+    import bug_reporter   # noqa: E402 — markdown bug-draft generator
+    import patch_generator # noqa: E402 — self-healing unified-diff patches
+    import teams_notifier # noqa: E402 — optional digest to Microsoft Teams webhook
+    _TEST_INFRA_AVAILABLE = True
+except ImportError as _test_infra_err:
+    import logging as _log
+    _log.getLogger(__name__).warning(
+        f"Sibling MVP-Access-API-Test/agent not on sys.path — "
+        f"test-orchestration tools will fail at call time: {_test_infra_err}"
+    )
+    config = None
+    run_load_tests_multi = run_api_tests = run_integration_tests = None
+    _generate_pdf = None
+    send_report_email = None
+    history = None
+    _coverage = None
+    bug_reporter = None
+    patch_generator = None
+    teams_notifier = None
 
 logger = logging.getLogger(__name__)
 
