@@ -108,12 +108,13 @@ jobs:
         if: ${{ github.event.inputs.skip_email_poll != 'true' }}
         run: py -3 requirements_inbox.py
 
-      - name: Transcribe new audio from Google Drive
-        # Lists audio files in GDRIVE_AUDIO_FOLDER_ID, downloads the
-        # unprocessed ones, transcribes via Groq Whisper, writes .txt
-        # into data/requirements/inbox/meetings/ so the LLM splitter
-        # in the next step picks them up alongside email transcripts.
-        run: py -3 audio_transcriber.py
+      - name: Ingest new files from Google Drive (audio + PDF)
+        # Lists audio/video/PDF files in GDRIVE_AUDIO_FOLDER_ID, downloads
+        # the unprocessed ones, and routes each to the right handler:
+        #   - audio → Groq Whisper → data/requirements/inbox/meetings/
+        #   - PDF   → pypdf text extract → data/requirements/inbox/documents/
+        # The LLM splitter in the next step treats both identically.
+        run: py -3 drive_ingester.py
 
       - name: Process inbox and publish to GitLab
         shell: pwsh

@@ -1748,16 +1748,16 @@ async def poll_requirement_emails_tool(args):
 @tool(
     "read_requirement_inbox",
     "Return the contents of every .txt file in data/requirements/inbox/ "
-    "(email, meetings, chat sub-folders). Use this AFTER "
+    "(email, meetings, chat, documents sub-folders). Use this AFTER "
     "poll_requirement_emails so you can read all pending raw requirement "
     "text in one call, then split it into ~3-hour tasks and call "
     "publish_tasks_to_gitlab. Optional source= filter: email / meetings "
-    "/ chat — defaults to all.",
+    "/ chat / documents — defaults to all.",
     {"source": str},
 )
 async def read_requirement_inbox_tool(args):
     source = (args.get("source") or "").strip().lower()
-    valid = {"email", "meetings", "chat"}
+    valid = {"email", "meetings", "chat", "documents"}
     sources = [source] if source in valid else sorted(valid)
     files = []
     for sub in sources:

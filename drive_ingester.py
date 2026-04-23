@@ -1,31 +1,36 @@
 """
-Drive → Whisper → inbox pipeline.
+Drive → inbox ingester.
 
-Lists audio files in the configured Google Drive folder, downloads any
-that haven't been transcribed yet, sends each to Groq's Whisper API,
-and writes the transcript to data/requirements/inbox/meetings/ with the
-standard 4-line header preface so the existing LLM splitter picks it
-up on the same workflow run.
+Lists audio/video AND PDF files in the configured Google Drive folder,
+downloads the unprocessed ones, and routes each to the right handler:
+
+  - Audio / video → Groq Whisper → data/requirements/inbox/meetings/*.txt
+  - PDF           → pypdf text extraction → data/requirements/inbox/documents/*.txt
+
+All outputs carry the standard 4-line header preface so the downstream
+LLM splitter treats them identically to email-sourced text.
 
 Env vars:
     GOOGLE_SERVICE_ACCOUNT_JSON   JSON key for a service account that
                                   has at least Viewer on the folder.
     GDRIVE_AUDIO_FOLDER_ID        The Drive folder ID (from its URL).
-    GROQ_API_KEY                  Groq API key, `api` scope.
+                                  Name kept for backward compat; the
+                                  folder holds both audio and PDFs.
+    GROQ_API_KEY                  Groq API key, `api` scope. Required
+                                  only if the folder contains audio.
     GROQ_WHISPER_MODEL            Optional. Defaults to
-                                  whisper-large-v3-turbo (fastest tier).
+                                  whisper-large-v3-turbo.
 
 State:
     data/requirements/drive-processed.json
-        { "processed": [{"file_id": "...", "name": "...",
-                         "transcribed_at": "...",
-                         "transcript_path": "..."}] }
+        { "processed": [{"file_id": ..., "name": ..., "kind": ...,
+                         "ingested_at": ..., "output_path": ...}] }
     Used as the idempotency key — a Drive file ID never gets
-    transcribed twice.
+    processed twice.
 
 Run standalone:
-    py -3 audio_transcriber.py
-    py -3 audio_transcriber.py --dry-run
+    py -3 drive_ingester.py
+    py -3 drive_ingester.py --dry-run
 """
 from __future__ import annotations
 
@@ -48,6 +53,7 @@ load_dotenv(_HERE / ".env")
 logger = logging.getLogger(__name__)
 
 MEETINGS_DIR = _HERE / "data" / "requirements" / "inbox" / "meetings"
+DOCUMENTS_DIR = _HERE / "data" / "requirements" / "inbox" / "documents"
 STATE_PATH = _HERE / "data" / "requirements" / "drive-processed.json"
 
 # Groq's Whisper endpoint is OpenAI-compatible. Turbo is 2-3x faster
@@ -60,6 +66,19 @@ GROQ_MAX_BYTES = 25 * 1024 * 1024  # 25 MB per Groq docs
 AUDIO_MIME_PREFIXES = ("audio/", "video/")
 AUDIO_EXT_FALLBACK = {".mp3", ".mp4", ".m4a", ".mpeg", ".mpga",
                       ".wav", ".webm", ".mkv", ".ogg", ".flac"}
+PDF_MIMES = {"application/pdf"}
+PDF_EXT = {".pdf"}
+
+
+def _classify(file: dict) -> str:
+    """Return 'audio', 'pdf', or 'skip' for a Drive file dict."""
+    mt = (file.get("mimeType") or "").lower()
+    ext = Path(file.get("name") or "").suffix.lower()
+    if mt.startswith(AUDIO_MIME_PREFIXES) or ext in AUDIO_EXT_FALLBACK:
+        return "audio"
+    if mt in PDF_MIMES or ext in PDF_EXT:
+        return "pdf"
+    return "skip"
 
 
 # ───────────────────────── state helpers ──────────────────────────
@@ -103,8 +122,8 @@ def _drive_service():
     return build("drive", "v3", credentials=creds, cache_discovery=False)
 
 
-def _list_audio_files(drive, folder_id: str) -> list[dict]:
-    """Return non-trashed children of the folder that look like audio/video."""
+def _list_ingestable_files(drive, folder_id: str) -> list[dict]:
+    """Return non-trashed children we can handle (audio/video or PDF)."""
     q = f"'{folder_id}' in parents and trashed = false"
     files: list[dict] = []
     page_token = None
@@ -119,10 +138,7 @@ def _list_audio_files(drive, folder_id: str) -> list[dict]:
             includeItemsFromAllDrives=True,
         ).execute()
         for f in resp.get("files", []):
-            mt = (f.get("mimeType") or "").lower()
-            name = f.get("name") or ""
-            ext = Path(name).suffix.lower()
-            if mt.startswith(AUDIO_MIME_PREFIXES) or ext in AUDIO_EXT_FALLBACK:
+            if _classify(f) in ("audio", "pdf"):
                 files.append(f)
         page_token = resp.get("nextPageToken")
         if not page_token:
@@ -182,107 +198,160 @@ def _transcribe_via_groq(audio_path: Path) -> str:
     return r.text.strip()
 
 
+# ─────────────────────────── PDF ──────────────────────────────────
+
+def _extract_pdf_text(pdf_path: Path) -> str:
+    """Pure-Python text extraction via pypdf. Tolerates most standard
+    (non-scanned) PDFs. Scanned / image-only PDFs yield empty output
+    and would need OCR (not wired here)."""
+    from pypdf import PdfReader  # lazy import
+    reader = PdfReader(str(pdf_path))
+    parts: list[str] = []
+    for i, page in enumerate(reader.pages, 1):
+        try:
+            parts.append(page.extract_text() or "")
+        except Exception as e:
+            parts.append(f"[page {i} extraction failed: {e}]")
+    text = "\n\n".join(parts).strip()
+    return text
+
+
 # ─────────────────────────── Main ─────────────────────────────────
 
-def _preface(file: dict, lang_hint: str = "") -> str:
+def _preface(file: dict, source_label: str) -> str:
     return (
-        f"# source: meetings\n"
+        f"# source: {source_label}\n"
         f"# from: drive:{file.get('id')}\n"
         f"# received: {file.get('createdTime') or datetime.now(timezone.utc).isoformat()}\n"
         f"# subject: {file.get('name')}\n\n"
     )
 
 
-def _safe_filename(original: str) -> str:
+def _safe_filename(original: str, default_stem: str = "file") -> str:
     stem = Path(original).stem
     safe = "".join(c if c.isalnum() or c in "-_" else "-" for c in stem).strip("-")
     date = datetime.now().strftime("%Y-%m-%d")
-    return f"{date}-{safe or 'audio'}.txt"
+    return f"{date}-{safe or default_stem}.txt"
 
 
-def transcribe_new_audio(dry_run: bool = False) -> dict:
+def process_new_drive_files(dry_run: bool = False) -> dict:
     folder_id = os.getenv("GDRIVE_AUDIO_FOLDER_ID")
     if not folder_id:
         return {"error": "GDRIVE_AUDIO_FOLDER_ID not set",
-                "transcribed": 0, "files": []}
+                "processed": 0, "files": []}
 
     drive = _drive_service()
-    listed = _list_audio_files(drive, folder_id)
-    logger.info(f"Drive folder {folder_id}: found {len(listed)} audio file(s)")
+    listed = _list_ingestable_files(drive, folder_id)
+    logger.info(f"Drive folder {folder_id}: found {len(listed)} "
+                f"ingestable file(s) (audio + PDF)")
 
     state = _load_state()
     pending = [f for f in listed if not _already_processed(state, f["id"])]
     if not pending:
-        return {"transcribed": 0, "files": [], "skipped_already_done": len(listed)}
+        return {"processed": 0, "files": [], "skipped_already_done": len(listed)}
 
     MEETINGS_DIR.mkdir(parents=True, exist_ok=True)
-    tmp_dir = _HERE / "data" / "requirements" / "_audio_tmp"
+    DOCUMENTS_DIR.mkdir(parents=True, exist_ok=True)
+    tmp_dir = _HERE / "data" / "requirements" / "_drive_tmp"
     tmp_dir.mkdir(parents=True, exist_ok=True)
 
     results: list[dict] = []
     for f in pending:
         fid = f["id"]
         name = f["name"]
+        kind = _classify(f)
         tmp_path = tmp_dir / f"{fid}-{Path(name).name}"
-        logger.info(f"downloading {name} (id={fid}, {int(f.get('size') or 0)/1e6:.1f} MB)")
+
+        logger.info(f"[{kind}] downloading {name} (id={fid}, "
+                    f"{int(f.get('size') or 0)/1e6:.1f} MB)")
         try:
             _download_file(drive, fid, tmp_path)
         except Exception as e:
             logger.exception(f"download failed for {name}")
-            results.append({"file": name, "id": fid, "error": f"download: {e}"})
+            results.append({"file": name, "id": fid, "kind": kind,
+                            "error": f"download: {e}"})
             continue
 
         if dry_run:
-            logger.info(f"[dry-run] would transcribe {name}")
-            results.append({"file": name, "id": fid, "dry_run": True})
-            try:
-                tmp_path.unlink()
-            except Exception:
-                pass
+            logger.info(f"[dry-run] would process {name} as {kind}")
+            results.append({"file": name, "id": fid, "kind": kind,
+                            "dry_run": True})
+            try: tmp_path.unlink()
+            except Exception: pass
             continue
 
-        try:
-            logger.info(f"transcribing {name} via Groq Whisper...")
-            transcript_text = _transcribe_via_groq(tmp_path)
-        except Exception as e:
-            logger.exception(f"transcription failed for {name}")
-            results.append({"file": name, "id": fid, "error": f"groq: {e}"})
+        # Extract content per kind.
+        text = ""
+        if kind == "audio":
             try:
-                tmp_path.unlink()
-            except Exception:
-                pass
+                logger.info(f"transcribing {name} via Groq Whisper...")
+                text = _transcribe_via_groq(tmp_path)
+            except Exception as e:
+                logger.exception(f"transcription failed for {name}")
+                results.append({"file": name, "id": fid, "kind": kind,
+                                "error": f"groq: {e}"})
+                try: tmp_path.unlink()
+                except Exception: pass
+                continue
+        elif kind == "pdf":
+            try:
+                logger.info(f"extracting text from {name} via pypdf...")
+                text = _extract_pdf_text(tmp_path)
+                if not text:
+                    logger.warning(f"pypdf returned empty text for {name} — "
+                                   f"likely a scanned PDF; OCR not wired")
+            except Exception as e:
+                logger.exception(f"pdf extraction failed for {name}")
+                results.append({"file": name, "id": fid, "kind": kind,
+                                "error": f"pypdf: {e}"})
+                try: tmp_path.unlink()
+                except Exception: pass
+                continue
+        else:
+            # Shouldn't happen — listed files already filtered.
+            try: tmp_path.unlink()
+            except Exception: pass
             continue
 
-        out_name = _safe_filename(name)
-        out_path = MEETINGS_DIR / out_name
-        # If same name would collide (rare), suffix with the fid slug.
+        # Route to the right inbox subfolder.
+        if kind == "audio":
+            source_label = "meetings"
+            out_dir = MEETINGS_DIR
+            default_stem = "audio"
+        else:  # pdf
+            source_label = "documents"
+            out_dir = DOCUMENTS_DIR
+            default_stem = "document"
+
+        out_name = _safe_filename(name, default_stem=default_stem)
+        out_path = out_dir / out_name
         if out_path.exists():
-            out_path = MEETINGS_DIR / f"{out_path.stem}-{fid[:6]}.txt"
-        out_path.write_text(_preface(f) + transcript_text, encoding="utf-8")
-        logger.info(f"wrote transcript -> {out_path.name}")
+            out_path = out_dir / f"{out_path.stem}-{fid[:6]}.txt"
+        out_path.write_text(_preface(f, source_label) + text, encoding="utf-8")
+        logger.info(f"wrote {kind} -> {out_path.relative_to(_HERE).as_posix()}")
 
         state["processed"].append({
             "file_id": fid,
             "name": name,
-            "transcribed_at": datetime.now(timezone.utc).isoformat(),
-            "transcript_path": str(out_path.relative_to(_HERE).as_posix()),
+            "kind": kind,
+            "ingested_at": datetime.now(timezone.utc).isoformat(),
+            "output_path": str(out_path.relative_to(_HERE).as_posix()),
         })
         _save_state(state)
 
-        try:
-            tmp_path.unlink()
-        except Exception:
-            pass
+        try: tmp_path.unlink()
+        except Exception: pass
 
         results.append({
             "file": name,
             "id": fid,
-            "transcript": str(out_path.relative_to(_HERE).as_posix()),
-            "chars": len(transcript_text),
+            "kind": kind,
+            "output": str(out_path.relative_to(_HERE).as_posix()),
+            "chars": len(text),
         })
 
     return {
-        "transcribed": sum(1 for r in results if "transcript" in r),
+        "processed": sum(1 for r in results if "output" in r),
         "errors": sum(1 for r in results if "error" in r),
         "files": results,
     }
@@ -293,9 +362,10 @@ def _cli() -> None:
                         format="%(asctime)s [%(levelname)s] %(message)s")
     p = argparse.ArgumentParser()
     p.add_argument("--dry-run", action="store_true",
-                   help="List + download pending files but do not call Groq.")
+                   help="List + download pending files but do not run "
+                        "Whisper / pypdf.")
     args = p.parse_args()
-    out = transcribe_new_audio(dry_run=args.dry_run)
+    out = process_new_drive_files(dry_run=args.dry_run)
     print(json.dumps(out, indent=2, default=str))
     if out.get("error"):
         sys.exit(1)
