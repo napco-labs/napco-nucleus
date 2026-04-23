@@ -57,6 +57,10 @@ jobs:
       GITLAB_PROJECT_ID: ${{ secrets.GITLAB_PROJECT_ID }}
       GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
       GITLAB_DEFAULT_LABELS: ${{ secrets.GITLAB_DEFAULT_LABELS }}
+      # Drive audio pickup + Groq Whisper transcription.
+      GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+      GDRIVE_AUDIO_FOLDER_ID: ${{ secrets.GDRIVE_AUDIO_FOLDER_ID }}
+      GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
 
     steps:
       - uses: actions/checkout@v5
@@ -103,6 +107,13 @@ jobs:
       - name: Poll requirement emails (IMAP)
         if: ${{ github.event.inputs.skip_email_poll != 'true' }}
         run: py -3 requirements_inbox.py
+
+      - name: Transcribe new audio from Google Drive
+        # Lists audio files in GDRIVE_AUDIO_FOLDER_ID, downloads the
+        # unprocessed ones, transcribes via Groq Whisper, writes .txt
+        # into data/requirements/inbox/meetings/ so the LLM splitter
+        # in the next step picks them up alongside email transcripts.
+        run: py -3 audio_transcriber.py
 
       - name: Process inbox and publish to GitLab
         shell: pwsh
