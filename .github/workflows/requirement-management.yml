@@ -68,6 +68,32 @@ jobs:
       # at C:\Windows\py.exe and is on the system-wide PATH regardless
       # of the calling user account. `py -3` selects the latest
       # installed Python 3.x (3.13 on this VM).
+      - name: Diagnose runtime identity + Claude CLI
+        shell: pwsh
+        run: |
+          Write-Host "=== whoami ==="
+          whoami
+          Write-Host ""
+          Write-Host "=== USERPROFILE / APPDATA ==="
+          Write-Host "USERPROFILE = $env:USERPROFILE"
+          Write-Host "APPDATA     = $env:APPDATA"
+          Write-Host "LOCALAPPDATA= $env:LOCALAPPDATA"
+          Write-Host ""
+          Write-Host "=== samin profile accessible? ==="
+          Test-Path 'C:\Users\samin'
+          Test-Path 'C:\Users\samin\.claude'
+          Test-Path 'C:\Users\samin\AppData\Roaming\npm\claude.cmd'
+          Write-Host ""
+          Write-Host "=== where claude resolves ==="
+          Get-Command claude -ErrorAction SilentlyContinue | Select-Object Source | Format-List
+          Write-Host ""
+          Write-Host "=== .claude directory listing ==="
+          if (Test-Path "$env:USERPROFILE\.claude") {
+            Get-ChildItem "$env:USERPROFILE\.claude" | Select-Object Name | Format-Table -AutoSize
+          } else {
+            Write-Host "(no .claude in this profile)"
+          }
+
       - name: Report Python version
         run: py -3 --version
 
