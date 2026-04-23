@@ -128,6 +128,13 @@ jobs:
         if: always()
         shell: pwsh
         run: |
+          # Workspace was created by an earlier runner service account
+          # (NT AUTHORITY\NetworkService) but the service now runs as
+          # AEL\samin. Git 2.35+ rejects operations in repos owned by a
+          # different user ('dubious ownership'). Whitelist the path
+          # globally for the AEL\samin user so all git commands below
+          # work regardless of historical ownership.
+          git config --global --add safe.directory "$env:GITHUB_WORKSPACE"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add data/requirements/
