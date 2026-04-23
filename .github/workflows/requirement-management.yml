@@ -1,0 +1,93 @@
+name: Requirement Management
+
+# Ingests raw client text from email (IMAP) + manually-dropped meeting
+# transcripts (data/requirements/inbox/meetings/*.txt), LLM-splits
+# everything into ~3-hour tasks via the agent, and opens each task as
+# a GitLab issue in the project configured by GITLAB_PROJECT_ID.
+#
+# Phase 1 — workflow_dispatch only. Add a cron trigger once the flow
+# has been observed working twice in a row with real inputs.
+
+on:
+  workflow_dispatch:
+    inputs:
+      skip_email_poll:
+        description: 'Skip IMAP poll (only process files already in inbox)'
+        required: false
+        default: 'false'
+        type: choice
+        options:
+          - 'false'
+          - 'true'
+      dry_run:
+        description: 'Plan only — do not publish to GitLab'
+        required: false
+        default: 'false'
+        type: choice
+        options:
+          - 'false'
+          - 'true'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: requirement-management
+  cancel-in-progress: false
+
+jobs:
+  run:
+    name: Ingest -> split -> publish
+    # Runs on the self-hosted VM so we use Mohammad's Claude Max CLI,
+    # not a cloud-billed API key (same contract as local-finders in
+    # the Digital Deputy project).
+    runs-on: [self-hosted, Windows]
+    timeout-minutes: 25
+
+    env:
+      # IMAP + GitLab creds come from the runner's .env (loaded by
+      # each Python script), not from GHA secrets. Keeps the secret
+      # surface on a single machine Mohammad controls, and matches
+      # how the rest of this agent authenticates.
+      DRY_RUN: ${{ github.event.inputs.dry_run }}
+      SKIP_EMAIL_POLL: ${{ github.event.inputs.skip_email_poll }}
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+
+      - name: Install Python dependencies
+        run: pip install -r requirements.txt
+
+      - name: Poll requirement emails (IMAP)
+        if: ${{ github.event.inputs.skip_email_poll != 'true' }}
+        run: python requirements_inbox.py
+
+      - name: Process inbox and publish to GitLab
+        shell: pwsh
+        run: |
+          $prompt = "Process requirements. Read the inbox, split each source file into ~3-hour tasks, publish to GitLab. Report the created/skipped/failed counts."
+          if ($env:DRY_RUN -eq 'true') {
+            $prompt = "DRY RUN: Read the inbox and split into ~3-hour tasks, but DO NOT call publish_tasks_to_gitlab. Instead print the proposed task list as JSON so I can review before publishing."
+          }
+          python main.py $prompt
+
+      - name: Commit inbox + state changes
+        if: always()
+        shell: pwsh
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/requirements/
+          git diff --staged --quiet
+          if ($LASTEXITCODE -ne 0) {
+            git commit -m "requirement-management: $(Get-Date -Format 'yyyy-MM-dd HH:mm') UTC"
+            git pull --rebase origin main
+            git push
+          } else {
+            Write-Host "no state changes"
+            $global:LASTEXITCODE = 0
+          }

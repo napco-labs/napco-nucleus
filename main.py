@@ -119,6 +119,74 @@ E2E script generation — Plan / Generate / Verify loop:
        files if the error is unclear. Fix the code (edit_file) and re-run.
        Retry up to 3 times before reporting the failure to the user.
     d. Never mark a test as done until it passes on a clean run.
+
+═══════════════════════════════════════════════════════════════════════
+Requirement Management dimension — client-requirements → GitLab backlog
+
+Trigger phrases: "process requirements", "update backlog", "ingest
+requirements", "sync requirements to gitlab", "split requirements".
+
+Goal: collect raw client text from three sources (requirement emails,
+exported MS Teams meeting transcripts, exported Teams group-chat
+messages), split it into ~3-HOUR workable tasks, and open each task as
+an issue in the configured GitLab project. Client requirements come
+from an agreed 2-sender email allowlist + paste-in text files the user
+drops under data/requirements/inbox/{email,meetings,chat}/.
+
+Step-by-step the agent MUST follow:
+
+  1. Call poll_requirement_emails() to fetch new emails from the
+     configured IMAP mailbox. If it returns an error (missing env vars,
+     auth failure), report it and skip to step 2 — the meeting
+     transcripts and any already-ingested emails are still processable.
+
+  2. Call read_requirement_inbox() (no args — returns all sources).
+     Each returned file has: source (email/meetings/chat), filename,
+     rel_path, content. If file_count == 0, stop and tell the user the
+     inbox is empty.
+
+  3. For each file, read the content and identify every distinct
+     requirement in it. A "requirement" is a user-visible capability,
+     change, bug fix, or deliverable the client asked for — not process
+     chatter or context. Ignore greetings, scheduling, and small-talk.
+
+  4. Split each requirement into tasks of approximately 3 HOURS of
+     focused engineering work each.
+       - If a requirement is clearly larger (e.g. "build SSO"), split
+         it into multiple 3-hour tasks: scaffolding, happy-path,
+         edge-cases, tests.
+       - If a requirement is smaller than 3 hours AND part of a
+         natural cluster, merge related small ones into a single task.
+       - If a requirement is smaller than 3 hours and can't be merged,
+         ship it as-is with estimate_hours matching reality (1 or 2).
+       - Never invent requirements not present in the source text.
+
+  5. For each task produce a dict with:
+       - title: imperative, <70 chars (e.g., "Add SSO login path")
+       - description: why + enough context from the source that a
+         developer can start without asking back
+       - acceptance_criteria: 2-5 concrete bullet strings
+       - estimate_hours: int, usually 3
+       - source_ref: the rel_path of the source file from step 2
+       - labels: optional list of strings (e.g., ["auth"], ["bug"])
+
+  6. Call publish_tasks_to_gitlab(tasks=<list of dicts from step 5>).
+     It snapshots the full submission to
+     data/requirements/proposed-tasks.json, dedupes by title against
+     currently-open issues (so re-runs are safe), and creates the
+     rest. Surface the counts (created / skipped / failed) and any
+     web_urls in your final reply so the user can click through.
+
+  7. After publishing, if TEAMS_WEBHOOK_URL is set, call
+     send_teams_digest with a one-line summary like "Requirements
+     processed: N files → M tasks → K new issues in GitLab." The
+     Teams channel then has a running log of each backlog update.
+
+Output tone rules for task titles + descriptions:
+  - Plain developer English. No marketing voice, no "streamline / align
+    / optimize" jargon.
+  - Preserve concrete numbers, endpoints, field names, and client
+    phrasing where it helps a developer understand scope.
 """
 
 

@@ -59,6 +59,9 @@ STATE: dict = {
     "e2e": None,
     "report_paths": [],
     "started_at": datetime.now(),
+    # Requirement Management dimension
+    "requirements": {"last_poll": None, "last_ingested": 0,
+                     "last_published": [], "last_proposed_tasks_path": None},
 }
 
 _PROJECT_PATHS = {
@@ -1655,6 +1658,234 @@ async def run_single_e2e_test_tool(args):
     return _text(result)
 
 
+# ─── Requirement Management dimension ──────────────────────────────────
+#
+# Three tools form the pipeline: ingest raw client text from email +
+# meetings + Teams chats → read the inbox → publish LLM-split tasks to
+# a gitlab.com backlog. Phase 1 covers email + meetings + GitLab only
+# (Teams chat is a Phase 2 follow-on, see teams_graph_client.py).
+
+_REQ_INBOX_ROOT = os.path.join(os.path.dirname(__file__),
+                               "data", "requirements", "inbox")
+_REQ_DATA_DIR = os.path.join(os.path.dirname(__file__), "data", "requirements")
+_REQ_PROPOSED_TASKS_PATH = os.path.join(_REQ_DATA_DIR, "proposed-tasks.json")
+_REQ_STATE_PATH = os.path.join(_REQ_DATA_DIR, "state.json")
+
+
+def _load_req_state() -> dict:
+    if not os.path.isfile(_REQ_STATE_PATH):
+        return {}
+    try:
+        with open(_REQ_STATE_PATH, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def _save_req_state(state: dict) -> None:
+    os.makedirs(os.path.dirname(_REQ_STATE_PATH), exist_ok=True)
+    with open(_REQ_STATE_PATH, "w", encoding="utf-8") as f:
+        json.dump(state, f, indent=2, default=str)
+
+
+@tool(
+    "poll_requirement_emails",
+    "Fetch new requirement emails from the configured IMAP mailbox and "
+    "save each one under data/requirements/inbox/email/ with a short "
+    "header (source, from, received, subject) followed by the body. "
+    "Filters by REQ_SENDER_ALLOWLIST — only emails from allowlisted "
+    "senders are kept. Idempotent via a since-UID checkpoint. "
+    "Call this FIRST when the user asks you to process requirements.",
+    {"dry_run": bool},
+)
+async def poll_requirement_emails_tool(args):
+    import requirements_inbox  # lazy import so imaplib isn't loaded otherwise
+    try:
+        result = requirements_inbox.poll_requirement_inbox(
+            dry_run=bool(args.get("dry_run", False)))
+    except Exception as e:
+        logger.exception("poll_requirement_emails failed")
+        return _text({"error": str(e), "ingested": 0})
+    STATE["requirements"]["last_poll"] = datetime.now().isoformat()
+    STATE["requirements"]["last_ingested"] = result.get("ingested", 0)
+    return _text(result)
+
+
+@tool(
+    "read_requirement_inbox",
+    "Return the contents of every .txt file in data/requirements/inbox/ "
+    "(email, meetings, chat sub-folders). Use this AFTER "
+    "poll_requirement_emails so you can read all pending raw requirement "
+    "text in one call, then split it into ~3-hour tasks and call "
+    "publish_tasks_to_gitlab. Optional source= filter: email / meetings "
+    "/ chat — defaults to all.",
+    {"source": str},
+)
+async def read_requirement_inbox_tool(args):
+    source = (args.get("source") or "").strip().lower()
+    valid = {"email", "meetings", "chat"}
+    sources = [source] if source in valid else sorted(valid)
+    files = []
+    for sub in sources:
+        sub_dir = os.path.join(_REQ_INBOX_ROOT, sub)
+        if not os.path.isdir(sub_dir):
+            continue
+        for name in sorted(os.listdir(sub_dir)):
+            if name.startswith(".") or not name.endswith(".txt"):
+                continue
+            path = os.path.join(sub_dir, name)
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    content = f.read()
+            except Exception as e:
+                logger.warning(f"read {path} failed: {e}")
+                continue
+            files.append({
+                "source": sub,
+                "filename": name,
+                "rel_path": os.path.relpath(path, os.path.dirname(__file__))
+                            .replace("\\", "/"),
+                "chars": len(content),
+                "content": content,
+            })
+    return _text({
+        "sources_scanned": sources,
+        "file_count": len(files),
+        "files": files,
+        "instruction": (
+            "Split each file's requirements into tasks of approximately "
+            "3 HOURS of focused work each. Each task needs: title "
+            "(imperative, <70 chars), description (why + context from "
+            "the source), 2-5 acceptance_criteria bullets, "
+            "estimate_hours (default 3), source_ref (use the rel_path "
+            "above), optional labels. Then call publish_tasks_to_gitlab "
+            "with the full list. Do NOT invent requirements not in the "
+            "source text."
+        ),
+    })
+
+
+@tool(
+    "publish_tasks_to_gitlab",
+    "Create one GitLab issue per task in the project configured via "
+    "GITLAB_PROJECT_ID / GITLAB_TOKEN (env). Each task must be a dict "
+    "with keys: title (required), description (required), "
+    "acceptance_criteria (optional list of strings — appended as a "
+    "bulleted section), estimate_hours (default 3), source_ref "
+    "(optional — appended as a source-traceability footer), labels "
+    "(optional list — merged with GITLAB_DEFAULT_LABELS). "
+    "Idempotent: skips any task whose title already exists as an open "
+    "issue in the project. Writes the full submission to "
+    "data/requirements/proposed-tasks.json and records created issue "
+    "IDs in data/requirements/state.json.",
+    {"tasks": list},
+)
+async def publish_tasks_to_gitlab_tool(args):
+    import gitlab_client
+    tasks = args.get("tasks") or []
+    if not isinstance(tasks, list) or not tasks:
+        return _text({"error": "tasks must be a non-empty list"})
+
+    # Snapshot the submission for traceability.
+    os.makedirs(_REQ_DATA_DIR, exist_ok=True)
+    snapshot = {
+        "generated_at": datetime.now().isoformat(),
+        "tasks": tasks,
+    }
+    try:
+        with open(_REQ_PROPOSED_TASKS_PATH, "w", encoding="utf-8") as f:
+            json.dump(snapshot, f, indent=2, default=str)
+    except Exception as e:
+        logger.warning(f"could not write {_REQ_PROPOSED_TASKS_PATH}: {e}")
+
+    # Title-based dedupe against currently-open issues so re-runs are safe.
+    try:
+        open_titles = {t.strip().lower()
+                       for t in gitlab_client.list_open_issue_titles()}
+    except gitlab_client.GitLabConfigError as e:
+        return _text({"error": f"GitLab config missing: {e}",
+                      "snapshot_written": _REQ_PROPOSED_TASKS_PATH,
+                      "created": [], "skipped_existing": [], "failed": []})
+    except Exception as e:
+        logger.exception("list_open_issue_titles failed")
+        return _text({"error": f"GitLab list failed: {e}",
+                      "snapshot_written": _REQ_PROPOSED_TASKS_PATH,
+                      "created": [], "skipped_existing": [], "failed": []})
+
+    created, skipped, failed = [], [], []
+    for t in tasks:
+        if not isinstance(t, dict):
+            failed.append({"task": t, "error": "not a dict"})
+            continue
+        title = (t.get("title") or "").strip()
+        description = (t.get("description") or "").strip()
+        if not title or not description:
+            failed.append({"task": t,
+                           "error": "title and description required"})
+            continue
+        if title.lower() in open_titles:
+            skipped.append({"title": title, "reason": "already open in project"})
+            continue
+        # Compose description with acceptance criteria + source footer.
+        body_parts = [description]
+        crit = t.get("acceptance_criteria") or []
+        if isinstance(crit, list) and crit:
+            body_parts.append("\n**Acceptance criteria**")
+            for c in crit:
+                body_parts.append(f"- {c}")
+        est = t.get("estimate_hours") or 3
+        body_parts.append(f"\n**Estimate:** ~{est} hours")
+        src = (t.get("source_ref") or "").strip()
+        if src:
+            body_parts.append(f"\n*Source: `{src}`*")
+        full_body = "\n".join(body_parts)
+        labels = t.get("labels") or []
+        if not isinstance(labels, list):
+            labels = []
+        try:
+            issue = gitlab_client.create_issue(
+                title=title,
+                description=full_body,
+                labels=labels,
+            )
+            created.append({
+                "title": title,
+                "iid": issue.get("iid"),
+                "web_url": issue.get("web_url"),
+            })
+            open_titles.add(title.lower())
+        except Exception as e:
+            logger.exception(f"create_issue failed for {title!r}")
+            failed.append({"title": title, "error": str(e)})
+
+    # Persist results in state.json.
+    state = _load_req_state()
+    published_log = state.get("published", [])
+    for c in created:
+        published_log.append({
+            "title": c["title"], "issue_iid": c["iid"],
+            "web_url": c["web_url"],
+            "published_at": datetime.now().isoformat(),
+        })
+    state["published"] = published_log
+    state["last_publish_summary"] = {
+        "created_count": len(created),
+        "skipped_count": len(skipped),
+        "failed_count": len(failed),
+        "at": datetime.now().isoformat(),
+    }
+    _save_req_state(state)
+    STATE["requirements"]["last_published"] = created
+    STATE["requirements"]["last_proposed_tasks_path"] = _REQ_PROPOSED_TASKS_PATH
+
+    return _text({
+        "snapshot_written": _REQ_PROPOSED_TASKS_PATH,
+        "created": created,
+        "skipped_existing": skipped,
+        "failed": failed,
+    })
+
+
 ALL_TOOLS = [
     # Pre-flight
     check_api_health_tool,
@@ -1675,6 +1906,9 @@ ALL_TOOLS = [
     list_known_bugs_tool, test_inventory_tool,
     compare_with_last_run_tool, analyze_test_failures_tool,
     draft_standup_update_tool,
+    # Requirement Management
+    poll_requirement_emails_tool, read_requirement_inbox_tool,
+    publish_tasks_to_gitlab_tool,
 ]
 
 TOOL_NAMES = [
@@ -1688,4 +1922,6 @@ TOOL_NAMES = [
     "send_email_report", "send_teams_digest",
     "list_known_bugs", "test_inventory",
     "compare_with_last_run", "analyze_test_failures", "draft_standup_update",
+    "poll_requirement_emails", "read_requirement_inbox",
+    "publish_tasks_to_gitlab",
 ]
