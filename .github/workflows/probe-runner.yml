@@ -98,3 +98,45 @@ jobs:
           Write-Host "=== Node (Newman needs this) ==="
           node --version 2>&1
           npm --version 2>&1
+
+      - name: Probe MVP Access API connectivity from the runner
+        shell: pwsh
+        env:
+          BASE_URL: ${{ secrets.API_BASE_URL }}
+        run: |
+          Write-Host "=== BASE_URL (masked) ==="
+          if ($env:BASE_URL) {
+            Write-Host "length=$($env:BASE_URL.Length)"
+            Write-Host "starts-with-http=$($env:BASE_URL.StartsWith('http'))"
+          } else {
+            Write-Host "(not set)"
+          }
+          Write-Host ""
+          Write-Host "=== Raw TCP connect to 172.16.205.209:80 ==="
+          try {
+            $t = Test-NetConnection -ComputerName '172.16.205.209' -Port 80 -InformationLevel Quiet
+            Write-Host "TCP:80 reachable: $t"
+          } catch { Write-Host "error: $_" }
+          Write-Host ""
+          Write-Host "=== Raw TCP connect to 172.16.205.209:443 ==="
+          try {
+            $t = Test-NetConnection -ComputerName '172.16.205.209' -Port 443 -InformationLevel Quiet
+            Write-Host "TCP:443 reachable: $t"
+          } catch { Write-Host "error: $_" }
+          Write-Host ""
+          Write-Host "=== HTTP GET against BASE_URL root (30s timeout) ==="
+          try {
+            $resp = Invoke-WebRequest -Uri $env:BASE_URL -TimeoutSec 30 -UseBasicParsing -ErrorAction Stop
+            Write-Host "status: $($resp.StatusCode)"
+            Write-Host "length: $($resp.RawContentLength) bytes"
+          } catch {
+            Write-Host "error: $($_.Exception.GetType().Name): $($_.Exception.Message)"
+          }
+          Write-Host ""
+          Write-Host "=== HTTP POST to login endpoint (30s timeout, no auth — just see what answers) ==="
+          try {
+            $resp = Invoke-WebRequest -Uri "$($env:BASE_URL)/api/account/login" -Method POST -TimeoutSec 30 -UseBasicParsing -ErrorAction Stop
+            Write-Host "status: $($resp.StatusCode)"
+          } catch {
+            Write-Host "error: $($_.Exception.GetType().Name): $($_.Exception.Message)"
+          }
