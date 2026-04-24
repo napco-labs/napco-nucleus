@@ -41,7 +41,12 @@ except Exception:
 _HERE = os.path.dirname(os.path.abspath(__file__))
 load_dotenv(os.path.join(_HERE, ".env"))
 # Also load the sibling API-Test .env so SMTP / test creds resolve.
-load_dotenv(os.path.join(_HERE, "..", "MVP-Access-API-Test", ".env"))
+# On the CI runner, the checkout lives at C:\actions-runner\_work\...
+# not alongside the sibling projects at E:\Projects\. Honor
+# MVP_PROJECTS_ROOT so the workflow can point us at the real sibling
+# root regardless of where the checkout landed.
+_SIBLING_ROOT = os.environ.get("MVP_PROJECTS_ROOT") or os.path.dirname(_HERE)
+load_dotenv(os.path.join(_SIBLING_ROOT, "MVP-Access-API-Test", ".env"))
 sys.path.insert(0, _HERE)
 
 

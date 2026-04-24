@@ -34,6 +34,7 @@ jobs:
     timeout-minutes: 25
 
     env:
+      MVP_PROJECTS_ROOT: 'E:\Projects'
       # IMAP for requirement-email ingestion.
       REQ_IMAP_HOST: ${{ secrets.REQ_IMAP_HOST }}
       REQ_IMAP_USER: ${{ secrets.REQ_IMAP_USER }}
