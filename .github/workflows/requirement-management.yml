@@ -1,32 +1,25 @@
 name: Requirement Management
 
-# Ingests raw client text from email (IMAP) + manually-dropped meeting
-# transcripts (data/requirements/inbox/meetings/*.txt), LLM-splits
-# everything into ~3-hour tasks via the agent, and opens each task as
-# a GitLab issue in the project configured by GITLAB_PROJECT_ID.
+# Ingests raw client text from email (IMAP) + Google Drive meeting
+# recordings + PDFs + Teams (forwarded via Power Automate into the
+# same allowlisted email inbox). Claude splits each source into
+# ~3-hour tasks and publishes to GitLab with idempotent dedup.
 #
-# Phase 1 — workflow_dispatch only. Add a cron trigger once the flow
-# has been observed working twice in a row with real inputs.
+# Fires every 2 hours during business hours + workflow_dispatch.
 
 on:
+  schedule:
+    # 3:00 / 5:00 / 7:00 / 9:00 / 11:00 UTC = 9:00 / 11:00 / 13:00 /
+    # 15:00 / 17:00 BDT — a comfortable 5-slot business-hours poll.
+    - cron: '0 3,5,7,9,11 * * 0-4'
   workflow_dispatch:
     inputs:
-      skip_email_poll:
-        description: 'Skip IMAP poll (only process files already in inbox)'
-        required: false
-        default: 'false'
-        type: choice
-        options:
-          - 'false'
-          - 'true'
       dry_run:
         description: 'Plan only — do not publish to GitLab'
         required: false
         default: 'false'
         type: choice
-        options:
-          - 'false'
-          - 'true'
+        options: ['false', 'true']
 
 permissions:
   contents: write
@@ -37,16 +30,10 @@ concurrency:
 
 jobs:
   run:
-    name: Ingest -> split -> publish
-    # Runs on the self-hosted VM so we use Mohammad's Claude Max CLI,
-    # not a cloud-billed API key (same contract as local-finders in
-    # the Digital Deputy project).
     runs-on: [self-hosted, Windows]
     timeout-minutes: 25
 
     env:
-      DRY_RUN: ${{ github.event.inputs.dry_run }}
-      SKIP_EMAIL_POLL: ${{ github.event.inputs.skip_email_poll }}
       # IMAP for requirement-email ingestion.
       REQ_IMAP_HOST: ${{ secrets.REQ_IMAP_HOST }}
       REQ_IMAP_USER: ${{ secrets.REQ_IMAP_USER }}
@@ -57,88 +44,31 @@ jobs:
       GITLAB_PROJECT_ID: ${{ secrets.GITLAB_PROJECT_ID }}
       GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
       GITLAB_DEFAULT_LABELS: ${{ secrets.GITLAB_DEFAULT_LABELS }}
-      # Drive audio pickup + Groq Whisper transcription.
+      # Google Drive + Groq Whisper.
       GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
       GDRIVE_AUDIO_FOLDER_ID: ${{ secrets.GDRIVE_AUDIO_FOLDER_ID }}
       GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+      # Teams digest target (optional).
+      TEAMS_WEBHOOK_URL: ${{ secrets.TEAMS_WEBHOOK_URL }}
 
     steps:
       - uses: actions/checkout@v5
 
-      # The MVPACCESS runner service isn't elevated, so
-      # actions/setup-python@v6 fails writing HKLM registry keys during
-      # its install path, AND `python` isn't on this service account's
-      # PATH. We use the Windows Python launcher `py` instead — it lives
-      # at C:\Windows\py.exe and is on the system-wide PATH regardless
-      # of the calling user account. `py -3` selects the latest
-      # installed Python 3.x (3.13 on this VM).
-      - name: Diagnose runtime identity + Claude CLI
-        shell: pwsh
-        run: |
-          Write-Host "=== whoami ==="
-          whoami
-          Write-Host ""
-          Write-Host "=== USERPROFILE / APPDATA ==="
-          Write-Host "USERPROFILE = $env:USERPROFILE"
-          Write-Host "APPDATA     = $env:APPDATA"
-          Write-Host "LOCALAPPDATA= $env:LOCALAPPDATA"
-          Write-Host ""
-          Write-Host "=== samin profile accessible? ==="
-          Test-Path 'C:\Users\samin'
-          Test-Path 'C:\Users\samin\.claude'
-          Test-Path 'C:\Users\samin\AppData\Roaming\npm\claude.cmd'
-          Write-Host ""
-          Write-Host "=== where claude resolves ==="
-          Get-Command claude -ErrorAction SilentlyContinue | Select-Object Source | Format-List
-          Write-Host ""
-          Write-Host "=== .claude directory listing ==="
-          if (Test-Path "$env:USERPROFILE\.claude") {
-            Get-ChildItem "$env:USERPROFILE\.claude" | Select-Object Name | Format-Table -AutoSize
-          } else {
-            Write-Host "(no .claude in this profile)"
-          }
-
-      - name: Report Python version
-        run: py -3 --version
-
       - name: Install Python dependencies
         run: py -3 -m pip install -r requirements.txt
 
-      - name: Poll requirement emails (IMAP)
-        if: ${{ github.event.inputs.skip_email_poll != 'true' }}
-        run: py -3 requirements_inbox.py
-
-      - name: Ingest new files from Google Drive (audio + PDF)
-        # Lists audio/video/PDF files in GDRIVE_AUDIO_FOLDER_ID, downloads
-        # the unprocessed ones, and routes each to the right handler:
-        #   - audio → Groq Whisper → data/requirements/inbox/meetings/
-        #   - PDF   → pypdf text extract → data/requirements/inbox/documents/
-        # The LLM splitter in the next step treats both identically.
-        run: py -3 drive_ingester.py
-
-      - name: Process inbox and publish to GitLab
+      - name: Run Requirement Management
         shell: pwsh
-        run: |
-          $prompt = "Process requirements. Read the inbox, split each source file into ~3-hour tasks, publish to GitLab. Report the created/skipped/failed counts."
-          if ($env:DRY_RUN -eq 'true') {
-            $prompt = "DRY RUN: Read the inbox and split into ~3-hour tasks, but DO NOT call publish_tasks_to_gitlab. Instead print the proposed task list as JSON so I can review before publishing."
-          }
-          py -3 main.py $prompt
+        run: py -3 agent.py --task requirement-management ${{ github.event.inputs.dry_run == 'true' && '--dry-run' || '' }}
 
-      - name: Commit inbox + state changes
+      - name: Commit state changes
         if: always()
         shell: pwsh
         run: |
-          # Workspace was created by an earlier runner service account
-          # (NT AUTHORITY\NetworkService) but the service now runs as
-          # AEL\samin. Git 2.35+ rejects operations in repos owned by a
-          # different user ('dubious ownership'). Whitelist the path
-          # globally for the AEL\samin user so all git commands below
-          # work regardless of historical ownership.
           git config --global --add safe.directory "$env:GITHUB_WORKSPACE"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add data/requirements/
+          git add nucleus_memory.db data/requirements/ 2>$null
           git diff --staged --quiet
           if ($LASTEXITCODE -ne 0) {
             git commit -m "requirement-management: $(Get-Date -Format 'yyyy-MM-dd HH:mm') UTC"

@@ -1,89 +1,69 @@
-name: MVP Access API Functional Test
+name: API Functional Test
 
-# Runs the Newman/Postman API functional test collection against the
-# local API, generates a focused PDF, emails to TEAM_EMAILS.
+# Runs the Newman / Postman collection against the MVP Access API.
+# Claude interprets failures, composes the PDF executive summary,
+# and ships to the team.
 
 on:
-  schedule:
-    - cron: '59 17 * * *'    # 23:59 BDT
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Dry-run (skip actual test execution)'
+        required: false
+        default: 'false'
+        type: choice
+        options: ['false', 'true']
+
+permissions:
+  contents: write
 
 concurrency:
-  group: mvp-api-functional-test
+  group: api-functional-test
   cancel-in-progress: false
 
 jobs:
   run:
-    name: Run API Functional Tests (Newman)
     runs-on: [self-hosted, Windows]
-    timeout-minutes: 30
+    timeout-minutes: 20
 
     env:
-      BASE_URL: ${{ secrets.API_BASE_URL }}
-      COMPANY_ID: ${{ secrets.COMPANY_ID }}
-      USER_ID: ${{ secrets.USER_ID }}
-      PASSWORD: ${{ secrets.PASSWORD }}
-      CLIENT_ID: ${{ secrets.CLIENT_ID }}
-      CLIENT_SECRET: ${{ secrets.CLIENT_SECRET }}
-      API_KEY: ${{ secrets.API_KEY }}
-      DEALER_USERNAME: ${{ secrets.DEALER_USERNAME }}
-      DEALER_PASSWORD: ${{ secrets.DEALER_PASSWORD }}
-      DEALER_ACCOUNT: ${{ secrets.DEALER_ACCOUNT }}
       SMTP_HOST: ${{ secrets.SMTP_HOST }}
       SMTP_PORT: ${{ secrets.SMTP_PORT }}
       SMTP_USER: ${{ secrets.SMTP_USER }}
       SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
-      # No email from this workflow — api-digest.yml consolidates all 3.
-      EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
+      SMTP_FROM: ${{ secrets.SMTP_FROM }}
       TEAM_EMAILS: ${{ secrets.TEAM_EMAILS }}
-      # Optional — enables AI-triage + Teams/Slack alerts (silent no-op if unset)
-      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
       TEAMS_WEBHOOK_URL: ${{ secrets.TEAMS_WEBHOOK_URL }}
+      BASE_URL: ${{ secrets.BASE_URL }}
+      CLIENT_ID: ${{ secrets.CLIENT_ID }}
+      PORTAL_URL: ${{ secrets.PORTAL_URL }}
+      USER_ID: ${{ secrets.USER_ID }}
+      COMPANY_ID: ${{ secrets.COMPANY_ID }}
 
     steps:
-      - name: Checkout AI-Agent (self)
-        uses: actions/checkout@v5
-        with:
-          path: ai-agent
+      - uses: actions/checkout@v5
 
-      - name: Checkout MVP-Access-API-Test
-        uses: actions/checkout@v5
-        with:
-          repository: titucse/MVP-Access-API-Test
-          token: ${{ secrets.CROSS_REPO_PAT }}
-          path: api-test
+      - name: Install Python dependencies
+        run: py -3 -m pip install -r requirements.txt
 
-      - name: Set up Python 3.13
-        uses: actions/setup-python@v6
-        with:
-          python-version: '3.13'
-          cache: 'pip'
-          cache-dependency-path: api-test/requirements.txt
+      - name: Run API Functional Test
+        shell: pwsh
+        run: py -3 agent.py --task api-functional-test ${{ github.event.inputs.dry_run == 'true' && '--dry-run' || '' }}
 
-      - name: Set up Node.js 20
-        uses: actions/setup-node@v5
-        with:
-          node-version: '20'
-
-      - name: Install Python deps
-        working-directory: api-test
-        run: pip install -r requirements.txt
-
-      # Newman installs as newman.cmd on Windows; npm's global bin is on
-      # PATH automatically, so run_all_tests.py's shutil.which("newman")
-      # fallback locates it. No NEWMAN_PATH needed.
-      - name: Install Newman
-        run: npm install -g newman
-
-      - name: Run API Functional Tests
-        working-directory: api-test
-        run: python agent/run_one.py --type api --no-email
-        timeout-minutes: 20
-
-      - name: Upload reports
+      - name: Commit state changes
         if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: api-functional-test-results
-          path: api-test/reports/*
-          retention-days: 7
+        shell: pwsh
+        run: |
+          git config --global --add safe.directory "$env:GITHUB_WORKSPACE"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add nucleus_memory.db 2>$null
+          git diff --staged --quiet
+          if ($LASTEXITCODE -ne 0) {
+            git commit -m "api-functional-test: $(Get-Date -Format 'yyyy-MM-dd HH:mm') UTC"
+            git pull --rebase origin main
+            git push
+          } else {
+            Write-Host "no state changes"
+            $global:LASTEXITCODE = 0
+          }

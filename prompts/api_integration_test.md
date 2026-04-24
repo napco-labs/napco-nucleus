@@ -27,19 +27,19 @@ Runs the pytest integration suite end-to-end: login, data creation, cross-endpoi
 - For any regression candidates, check if they've oscillated recently in memory. If `recall_test_runs` shows the same test flipping red↔green across recent runs, it's probably flaky, not a regression. Flag accordingly.
 - `list_known_bugs()` — cross-check failures against xfail markers. Known-bug failures aren't actionable; surface them separately.
 
-### 4. Report
+### 4. Generate PDF (artifact only — NO email)
 
 `generate_pdf_report(summary=<executive_summary>)` — 2-3 paragraphs:
 - P1: pass rate today vs. 7-day average (from memory). Lead with regressions if any.
 - P2: specific regressions named by test ID. Flaky tests called out separately. Known-bug failures in a third bucket.
 - P3: if there are real regressions, name the commit / deploy that likely introduced them (use `recent_commits(project="MVP-Access-API-Test", count=10)` to scan recent changes).
 
-Then: `send_email_report()`, `send_teams_digest()`.
+**Do NOT call `send_email_report` or `send_teams_digest`.** The team receives one consolidated email per day from the Daily Report workflow.
 
 ### 5. Log + exit
 
-- `log_test_run(task_name="api-integration-test", ...)` with full counts + `regressions_detected`.
-- `log_activity("api-integration-test:shipped", ...)`.
+- `log_test_run(task_name="api-integration-test", ...)` with full counts + `regressions_detected`. MANDATORY — Daily Report reads this.
+- `log_activity("api-integration-test:finished", ...)`.
 
 ---
 

@@ -2,9 +2,11 @@
 
 Dimension: Project Management. Fires once daily at 09:00 BDT.
 
+**This is the ONLY email the team gets per day.** The 4 test workflows (api-functional, api-integration, api-load, e2e) run their tests and write results to memory but do NOT send individual emails. Your job is to pull their results together into one consolidated report.
+
 Replaces the old `morning_brief.py` Python template script. The report still lands in stakeholders' inboxes, but now the executive summary is reasoned by Claude rather than templated by f-string — better signal-to-noise for a busy reader.
 
-Output: a PDF emailed to `TEAM_EMAILS` (CSV in env) from the configured SMTP identity, plus a short Teams digest.
+Output: ONE PDF emailed to `TEAM_EMAILS` (CSV in env) from the configured SMTP identity, plus ONE Teams digest.
 
 ---
 
@@ -16,7 +18,7 @@ Today's report is basically a read of the last 24 hours of memory. Load it all f
 
 - `memory_stats()` — sanity check (are the tables populated?).
 - `recall_activity(since="<24h ago ISO>", limit=200)` — every action the agent took yesterday. This is the spine of the report.
-- `recall_test_runs(since="<24h ago ISO>", limit=20)` — trend data for the Test Automation section.
+- `recall_test_runs(since="<24h ago ISO>", limit=20)` — **every test run from today across all 4 test workflows (api-functional, api-integration, api-load, e2e)**. This is THE source of truth for the Test Automation section, because those workflows no longer send their own emails. Use `report_pdf_path` from each row to attach the per-run PDF to this consolidated email (or link to it).
 - `recall_activity(task_name="requirement-management:publish_gitlab", limit=10)` — recent backlog pushes for the Project Management section.
 
 ### 1. Read fresh artifacts

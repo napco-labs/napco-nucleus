@@ -1,21 +1,14 @@
-name: MVP Access E2E Test
+name: API Load Test
 
-# Nightly Playwright full-suite run. Claude analyzes failures (regressions
-# vs flakies vs known-bugs), composes the PDF with failure screenshots,
-# ships to Dev + QA.
+# Weekly Locust multi-tier load test. Claude analyzes capacity ceiling
+# vs prior weeks from memory, ships PDF with recommendations.
 
 on:
   schedule:
-    # 22:00 UTC = 04:00 BDT.
-    - cron: '0 22 * * *'
+    # Sunday 21:00 UTC = Monday 03:00 BDT (weekly).
+    - cron: '0 21 * * 0'
   workflow_dispatch:
     inputs:
-      suite:
-        description: 'Suite: full / easy / release'
-        required: false
-        default: 'full'
-        type: choice
-        options: ['full', 'easy', 'release']
       dry_run:
         description: 'Dry-run'
         required: false
@@ -27,13 +20,13 @@ permissions:
   contents: write
 
 concurrency:
-  group: e2e-test
+  group: api-load-test
   cancel-in-progress: false
 
 jobs:
   run:
     runs-on: [self-hosted, Windows]
-    timeout-minutes: 45
+    timeout-minutes: 60
 
     env:
       SMTP_HOST: ${{ secrets.SMTP_HOST }}
@@ -48,7 +41,6 @@ jobs:
       PORTAL_URL: ${{ secrets.PORTAL_URL }}
       USER_ID: ${{ secrets.USER_ID }}
       COMPANY_ID: ${{ secrets.COMPANY_ID }}
-      SUITE: ${{ github.event.inputs.suite || 'full' }}
 
     steps:
       - uses: actions/checkout@v5
@@ -56,9 +48,9 @@ jobs:
       - name: Install Python dependencies
         run: py -3 -m pip install -r requirements.txt
 
-      - name: Run MVP Access E2E Test
+      - name: Run API Load Test
         shell: pwsh
-        run: py -3 agent.py --task e2e-test ${{ github.event.inputs.dry_run == 'true' && '--dry-run' || '' }}
+        run: py -3 agent.py --task api-load-test ${{ github.event.inputs.dry_run == 'true' && '--dry-run' || '' }}
 
       - name: Commit state changes
         if: always()
@@ -70,7 +62,7 @@ jobs:
           git add nucleus_memory.db 2>$null
           git diff --staged --quiet
           if ($LASTEXITCODE -ne 0) {
-            git commit -m "e2e-test: $(Get-Date -Format 'yyyy-MM-dd HH:mm') UTC"
+            git commit -m "api-load-test: $(Get-Date -Format 'yyyy-MM-dd HH:mm') UTC"
             git pull --rebase origin main
             git push
           } else {

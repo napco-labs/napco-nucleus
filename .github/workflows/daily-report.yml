@@ -1,39 +1,27 @@
-name: MVP Access E2E Test
+name: Daily Report
 
-# Nightly Playwright full-suite run. Claude analyzes failures (regressions
-# vs flakies vs known-bugs), composes the PDF with failure screenshots,
-# ships to Dev + QA.
+# Claude-driven replacement for the old morning_brief.py Python script.
+# Reads the last 24h of activity_logs + test_run_history + fresh
+# test-report artifacts, composes an executive summary in natural
+# language, ships PDF + email + Teams digest.
 
 on:
   schedule:
-    # 22:00 UTC = 04:00 BDT.
-    - cron: '0 22 * * *'
+    # 03:00 UTC = 09:00 BDT.
+    - cron: '0 3 * * *'
   workflow_dispatch:
-    inputs:
-      suite:
-        description: 'Suite: full / easy / release'
-        required: false
-        default: 'full'
-        type: choice
-        options: ['full', 'easy', 'release']
-      dry_run:
-        description: 'Dry-run'
-        required: false
-        default: 'false'
-        type: choice
-        options: ['false', 'true']
 
 permissions:
   contents: write
 
 concurrency:
-  group: e2e-test
+  group: daily-report
   cancel-in-progress: false
 
 jobs:
   run:
     runs-on: [self-hosted, Windows]
-    timeout-minutes: 45
+    timeout-minutes: 20
 
     env:
       SMTP_HOST: ${{ secrets.SMTP_HOST }}
@@ -42,13 +30,12 @@ jobs:
       SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
       SMTP_FROM: ${{ secrets.SMTP_FROM }}
       TEAM_EMAILS: ${{ secrets.TEAM_EMAILS }}
+      REPORT_TO: ${{ secrets.REPORT_TO }}
       TEAMS_WEBHOOK_URL: ${{ secrets.TEAMS_WEBHOOK_URL }}
-      BASE_URL: ${{ secrets.BASE_URL }}
-      CLIENT_ID: ${{ secrets.CLIENT_ID }}
-      PORTAL_URL: ${{ secrets.PORTAL_URL }}
-      USER_ID: ${{ secrets.USER_ID }}
-      COMPANY_ID: ${{ secrets.COMPANY_ID }}
-      SUITE: ${{ github.event.inputs.suite || 'full' }}
+      # GitLab read-only for backlog summary in the report.
+      GITLAB_HOST: ${{ secrets.GITLAB_HOST }}
+      GITLAB_PROJECT_ID: ${{ secrets.GITLAB_PROJECT_ID }}
+      GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
 
     steps:
       - uses: actions/checkout@v5
@@ -56,9 +43,9 @@ jobs:
       - name: Install Python dependencies
         run: py -3 -m pip install -r requirements.txt
 
-      - name: Run MVP Access E2E Test
+      - name: Build + ship Daily Report
         shell: pwsh
-        run: py -3 agent.py --task e2e-test ${{ github.event.inputs.dry_run == 'true' && '--dry-run' || '' }}
+        run: py -3 agent.py --task daily-report
 
       - name: Commit state changes
         if: always()
@@ -70,7 +57,7 @@ jobs:
           git add nucleus_memory.db 2>$null
           git diff --staged --quiet
           if ($LASTEXITCODE -ne 0) {
-            git commit -m "e2e-test: $(Get-Date -Format 'yyyy-MM-dd HH:mm') UTC"
+            git commit -m "daily-report: $(Get-Date -Format 'yyyy-MM-dd HH:mm') UTC"
             git pull --rebase origin main
             git push
           } else {

@@ -26,20 +26,20 @@ Runs the Newman / Postman collection against the MVP Access API to verify every 
 - If all pass: note the counts + duration. No RCA needed.
 - If any fail: read the failure details. For each failure, decide: real bug, environment issue, or flaky. Use `list_known_bugs()` to check if any failures match xfail entries. Don't invent root causes — if the failure doesn't have an obvious cause, say so.
 
-### 4. Report
+### 4. Generate PDF (artifact only — NO email)
 
-- `generate_pdf_report(summary=<your_executive_summary>)` — 2-3 paragraph summary:
-  - Paragraph 1: headline verdict (pass rate, regressions vs last run from memory).
-  - Paragraph 2: specific failures (endpoints, status codes, response bodies). Call out any clear backend bugs.
-  - Paragraph 3 (optional): recommended next steps.
-  Plain text, blank line between paragraphs, no markdown.
-- `send_email_report()` — ships the PDF to `TEAM_EMAILS`.
-- `send_teams_digest()` — one-line Teams card.
+`generate_pdf_report(summary=<your_executive_summary>)` — 2-3 paragraph summary:
+- Paragraph 1: headline verdict (pass rate, regressions vs last run from memory).
+- Paragraph 2: specific failures (endpoints, status codes, response bodies). Call out any clear backend bugs.
+- Paragraph 3 (optional): recommended next steps.
+Plain text, blank line between paragraphs, no markdown.
+
+**Do NOT call `send_email_report` or `send_teams_digest` from this task.** The team gets a single consolidated email per day from the Daily Report workflow, which will cite this run's results from `test_run_history`. The PDF stays on disk for Daily Report to attach or link to.
 
 ### 5. Log + exit
 
-- `log_test_run(task_name="api-functional-test", total=..., passed=..., failed=..., skipped=..., duration_s=..., report_pdf_path=..., regressions_detected=...)` — drop a row into memory so tomorrow's Daily Report can cite it.
-- `log_activity("api-functional-test:shipped", ...)` — final breadcrumb.
+- `log_test_run(task_name="api-functional-test", total=..., passed=..., failed=..., skipped=..., duration_s=..., report_pdf_path=..., regressions_detected=...)` — MANDATORY. Drops a row into memory; this is how Daily Report finds this run.
+- `log_activity("api-functional-test:finished", ...)` — breadcrumb with the same counts.
 
 ---
 

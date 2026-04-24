@@ -27,19 +27,19 @@ For each failure:
 
 **Flaky detection:** If `recall_test_runs` shows the same test flipping red↔green across the last 3-5 runs, it's flaky. Flag it separately in the report; don't count it toward "real regressions".
 
-### 3. Report
+### 3. Generate PDF (artifact only — NO email)
 
 `generate_pdf_report(summary=<executive_summary>)` — 2-3 paragraphs:
 - P1: pass rate, regressions vs last run. Lead with any auth-flow / critical-path failures.
 - P2: specific failing tests, grouped by suspected root cause (auth, navigation, data race, timing). Attach screenshots via the PDF generator.
 - P3: flaky tests summary + known-bug passes.
 
-Then: `send_email_report()`, `send_teams_digest()`.
+**Do NOT call `send_email_report` or `send_teams_digest`.** The team receives one consolidated email per day from the Daily Report workflow, which will cite this run's E2E results and reference the screenshot-bearing PDF.
 
 ### 4. Log + exit
 
-- `log_test_run(task_name="e2e-test", suite="full", ...)`.
-- `log_activity("e2e-test:shipped", ...)`.
+- `log_test_run(task_name="e2e-test", suite="full", ...)`. MANDATORY.
+- `log_activity("e2e-test:finished", ...)`.
 
 ---
 

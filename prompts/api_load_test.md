@@ -28,19 +28,19 @@ Runs a multi-tier Locust load test to find the capacity ceiling of the MVP Acces
 - Identify the tier where degradation starts (response time doubles, or failure rate crosses 5%). That's the capacity ceiling.
 - Compare to the last few runs from memory. Is the ceiling trending up, down, or flat? Is a specific endpoint degrading faster than others?
 
-### 4. Report
+### 4. Generate PDF (artifact only — NO email)
 
 `generate_pdf_report(summary=<executive_summary>)` — 2-3 paragraphs:
 - P1: this week's ceiling. If it moved meaningfully vs last week (>20% in either direction), lead with the delta and a hypothesis (recent deploy? schema change? infra change?).
 - P2: per-endpoint drill-down. Name the endpoints that degraded first. Flag any that regressed vs last week.
 - P3: recommendations. Concrete — e.g., "index the `access_log.user_id` column" not "optimize database".
 
-Then: `send_email_report()`, `send_teams_digest()`.
+**Do NOT call `send_email_report` or `send_teams_digest`.** The team receives one consolidated email per day from the Daily Report workflow, which will cite this week's load-test ceiling and delta.
 
 ### 5. Log + exit
 
-- `log_test_run(task_name="api-load-test", duration_s=..., notes="ceiling=<tier>, p99_at_ceiling=<ms>")`.
-- `log_activity("api-load-test:shipped", ...)`.
+- `log_test_run(task_name="api-load-test", duration_s=..., notes="ceiling=<tier>, p99_at_ceiling=<ms>")`. MANDATORY.
+- `log_activity("api-load-test:finished", ...)`.
 
 ---
 
