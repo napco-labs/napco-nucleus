@@ -91,7 +91,7 @@ technical_details.>
 ### 4. Ship
 
 - `generate_pdf_report(summary=<your_markdown>)` — produces the unified PDF with the 6 sections above.
-- `send_email_report()` — emails the PDF to `TEAM_EMAILS`. The From header should render as `NAPCO Nucleus <khasan@ael-bd.com>` (via `SMTP_FROM_NAME` + `SMTP_FROM` env vars). Recipients today: `arzaman@ael-bd.com`, `titucse@gmail.com`, `assad@ael-bd.com`, `samin@ael-bd.com`.
+- `send_email_report()` — emails the PDF to `TEAM_EMAILS`. The From header should render as `NAPCO Nucleus <khasan@ael-bd.com>` (via `SMTP_FROM_NAME` + `SMTP_FROM` env vars). Recipients come from the `TEAM_EMAILS` env var (CSV). Currently one address while we validate end-to-end; will expand back to the full team once stable.
 - `send_teams_digest()` — one-line Teams card (no-op if `TEAMS_WEBHOOK_URL` isn't set).
 - `log_activity("daily-report:shipped", "sent_to=<count>_recipients", <pdf_path>)` — final breadcrumb.
 
