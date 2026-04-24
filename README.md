@@ -1,6 +1,6 @@
 # NAPCO Nucleus
 
-[![Build + Deploy](https://github.com/titucse/napco-nucleus/actions/workflows/build-deploy.yml/badge.svg)](https://github.com/titucse/napco-nucleus/actions/workflows/build-deploy.yml)
+[![MVPAccess CICD](https://github.com/titucse/napco-nucleus/actions/workflows/build-deploy.yml/badge.svg)](https://github.com/titucse/napco-nucleus/actions/workflows/build-deploy.yml)
 [![Requirement Management](https://github.com/titucse/napco-nucleus/actions/workflows/requirement-management.yml/badge.svg)](https://github.com/titucse/napco-nucleus/actions/workflows/requirement-management.yml)
 [![Daily Report](https://github.com/titucse/napco-nucleus/actions/workflows/daily-report.yml/badge.svg)](https://github.com/titucse/napco-nucleus/actions/workflows/daily-report.yml)
 [![API Functional](https://github.com/titucse/napco-nucleus/actions/workflows/api-functional-test.yml/badge.svg)](https://github.com/titucse/napco-nucleus/actions/workflows/api-functional-test.yml)

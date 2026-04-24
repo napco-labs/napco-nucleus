@@ -1,4 +1,4 @@
-name: MVP Access CI/CD — Build + Deploy to IIS
+name: MVPAccess CICD
 
 # Daily pipeline that:
 #   1. Pulls latest MVP Access application code from on-prem TFS
