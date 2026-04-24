@@ -1,0 +1,100 @@
+name: Probe Runner Filesystem
+
+# Non-destructive diagnostic. Lists key paths on the MVPACCESS runner so
+# we know whether sibling projects already exist on disk or need to be
+# checked out into the workspace.
+#
+# Delete this file once the investigation is done.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: [self-hosted, Windows]
+    timeout-minutes: 5
+
+    steps:
+      - name: Identity + environment
+        shell: pwsh
+        run: |
+          Write-Host "=== whoami ==="
+          whoami
+          Write-Host ""
+          Write-Host "=== hostname ==="
+          hostname
+          Write-Host ""
+          Write-Host "=== GITHUB_WORKSPACE ==="
+          Write-Host "$env:GITHUB_WORKSPACE"
+          Write-Host ""
+          Write-Host "=== Current working directory ==="
+          Get-Location
+          Write-Host ""
+          Write-Host "=== user profile paths ==="
+          Write-Host "USERPROFILE=$env:USERPROFILE"
+          Write-Host "APPDATA=$env:APPDATA"
+          Write-Host "LOCALAPPDATA=$env:LOCALAPPDATA"
+
+      - name: Probe E:\Projects (where sibling test projects should live)
+        shell: pwsh
+        run: |
+          Write-Host "=== E:\ exists? ==="
+          Test-Path 'E:\'
+          Write-Host ""
+          Write-Host "=== E:\Projects exists? ==="
+          Test-Path 'E:\Projects'
+          Write-Host ""
+          Write-Host "=== E:\Projects contents (if any) ==="
+          if (Test-Path 'E:\Projects') {
+            Get-ChildItem 'E:\Projects' | Select-Object Name, Mode, LastWriteTime | Format-Table -AutoSize
+          } else {
+            Write-Host "(E:\Projects does not exist on this runner)"
+          }
+          Write-Host ""
+          Write-Host "=== Individual sibling project checks ==="
+          foreach ($p in @(
+            'E:\Projects\MVP-Access-API-Test',
+            'E:\Projects\MVP-Access-E2E-Test',
+            'E:\Projects\MVP-Access-Easy-E2E-Test',
+            'E:\Projects\MVP-Access-Release-Test',
+            'E:\Projects\NAPCO-Nucleus'
+          )) {
+            $exists = Test-Path $p
+            Write-Host "$p -> $(if ($exists) { 'EXISTS' } else { 'MISSING' })"
+            if ($exists) {
+              $hasAgent = Test-Path (Join-Path $p 'agent')
+              $hasEnv = Test-Path (Join-Path $p '.env')
+              Write-Host "  -> agent\ folder: $hasAgent"
+              Write-Host "  -> .env file:    $hasEnv"
+            }
+          }
+
+      - name: Probe other plausible drive letters
+        shell: pwsh
+        run: |
+          foreach ($drive in @('C:', 'D:', 'E:', 'F:')) {
+            $path = "$drive\Projects\MVP-Access-API-Test"
+            if (Test-Path $path) {
+              Write-Host "FOUND: $path"
+            }
+          }
+          Write-Host ""
+          Write-Host "=== All mapped drives ==="
+          Get-PSDrive -PSProvider FileSystem | Format-Table Name, Root, Used, Free -AutoSize
+
+      - name: Check Claude CLI + Python
+        shell: pwsh
+        run: |
+          Write-Host "=== claude.exe location ==="
+          Get-Command claude -ErrorAction SilentlyContinue | Select-Object Source | Format-List
+          Get-Command claude.exe -ErrorAction SilentlyContinue | Select-Object Source | Format-List
+          Write-Host ""
+          Write-Host "=== Python launcher ==="
+          py -3 --version
+          Write-Host ""
+          Write-Host "=== Node (Newman needs this) ==="
+          node --version 2>&1
+          npm --version 2>&1
