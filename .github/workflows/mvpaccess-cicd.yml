@@ -21,9 +21,10 @@ concurrency:
 jobs:
   build-deploy:
     name: Pull, Build, Deploy
-    # Runs on the second self-hosted Windows machine registered with the
-    # 'builder' label (to avoid competing with the test runner).
-    runs-on: [self-hosted, Windows, builder]
+    # Shares the MVPACCESS self-hosted runner with the agent + test
+    # workflows. The 22:00 BDT schedule is offset from the 02:00/04:00
+    # test slots, so concurrency with the test workflows is unlikely.
+    runs-on: [self-hosted, Windows]
     timeout-minutes: 60
 
     env:
