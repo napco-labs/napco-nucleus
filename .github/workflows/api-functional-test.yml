@@ -1,8 +1,13 @@
 name: API Functional Test
 
-# Runs the Newman / Postman collection against the MVP Access API.
-# Claude interprets failures, composes the PDF executive summary,
-# and ships to the team.
+# Runs the Newman / Postman collection against the MVP Access API via
+# Claude orchestration. Claude boots from napco-nucleus/agent.py,
+# reasons about failures, composes the PDF, logs the result to memory
+# (which the Daily Report consumes the next morning).
+#
+# Multi-checkout pattern: napco-nucleus/ holds agent.py + memory.
+# MVP-Access-API-Test/ holds the Newman collection + test runner.
+# MVP_PROJECTS_ROOT points tools_legacy at the parent so imports resolve.
 
 on:
   workflow_dispatch:
@@ -24,37 +29,68 @@ concurrency:
 jobs:
   run:
     runs-on: [self-hosted, Windows]
-    timeout-minutes: 20
+    timeout-minutes: 30
 
     env:
-      MVP_PROJECTS_ROOT: 'E:\Projects'
+      MVP_PROJECTS_ROOT: ${{ github.workspace }}
+      # MVP Access API creds (consumed by the Newman runner via env).
+      BASE_URL: ${{ secrets.API_BASE_URL }}
+      COMPANY_ID: ${{ secrets.COMPANY_ID }}
+      USER_ID: ${{ secrets.USER_ID }}
+      PASSWORD: ${{ secrets.PASSWORD }}
+      CLIENT_ID: ${{ secrets.CLIENT_ID }}
+      CLIENT_SECRET: ${{ secrets.CLIENT_SECRET }}
+      API_KEY: ${{ secrets.API_KEY }}
+      DEALER_USERNAME: ${{ secrets.DEALER_USERNAME }}
+      DEALER_PASSWORD: ${{ secrets.DEALER_PASSWORD }}
+      DEALER_ACCOUNT: ${{ secrets.DEALER_ACCOUNT }}
+      # SMTP (tools/report.py can reach these if needed; daily-report owns
+      # the actual send).
       SMTP_HOST: ${{ secrets.SMTP_HOST }}
       SMTP_PORT: ${{ secrets.SMTP_PORT }}
       SMTP_USER: ${{ secrets.SMTP_USER }}
       SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
       SMTP_FROM: ${{ secrets.SMTP_FROM }}
+      SMTP_FROM_NAME: ${{ secrets.SMTP_FROM_NAME }}
+      EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
       TEAM_EMAILS: ${{ secrets.TEAM_EMAILS }}
       TEAMS_WEBHOOK_URL: ${{ secrets.TEAMS_WEBHOOK_URL }}
-      API_BASE_URL: ${{ secrets.API_BASE_URL }}
-      CLIENT_ID: ${{ secrets.CLIENT_ID }}
-      USER_ID: ${{ secrets.USER_ID }}
-      COMPANY_ID: ${{ secrets.COMPANY_ID }}
 
     steps:
-      - uses: actions/checkout@v5
+      - name: Checkout napco-nucleus (self)
+        uses: actions/checkout@v5
+        with:
+          path: napco-nucleus
 
-      - name: Install Python dependencies
+      - name: Checkout MVP-Access-API-Test
+        uses: actions/checkout@v5
+        with:
+          repository: titucse/MVP-Access-API-Test
+          token: ${{ secrets.CROSS_REPO_PAT }}
+          path: MVP-Access-API-Test
+
+      - name: Install napco-nucleus Python deps
+        working-directory: napco-nucleus
         run: py -3 -m pip install -r requirements.txt
 
-      - name: Run API Functional Test
+      - name: Install MVP-Access-API-Test Python deps
+        working-directory: MVP-Access-API-Test
+        run: py -3 -m pip install -r requirements.txt
+
+      - name: Install Newman (for Postman collection runner)
+        run: npm install -g newman newman-reporter-html
+
+      - name: Run API Functional Test via Claude
         shell: pwsh
+        working-directory: napco-nucleus
         run: py -3 agent.py --task api-functional-test ${{ github.event.inputs.dry_run == 'true' && '--dry-run' || '' }}
 
       - name: Commit state changes
         if: always()
         shell: pwsh
+        working-directory: napco-nucleus
         run: |
-          git config --global --add safe.directory "$env:GITHUB_WORKSPACE"
+          git config --global --add safe.directory "$(Get-Location)"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add nucleus_memory.db 2>$null
@@ -67,3 +103,11 @@ jobs:
             Write-Host "no state changes"
             $global:LASTEXITCODE = 0
           }
+
+      - name: Upload test reports artifact
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: api-functional-test-reports
+          path: MVP-Access-API-Test/reports/*
+          retention-days: 7
