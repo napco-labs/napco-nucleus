@@ -130,7 +130,7 @@ async def run_agent(task: str, dry_run: bool) -> None:
         create_sdk_mcp_server,
     )
 
-    import config as nucleus_config
+    import napco_config as nucleus_config
     from tools import ALL_TOOLS, TOOL_NAMES
 
     server = create_sdk_mcp_server(
