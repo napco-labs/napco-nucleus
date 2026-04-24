@@ -29,17 +29,20 @@ _HERE = Path(__file__).parent
 @dataclass(frozen=True)
 class SmtpIdentity:
     from_address: str
+    from_name: str           # display name in the From header
     auth_user_env: str
     auth_pass_env: str
     host_env: str
     port_env: str
 
 
-# The agent sends reports from Mohammad's work email. If the project
-# ever needs a second identity (e.g., separate alias per audience),
-# add another entry here.
+# The agent sends reports from Mohammad's work email. Display name
+# "NAPCO Nucleus" so the From header renders as:
+#   NAPCO Nucleus <khasan@ael-bd.com>
+# instead of a raw address.
 SMTP_DEFAULT = SmtpIdentity(
     from_address=os.environ.get("SMTP_FROM", os.environ.get("SMTP_USER", "")),
+    from_name=os.environ.get("SMTP_FROM_NAME", "NAPCO Nucleus"),
     auth_user_env="SMTP_USER",
     auth_pass_env="SMTP_PASSWORD",
     host_env="SMTP_HOST",
@@ -52,6 +55,14 @@ def smtp_for(dimension: str | None = None) -> SmtpIdentity:
     kept for symmetry with Digital Deputy's multi-identity split in
     case we need to fork later."""
     return SMTP_DEFAULT
+
+
+def smtp_from_display() -> str:
+    """Formatted 'Name <address>' for the From header — what recipients see."""
+    sid = SMTP_DEFAULT
+    if sid.from_name and sid.from_address:
+        return f"{sid.from_name} <{sid.from_address}>"
+    return sid.from_address or sid.from_name
 
 
 # ─── Sibling test-project paths ─────────────────────────────────────

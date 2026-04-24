@@ -151,25 +151,48 @@ jobs:
           }
           Write-Host "Deploy complete: $env:IIS_DEPLOY_PATH"
 
-      - name: Send deploy-complete email
+      - name: Log CICD status to NAPCO Nucleus memory
+        # Writes one row to nucleus_memory.db so the morning Daily
+        # Report can surface last night's build/deploy status via
+        # recall_activity(task_name="mvpaccess-cicd", limit=1).
+        # Replaces the old per-workflow email — the team gets one
+        # consolidated report email per day from daily-report.yml.
         if: always()
         shell: pwsh
         run: |
-          $status = if ('${{ job.status }}' -eq 'success') { 'SUCCESS ✅' } else { 'FAILED ❌' }
-          $subject = "MVP Access Build + Deploy — $status ($(Get-Date -Format 'yyyy-MM-dd HH:mm'))"
-          $body = @"
-Daily build + deploy pipeline ran on runner $env:COMPUTERNAME.
+          $napco = "C:\ci-workspace\NAPCO-Nucleus"
+          if (-not (Test-Path $napco)) {
+            git clone https://github.com/titucse/napco-nucleus.git $napco
+          } else {
+            git -C $napco fetch origin main
+            git -C $napco reset --hard origin/main
+          }
+          Push-Location $napco
+          try {
+            $runUrl = "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            $details = @{
+              run_id = "${{ github.run_id }}"
+              run_url = $runUrl
+              runner = $env:COMPUTERNAME
+              timestamp_bdt = (Get-Date -Format "yyyy-MM-dd HH:mm")
+            } | ConvertTo-Json -Compress
+            $escaped = $details.Replace("'", "''")
+            py -3 -c "import sys; sys.path.insert(0, '.'); import memory; import json; memory.log_activity(task_name='mvpaccess-cicd', result='${{ job.status }}', technical_details=json.loads(r'$escaped'))"
 
-Status: $status
-Run:    ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-
-Timing: build at 22:00 BDT, tests at 23:59 BDT pick up this deployment.
-"@
-
-          $smtpUser = $env:SMTP_USER
-          $smtpPass = ConvertTo-SecureString $env:SMTP_PASSWORD -AsPlainText -Force
-          $cred = New-Object System.Management.Automation.PSCredential($smtpUser, $smtpPass)
-          $to = $env:TEAM_EMAILS -split ','
-
-          Send-MailMessage -From $env:EMAIL_FROM -To $to -Subject $subject -Body $body `
-            -SmtpServer $env:SMTP_HOST -Port $env:SMTP_PORT -UseSsl -Credential $cred -BodyAsHtml:$false
+            git config --global --add safe.directory $napco
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add nucleus_memory.db
+            git diff --staged --quiet
+            if ($LASTEXITCODE -ne 0) {
+              git commit -m "mvpaccess-cicd: $(Get-Date -Format 'yyyy-MM-dd HH:mm') UTC — ${{ job.status }}"
+              git pull --rebase origin main
+              git push
+            } else {
+              Write-Host "no memory changes"
+              $global:LASTEXITCODE = 0
+            }
+          }
+          finally {
+            Pop-Location
+          }

@@ -25,7 +25,7 @@ Today's report is basically a read of the last 24 hours of memory. Load it all f
 
 Call `read_file` on the latest reports in `MVP-Access-API-Test/reports/`:
 - `pytest_report.json` (integration run)
-- `newman_report.json` (API run)
+- `newman_report.json` (API functional run)
 - Playwright `results.json` from `MVP-Access-E2E-Test/test-results/` and sibling projects
 - The most recent load-test log in `reports/`
 
@@ -35,48 +35,64 @@ Skip any that are missing or older than 24 hours. Don't fabricate data — if a 
 
 For integration + API runs: `compare_with_last_run()` to surface regressions + newly-fixed tests.
 
-### 3. Compose the summary
+### 3. Compose the report — SIX sections, single PDF
 
-Draft the report body as markdown with this shape:
+The final PDF is ONE consolidated document with the structure below. Write each section yourself (Claude-first — no f-string templates). Every claim must be anchored to a source: a file path, a GitLab issue link, an `activity_logs` row, or a `test_run_history` row. No "strong performance", no "looks good". Use numbers.
 
 ```
-# Daily Report — <today's date in BDT>
+# NAPCO Nucleus — Daily Report, <today's date in BDT>
 
 ## Executive Summary
-<2-3 sentences. Lead with the verdict: what worked, what broke, what needs human attention. If regressions were detected, lead with them.>
+<2-3 sentences. Lead with the verdict: what works, what broke, what
+needs human attention. If regressions were detected, lead with them.>
 
-## Action Items
-<bullet list of anything that needs Mohammad / the team to act:
-  - failed tests that look like real bugs (vs flakies)
-  - new human-reply requirement emails waiting for clarification
-  - GitLab issues created in the last 24h that reference blocked dependencies>
+## 1. Requirement Management
+<Narrative paragraph describing today's requirement activity. Tone:
+warm, confident, clear — the stakeholders reading this want to know
+their requests are being honored.>
+<Example shape:
+  "Today we captured N new client requirements from email, Drive
+  meeting recordings, and Teams channel posts. Every requirement
+  was split into 3-hour tasks and tracked in the GitLab backlog.
+  The team has K issues open at the start of tomorrow, and no
+  message has been dropped."
+  Then: 3-5 bullet points with specifics (source → task count →
+  GitLab IIDs) sourced from recall_activity(
+  task_name="requirement-management:publish_gitlab").>
 
-## Test Automation
-<per-suite block: API / Integration / Load / E2E>
-  - counts (pass / fail / skip)
-  - duration
-  - regressions (if any) — name them with the test IDs
-  - flaky tests detected
-  - link to PDF if generated today
+## 2. API Functional Test
+<Pie chart: pass / fail / skip from the most recent run. Counts,
+duration, regressions by test ID, known-bug failures separated,
+flaky tests called out. Link to the per-run PDF artifact.>
 
-## Project Management
-<requirement ingestion status>
-  - emails polled / files ingested
-  - distinct requirements found
-  - tasks published to GitLab (link by IID)
-  - skipped-as-duplicate count
+## 3. API Integration Test
+<Same shape. Lead with regressions vs. 7-day average from
+recall_test_runs(task_name="api-integration-test", limit=7).>
 
-## Market Technology Scan (optional)
-<if you can, 2-3 bullet observations about tools / stacks mentioned in today's requirement sources that would be worth aligning the test stack with. Anchor every observation to a source file path.>
+## 4. API Load Test
+<Pie chart here is optional — prefer a tier/RPS block if the latest
+run wasn't today (load is weekly). Capacity ceiling + week-over-week
+delta if available.>
+
+## 5. MVP Access E2E Test
+<Pie chart. Failing tests grouped by suspected root cause. Reference
+the per-run PDF (which carries the failure screenshots).>
+
+## 6. CICD — Build + Deploy
+<One paragraph confirming last night's MVP Access CICD result.
+Source: recall_activity(task_name="mvpaccess-cicd", limit=1). If the
+deploy succeeded, say so clearly and cite the GitHub Actions run URL.
+If it failed, lead with the failure and surface the error from
+technical_details.>
 ```
 
-**Rule: every claim in the report body must be anchored to a source — a file path, a GitLab issue link, a `recall_*` result. No "looks good", no "strong performance". Use numbers.**
+**Rule: the 4 test sections MUST each have a pie chart** — pass / fail / skipped breakdown. The `generate_pdf_report` tool handles the actual PDF rendering, including per-suite pie charts, when you pass it the structured summary above.
 
 ### 4. Ship
 
-- `generate_pdf_report(summary=<your_markdown>)` — produces the PDF.
-- `send_email_report()` — emails the latest PDF to `TEAM_EMAILS`.
-- `send_teams_digest()` — posts a one-line card to the Teams channel (no-op if `TEAMS_WEBHOOK_URL` isn't set).
+- `generate_pdf_report(summary=<your_markdown>)` — produces the unified PDF with the 6 sections above.
+- `send_email_report()` — emails the PDF to `TEAM_EMAILS`. The From header should render as `NAPCO Nucleus <khasan@ael-bd.com>` (via `SMTP_FROM_NAME` + `SMTP_FROM` env vars). Recipients today: `arzaman@ael-bd.com`, `titucse@gmail.com`, `assad@ael-bd.com`, `samin@ael-bd.com`.
+- `send_teams_digest()` — one-line Teams card (no-op if `TEAMS_WEBHOOK_URL` isn't set).
 - `log_activity("daily-report:shipped", "sent_to=<count>_recipients", <pdf_path>)` — final breadcrumb.
 
 ### 5. Exit

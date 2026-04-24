@@ -28,7 +28,9 @@ jobs:
       SMTP_PORT: ${{ secrets.SMTP_PORT }}
       SMTP_USER: ${{ secrets.SMTP_USER }}
       SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+      # Renders the From header as "NAPCO Nucleus <khasan@ael-bd.com>".
       SMTP_FROM: ${{ secrets.SMTP_FROM }}
+      SMTP_FROM_NAME: ${{ secrets.SMTP_FROM_NAME }}
       TEAM_EMAILS: ${{ secrets.TEAM_EMAILS }}
       REPORT_TO: ${{ secrets.REPORT_TO }}
       TEAMS_WEBHOOK_URL: ${{ secrets.TEAMS_WEBHOOK_URL }}
