@@ -34,9 +34,8 @@ jobs:
       SMTP_FROM: ${{ secrets.SMTP_FROM }}
       TEAM_EMAILS: ${{ secrets.TEAM_EMAILS }}
       TEAMS_WEBHOOK_URL: ${{ secrets.TEAMS_WEBHOOK_URL }}
-      BASE_URL: ${{ secrets.BASE_URL }}
+      API_BASE_URL: ${{ secrets.API_BASE_URL }}
       CLIENT_ID: ${{ secrets.CLIENT_ID }}
-      PORTAL_URL: ${{ secrets.PORTAL_URL }}
       USER_ID: ${{ secrets.USER_ID }}
       COMPANY_ID: ${{ secrets.COMPANY_ID }}
 
