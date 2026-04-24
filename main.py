@@ -35,7 +35,7 @@ from claude_agent_sdk import (  # noqa: E402
     ClaudeSDKClient,
     create_sdk_mcp_server,
 )
-import tools as agent_tools  # noqa: E402
+import tools_legacy as agent_tools  # noqa: E402  # legacy monolithic; being ported to tools/ package
 
 SYSTEM_PROMPT = """You are the MVP Access test-automation agent.
 
