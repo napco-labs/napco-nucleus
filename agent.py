@@ -49,7 +49,8 @@ sys.path.insert(0, _HERE)
 
 TASKS = {
     "requirement-management",
-    "daily-report",
+    "daily-report-detailed",
+    "daily-report-summary",
     "api-functional-test",
     "api-integration-test",
     "api-load-test",
@@ -62,11 +63,17 @@ TASK_KICKOFF = {
         "Run the Requirement Management loop now. Follow the prompt: "
         "memory check-in, poll email + Drive, read the inbox, split "
         "requirements into 3-hour tasks, publish to GitLab, log, exit.",
-    "daily-report":
-        "Build today's Daily Report. Follow the prompt: memory check-in, "
-        "read artifacts from the 4 test projects, compose the executive "
-        "summary, generate the PDF, email it to the team, post a Teams "
+    "daily-report-detailed":
+        "Build today's Detailed Daily Test Report. Follow the prompt: "
+        "memory check-in, read artifacts from the 4 test projects, "
+        "compose the 6-section detailed report with pie charts, generate "
+        "the PDF, email it to the FULL TEAM (TEAM_EMAILS), post a Teams "
         "digest, exit.",
+    "daily-report-summary":
+        "Build today's Executive Summary. Follow the prompt: memory "
+        "check-in, compose the 7-block dashboard (3-4 lines each), "
+        "generate the SHORT PDF, email it to LEADERSHIP ONLY "
+        "(SUMMARY_EMAILS — khasan + assad), exit.",
     "api-functional-test":
         "Run the API Functional Test suite now. Pull the latest code if "
         "needed, execute run_api_tests, analyze failures, generate the "

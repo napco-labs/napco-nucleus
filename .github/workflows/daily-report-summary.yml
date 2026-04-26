@@ -1,27 +1,28 @@
-name: Daily Report
+name: Daily Report — Executive Summary
 
-# Claude-driven replacement for the old morning_brief.py Python script.
-# Reads the last 24h of activity_logs + test_run_history + fresh
-# test-report artifacts, composes an executive summary in natural
-# language, ships PDF + email + Teams digest.
+# Short executive-summary email for LEADERSHIP only (khasan + assad
+# today, will grow). Composes the 7-block dashboard (3-4 lines each)
+# and emails it to SUMMARY_EMAILS. Fires 30 min after the detailed
+# report so leadership sees a digested view after the team has the
+# full data.
 
 on:
   schedule:
-    # 03:00 UTC = 09:00 BDT.
-    - cron: '0 3 * * *'
+    # 09:30 BDT = 03:30 UTC.
+    - cron: '30 3 * * *'
   workflow_dispatch:
 
 permissions:
   contents: write
 
 concurrency:
-  group: daily-report
+  group: daily-report-summary
   cancel-in-progress: false
 
 jobs:
   run:
     runs-on: [self-hosted, Windows]
-    timeout-minutes: 20
+    timeout-minutes: 15
 
     env:
       MVP_PROJECTS_ROOT: 'E:\Projects'
@@ -29,13 +30,12 @@ jobs:
       SMTP_PORT: ${{ secrets.SMTP_PORT }}
       SMTP_USER: ${{ secrets.SMTP_USER }}
       SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
-      # Renders the From header as "NAPCO Nucleus <khasan@ael-bd.com>".
       SMTP_FROM: ${{ secrets.SMTP_FROM }}
       SMTP_FROM_NAME: ${{ secrets.SMTP_FROM_NAME }}
-      TEAM_EMAILS: ${{ secrets.TEAM_EMAILS }}
-      REPORT_TO: ${{ secrets.REPORT_TO }}
+      # Executive summary goes to leadership only (will grow).
+      SUMMARY_EMAILS: ${{ secrets.SUMMARY_EMAILS }}
       TEAMS_WEBHOOK_URL: ${{ secrets.TEAMS_WEBHOOK_URL }}
-      # GitLab read-only for backlog summary in the report.
+      # GitLab for backlog snapshot in the Requirement Tracking block.
       GITLAB_HOST: ${{ secrets.GITLAB_HOST }}
       GITLAB_PROJECT_ID: ${{ secrets.GITLAB_PROJECT_ID }}
       GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
@@ -46,9 +46,9 @@ jobs:
       - name: Install Python dependencies
         run: py -3 -m pip install -r requirements.txt
 
-      - name: Build + ship Daily Report
+      - name: Build + ship Executive Summary
         shell: pwsh
-        run: py -3 agent.py --task daily-report
+        run: py -3 agent.py --task daily-report-summary
 
       - name: Commit state changes
         if: always()
@@ -60,7 +60,7 @@ jobs:
           git add nucleus_memory.db 2>$null
           git diff --staged --quiet
           if ($LASTEXITCODE -ne 0) {
-            git commit -m "daily-report: $(Get-Date -Format 'yyyy-MM-dd HH:mm') UTC"
+            git commit -m "daily-report-summary: $(Get-Date -Format 'yyyy-MM-dd HH:mm') UTC"
             git pull --rebase origin main
             git push
           } else {

@@ -1,0 +1,68 @@
+name: Daily Report — Detailed
+
+# Detailed daily test report for the FULL TEAM. Composes the 6-section
+# PDF (executive summary + per-suite detail with pie charts) and emails
+# it to TEAM_EMAILS. The shorter executive summary for leadership is a
+# separate workflow (daily-report-summary) that fires 30 min later.
+
+on:
+  schedule:
+    # 09:00 BDT = 03:00 UTC.
+    - cron: '0 3 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: daily-report-detailed
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: [self-hosted, Windows]
+    timeout-minutes: 20
+
+    env:
+      MVP_PROJECTS_ROOT: 'E:\Projects'
+      SMTP_HOST: ${{ secrets.SMTP_HOST }}
+      SMTP_PORT: ${{ secrets.SMTP_PORT }}
+      SMTP_USER: ${{ secrets.SMTP_USER }}
+      SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+      SMTP_FROM: ${{ secrets.SMTP_FROM }}
+      SMTP_FROM_NAME: ${{ secrets.SMTP_FROM_NAME }}
+      # Detailed report goes to the full team.
+      TEAM_EMAILS: ${{ secrets.TEAM_EMAILS }}
+      REPORT_TO: ${{ secrets.REPORT_TO }}
+      TEAMS_WEBHOOK_URL: ${{ secrets.TEAMS_WEBHOOK_URL }}
+      GITLAB_HOST: ${{ secrets.GITLAB_HOST }}
+      GITLAB_PROJECT_ID: ${{ secrets.GITLAB_PROJECT_ID }}
+      GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Python dependencies
+        run: py -3 -m pip install -r requirements.txt
+
+      - name: Build + ship Detailed Daily Report
+        shell: pwsh
+        run: py -3 agent.py --task daily-report-detailed
+
+      - name: Commit state changes
+        if: always()
+        shell: pwsh
+        run: |
+          git config --global --add safe.directory "$env:GITHUB_WORKSPACE"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add nucleus_memory.db 2>$null
+          git diff --staged --quiet
+          if ($LASTEXITCODE -ne 0) {
+            git commit -m "daily-report-detailed: $(Get-Date -Format 'yyyy-MM-dd HH:mm') UTC"
+            git pull --rebase origin main
+            git push
+          } else {
+            Write-Host "no state changes"
+            $global:LASTEXITCODE = 0
+          }
