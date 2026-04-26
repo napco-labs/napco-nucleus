@@ -25,8 +25,11 @@ except Exception:
 from dotenv import load_dotenv
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
-load_dotenv(os.path.join(_HERE, ".env"))
-load_dotenv(os.path.join(_HERE, "..", "MVP-Access-API-Test", ".env"))
+# NN owns its own secrets — Digital-Deputy-style. .env at the project
+# root is the single source of truth. Sibling test-project dirs still
+# have their own .env files (consumed by their own runners), but NN no
+# longer reaches into them.
+load_dotenv(os.path.join(_HERE, ".env"), override=True)
 
 sys.path.insert(0, _HERE)
 

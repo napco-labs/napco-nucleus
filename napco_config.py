@@ -124,8 +124,16 @@ def validate_requirement_env() -> dict:
     Returns a dict of what's set / what's missing. Not an assertion."""
     req = [
         "REQ_IMAP_USER", "REQ_IMAP_PASSWORD", "REQ_SENDER_ALLOWLIST",
-        "GOOGLE_SERVICE_ACCOUNT_JSON", "GDRIVE_AUDIO_FOLDER_ID",
+        "GDRIVE_AUDIO_FOLDER_ID",
         "GROQ_API_KEY",
         "GITLAB_PROJECT_ID", "GITLAB_TOKEN",
     ]
-    return {k: bool(os.environ.get(k)) for k in req}
+    status = {k: bool(os.environ.get(k)) for k in req}
+    # Google credentials can come from either a file path (preferred,
+    # DD-style) OR an inline JSON blob (legacy / GHA secret). Treat
+    # either one as satisfying the requirement.
+    status["GOOGLE_CREDENTIALS"] = bool(
+        os.environ.get("GOOGLE_CREDENTIALS_PATH")
+        or os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON")
+    )
+    return status

@@ -42,13 +42,34 @@ Plus the Requirement Management pipeline: client emails (IMAP) + Google Drive au
 2. Python 3.10+ (the VM uses `py -3` launcher).
 3. The four sibling test projects cloned under `E:/Projects/`.
 4. `.env` populated (see `.env.example` for the full contract).
+5. `google-credentials.json` saved at the project root (for Drive ingest).
 
 ## Setup
 
 ```bash
 cd E:/Projects/NAPCO-Nucleus
 py -3 -m pip install -r requirements.txt
+cp .env.example .env   # then fill in
 ```
+
+### Credential layout (Digital-Deputy-style)
+
+NN owns its own secrets — no piggybacking on sibling project `.env` files. The
+single source of truth is two files at the project root, both gitignored:
+
+| File | Purpose |
+|---|---|
+| `.env` | All env vars: SMTP, IMAP, GitLab, Google Drive folder ID, Groq, Teams |
+| `google-credentials.json` | Service-account JSON for Google Drive (referenced by `GOOGLE_CREDENTIALS_PATH`) |
+
+For Google Drive auth, NN supports two modes — `GOOGLE_CREDENTIALS_PATH`
+(file path, preferred) takes precedence over `GOOGLE_SERVICE_ACCOUNT_JSON`
+(raw blob, kept so existing GitHub Actions secrets continue to work).
+
+`load_dotenv` is called with `override=True` in every entry point so values in
+`.env` win over inherited shell env. This means the workflow `env:` blocks
+(which used to be the only secret source) are now belt-and-suspenders — they
+remain harmless if the GHA secrets get rotated out.
 
 ## Usage
 

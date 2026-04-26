@@ -11,8 +11,13 @@ All outputs carry the standard 4-line header preface so the downstream
 LLM splitter treats them identically to email-sourced text.
 
 Env vars:
-    GOOGLE_SERVICE_ACCOUNT_JSON   JSON key for a service account that
-                                  has at least Viewer on the folder.
+    GOOGLE_CREDENTIALS_PATH       Path to a service-account JSON file
+                                  (Digital-Deputy-style; preferred).
+                                  Resolved relative to the project root
+                                  if not absolute.
+    GOOGLE_SERVICE_ACCOUNT_JSON   Inline JSON key for a service account
+                                  (legacy / GHA-secret style; used only
+                                  if GOOGLE_CREDENTIALS_PATH is unset).
     GDRIVE_AUDIO_FOLDER_ID        The Drive folder ID (from its URL).
                                   Name kept for backward compat; the
                                   folder holds both audio and PDFs.
@@ -48,7 +53,9 @@ import requests
 from dotenv import load_dotenv
 
 _HERE = Path(__file__).parent
-load_dotenv(_HERE / ".env")
+# .env wins over inherited shell env (so a real value beats an empty
+# placeholder set by the workflow). Matches agent.py's posture.
+load_dotenv(_HERE / ".env", override=True)
 
 logger = logging.getLogger(__name__)
 
@@ -108,12 +115,48 @@ def _already_processed(state: dict, file_id: str) -> bool:
 
 # ─────────────────────────── Drive ────────────────────────────────
 
-def _drive_service():
-    """Build a Drive v3 client from the JSON service-account key."""
+def _load_service_account_info() -> dict:
+    """Load the service-account JSON dict from either:
+
+      1. GOOGLE_CREDENTIALS_PATH — file path (DD-style; preferred).
+         Relative paths resolve against the project root.
+      2. GOOGLE_SERVICE_ACCOUNT_JSON — raw JSON blob (legacy / GHA secret).
+
+    Raises RuntimeError if neither is set or the chosen source is unparseable.
+    """
+    path = os.getenv("GOOGLE_CREDENTIALS_PATH")
+    if path:
+        p = Path(path)
+        if not p.is_absolute():
+            p = _HERE / p
+        if not p.is_file():
+            raise RuntimeError(
+                f"GOOGLE_CREDENTIALS_PATH={path} does not resolve to a file "
+                f"(looked at {p})"
+            )
+        try:
+            with open(p, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except json.JSONDecodeError as e:
+            raise RuntimeError(f"{p} is not valid JSON: {e}") from e
+
     raw = os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON")
     if not raw:
-        raise RuntimeError("GOOGLE_SERVICE_ACCOUNT_JSON not set")
-    info = json.loads(raw)
+        raise RuntimeError(
+            "Set GOOGLE_CREDENTIALS_PATH (preferred — points to a service-"
+            "account JSON file) or GOOGLE_SERVICE_ACCOUNT_JSON (raw JSON blob)."
+        )
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError as e:
+        raise RuntimeError(
+            f"GOOGLE_SERVICE_ACCOUNT_JSON is not valid JSON: {e}"
+        ) from e
+
+
+def _drive_service():
+    """Build a Drive v3 client from the JSON service-account key."""
+    info = _load_service_account_info()
     from google.oauth2 import service_account  # lazy import
     from googleapiclient.discovery import build
     creds = service_account.Credentials.from_service_account_info(

@@ -39,14 +39,11 @@ except Exception:
 
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
-load_dotenv(os.path.join(_HERE, ".env"))
-# Also load the sibling API-Test .env so SMTP / test creds resolve.
-# On the CI runner, the checkout lives at C:\actions-runner\_work\...
-# not alongside the sibling projects at E:\Projects\. Honor
-# MVP_PROJECTS_ROOT so the workflow can point us at the real sibling
-# root regardless of where the checkout landed.
-_SIBLING_ROOT = os.environ.get("MVP_PROJECTS_ROOT") or os.path.dirname(_HERE)
-load_dotenv(os.path.join(_SIBLING_ROOT, "MVP-Access-API-Test", ".env"))
+# NN owns its own secrets — Digital-Deputy-style. .env at the project
+# root is the single source of truth for SMTP, IMAP, GitLab, Google
+# Drive, Groq, and Teams creds. override=True so a value in .env wins
+# over an empty / placeholder env var inherited from the workflow shell.
+load_dotenv(os.path.join(_HERE, ".env"), override=True)
 sys.path.insert(0, _HERE)
 
 
