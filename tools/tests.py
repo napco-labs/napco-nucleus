@@ -120,7 +120,7 @@ async def run_e2e_tests_tool(args):
     if not project_dir or not os.path.isdir(project_dir):
         return _text({"status": "ERROR", "error": f"Unknown/missing E2E suite: {suite}"})
 
-    cmd = ["npx", "playwright", "test", "--project=chromium", "--reporter=json"]
+    cmd = ["npx", "playwright", "test", "--reporter=json", "--headed"]
     result = {
         "suite": suite, "status": "FAILED",
         "total": 0, "passed": 0, "failed": 0, "skipped": 0,
@@ -281,7 +281,6 @@ async def run_single_e2e_test_tool(args):
     cmd = [
         "npx", "playwright", "test",
         f"tests/{spec}",
-        "--project=chromium",
         "--reporter=json",
         "--trace", "on",
         "--retries", "0",
