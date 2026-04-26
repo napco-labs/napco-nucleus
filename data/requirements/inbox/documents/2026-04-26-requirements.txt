@@ -1,0 +1,6 @@
+# source: documents
+# from: drive:1jWRkrVRJgVU6DuNn6hPfN4OROwEyiWRf
+# received: 2026-04-23T15:04:38.256Z
+# subject: requirements.pdf
+
+Summary:  Agrani  smart  banking  platform  shall  have  facilities  to  pay  the  education  fee.   Details:   1.  Customers  will  select  the  institution  from  the  available  institutions  list.   2.  Customers  are  able  to  search  the  institution  too  3.  Customers  will  find  the  bill  by  the  student  ID  or  the  voucher  number  4.  There  might  be  more  than  one  voucher  number  under  a  student  ID  5.  Customer  is  able  to  pay  bill  for  a  specific  voucher  6.  Customer  is  able  to  pay  all  bill  of  the  Student  ID  7.  Customer  can  select  multiple  vouchers  to  pay  the  bill  8.  So  on….

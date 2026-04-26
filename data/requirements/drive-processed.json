@@ -12,6 +12,13 @@
       "kind": "audio",
       "ingested_at": "2026-04-23T15:05:06.799064+00:00",
       "output_path": "data/requirements/inbox/meetings/2026-04-23-2026-04-23-21-01-57.txt"
+    },
+    {
+      "file_id": "1jWRkrVRJgVU6DuNn6hPfN4OROwEyiWRf",
+      "name": "requirements.pdf",
+      "kind": "pdf",
+      "ingested_at": "2026-04-26T05:29:32.733592+00:00",
+      "output_path": "data/requirements/inbox/documents/2026-04-26-requirements.txt"
     }
   ]
 }
