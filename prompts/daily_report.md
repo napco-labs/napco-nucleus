@@ -33,7 +33,10 @@ Skip any that are missing or older than 24 hours. Don't fabricate data — if a 
 
 ### 2. Compare vs. yesterday
 
-For integration + API runs: `compare_with_last_run()` to surface regressions + newly-fixed tests.
+For integration + API runs, do the comparison yourself: `list_project_files(project="api-test", directory="reports", pattern="pytest_report*.json")` to find the two most recent, `read_file` each, build `{nodeid → outcome}` maps for both, and call out:
+- Regressions: tests that were `passed` previously and `failed` now.
+- Newly-fixed: tests that were `failed` previously and `passed` now.
+Same approach for newman_report.json (use `data.run.failures`).
 
 ### 3. Compose the report — SIX sections, single PDF
 

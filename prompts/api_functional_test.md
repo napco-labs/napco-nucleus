@@ -24,7 +24,7 @@ Runs the Newman / Postman collection against the MVP Access API to verify every 
 ### 3. Interpret
 
 - If all pass: note the counts + duration. No RCA needed.
-- If any fail: read the failure details. For each failure, decide: real bug, environment issue, or flaky. Use `list_known_bugs()` to check if any failures match xfail entries. Don't invent root causes — if the failure doesn't have an obvious cause, say so.
+- If any fail: read the failure details. For each failure, decide: real bug, environment issue, or flaky. To cross-check against xfail markers: `read_file(project="api-test", path="integration-tests/known_bugs.py")` and scan it for `pytest.mark.xfail` entries whose `reason="..."` matches the failure. Don't invent root causes — if the failure doesn't have an obvious cause, say so.
 
 ### 4. Generate PDF (artifact only — NO email)
 

@@ -23,9 +23,9 @@ Runs the pytest integration suite end-to-end: login, data creation, cross-endpoi
 
 ### 3. Regression + flaky analysis
 
-- `compare_with_last_run()` — surfaces tests that went green→red (regression) or red→green (newly-fixed) since last run.
+- Find the two most recent pytest reports yourself: `list_project_files(project="api-test", directory="reports", pattern="pytest_report*.json")`, take the two newest, then `read_file` each. Build a `{nodeid → outcome}` map for both. Tests that were `passed` previously and `failed` now are regressions; the reverse are newly-fixed.
 - For any regression candidates, check if they've oscillated recently in memory. If `recall_test_runs` shows the same test flipping red↔green across recent runs, it's probably flaky, not a regression. Flag accordingly.
-- `list_known_bugs()` — cross-check failures against xfail markers. Known-bug failures aren't actionable; surface them separately.
+- Cross-check failures against xfail markers: `read_file(project="api-test", path="integration-tests/known_bugs.py")` and scan for `pytest.mark.xfail(...reason="...")` blocks. Known-bug failures aren't actionable; surface them in their own bucket.
 
 ### 4. Generate PDF (artifact only — NO email)
 

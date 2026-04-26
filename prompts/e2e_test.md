@@ -22,8 +22,8 @@ Runs the Playwright end-to-end suite against a deployed environment. The PDF rep
 For each failure:
 - Read the test name + error message
 - Check if the screenshot is available (should be for most Playwright failures)
-- Check `list_known_bugs()` to see if it matches a documented xfail
-- Use `compare_with_last_run()` to distinguish regressions from ongoing-known-failures
+- Cross-check against documented xfails: `read_file(project="api-test", path="integration-tests/known_bugs.py")` and look for `pytest.mark.xfail` reasons that overlap with the failure's symptoms
+- To distinguish a regression from an ongoing-known-failure, compare against memory: `recall_test_runs(task_name="e2e-test", limit=5)` shows the recent pass/fail pattern for each suite. A test that was green yesterday and red today is a regression candidate; one red across the last 5 days is ongoing.
 
 **Flaky detection:** If `recall_test_runs` shows the same test flipping red↔green across the last 3-5 runs, it's flaky. Flag it separately in the report; don't count it toward "real regressions".
 
