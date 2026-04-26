@@ -1,46 +1,72 @@
 name: MVPAccess CICD
 
-# Daily pipeline that:
-#   1. Pulls latest MVP Access application code from on-prem TFS
-#   2. Builds the solution on the "builder" self-hosted Windows runner
-#   3. Deploys the build output to the IIS server over a UNC share
-#   4. Emails a deploy-complete notification
+# Daily build + deploy pipeline for the MVP Access application.
 #
-# Runs at 22:00 BDT (16:00 UTC) so the build + deploy finishes
-# before the 23:59 BDT E2E tests pick up the fresh deployment.
+# What it does (when fully configured):
+#   1. Validates required secrets and runner tooling are present
+#   2. Pulls latest source from on-prem TFS
+#   3. Builds the .NET solution with MSBuild (Release)
+#   4. Backs up the current IIS deployment
+#   5. Deploys the new build over a UNC share with a graceful-offline marker
+#   6. Verifies the new deployment by hitting a health endpoint
+#   7. Uploads build logs + publish manifest as artifacts
+#   8. Logs status to NAPCO Nucleus memory for the morning Daily Report
+#
+# Default schedule: 22:00 BDT (16:00 UTC) so the deploy completes before
+# the 23:59 BDT E2E test window.
+#
+# Required GHA secrets (workflow exits early with a clear message if any
+# are missing — see CICD-Readiness-Checklist.pdf):
+#   TFS_URL, TFS_PROJECT_PATH, TFS_USERNAME, TFS_PASSWORD,
+#   SOLUTION_FILE, IIS_DEPLOY_PATH
+#
+# Optional: IIS_HEALTH_URL (e.g. https://mvpaccess.company.local/health)
+# — when set, post-deploy verification hits this URL and fails the run
+# if the response is not 200 within 60 seconds.
 
 on:
   schedule:
     - cron: '0 16 * * *'    # 22:00 BDT
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'Run mode'
+        required: true
+        default: 'deploy'
+        type: choice
+        options:
+          - validate    # check secrets + tooling + network only; no build
+          - dry-run     # validate + pull + build; skip deploy
+          - deploy      # full pipeline (default)
 
 concurrency:
   group: mvp-access-build-deploy
   cancel-in-progress: false
 
+env:
+  RUN_MODE: ${{ github.event.inputs.mode || 'deploy' }}
+
 jobs:
   build-deploy:
     name: Pull, Build, Deploy
-    # Shares the MVPACCESS self-hosted runner with the agent + test
-    # workflows. The 22:00 BDT schedule is offset from the 02:00/04:00
-    # test slots, so concurrency with the test workflows is unlikely.
     runs-on: [self-hosted, Windows]
     timeout-minutes: 60
 
     env:
-      # TFS
-      TFS_URL:           ${{ secrets.TFS_URL }}            # e.g. http://tfs.company.local:8080/tfs/DefaultCollection
-      TFS_PROJECT_PATH:  ${{ secrets.TFS_PROJECT_PATH }}   # e.g. $/MVPAccess/Main
+      # TFS — source pull
+      TFS_URL:           ${{ secrets.TFS_URL }}
+      TFS_PROJECT_PATH:  ${{ secrets.TFS_PROJECT_PATH }}
       TFS_USERNAME:      ${{ secrets.TFS_USERNAME }}
       TFS_PASSWORD:      ${{ secrets.TFS_PASSWORD }}
 
       # Build
-      SOLUTION_FILE:     ${{ secrets.SOLUTION_FILE }}      # e.g. src\MVPAccess.sln (relative to workspace root)
+      SOLUTION_FILE:     ${{ secrets.SOLUTION_FILE }}
 
       # Deploy
-      IIS_DEPLOY_PATH:   ${{ secrets.IIS_DEPLOY_PATH }}    # e.g. \\iis-server\c$\inetpub\wwwroot\MVPAccess
+      IIS_DEPLOY_PATH:   ${{ secrets.IIS_DEPLOY_PATH }}
+      IIS_HEALTH_URL:    ${{ secrets.IIS_HEALTH_URL }}
 
-      # Email
+      # Notifications
       SMTP_HOST:         ${{ secrets.SMTP_HOST }}
       SMTP_PORT:         ${{ secrets.SMTP_PORT }}
       SMTP_USER:         ${{ secrets.SMTP_USER }}
@@ -49,7 +75,94 @@ jobs:
       TEAM_EMAILS:       ${{ secrets.TEAM_EMAILS }}
 
     steps:
+      # ───────────────────────────────────────────────────────────────
+      - name: Pre-flight — validate secrets + runner tooling
+        shell: pwsh
+        run: |
+          $required = @{
+            TFS_URL          = $env:TFS_URL
+            TFS_PROJECT_PATH = $env:TFS_PROJECT_PATH
+            TFS_USERNAME     = $env:TFS_USERNAME
+            TFS_PASSWORD     = $env:TFS_PASSWORD
+            SOLUTION_FILE    = $env:SOLUTION_FILE
+            IIS_DEPLOY_PATH  = $env:IIS_DEPLOY_PATH
+          }
+          $missing = @()
+          foreach ($k in $required.Keys) {
+            if ([string]::IsNullOrWhiteSpace($required[$k])) { $missing += $k }
+          }
+          if ($missing.Count -gt 0) {
+            Write-Host "::error::Missing required GHA secret(s): $($missing -join ', ')"
+            Write-Host ""
+            Write-Host "To fix: add the secret(s) at"
+            Write-Host "  https://github.com/${{ github.repository }}/settings/secrets/actions"
+            Write-Host ""
+            Write-Host "See docs/CICD-Readiness-Checklist.pdf for the full list and"
+            Write-Host "owner/effort guidance. Pipeline cannot proceed until these are set."
+            throw "Pre-flight failed: $($missing.Count) missing secret(s)."
+          }
+          Write-Host "All 6 required secrets present."
+
+          # Runner tooling — locate tf.exe + MSBuild
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          if (-not (Test-Path $vswhere)) {
+            throw "vswhere.exe not found. Fix: install Visual Studio Build Tools on this runner."
+          }
+          $vsRoot = & $vswhere -latest -property installationPath
+          if (-not $vsRoot) {
+            throw "No Visual Studio installation found. Fix: install Visual Studio Build Tools."
+          }
+          $tfExe = Get-ChildItem $vsRoot -Recurse -Filter "tf.exe" -ErrorAction SilentlyContinue |
+                   Where-Object { $_.FullName -like "*CommonExtensions\Microsoft\TeamFoundation\Team Explorer\*" } |
+                   Select-Object -First 1 -ExpandProperty FullName
+          if (-not $tfExe) {
+            throw "tf.exe not found. Fix: install the 'Team Explorer' component of Visual Studio (not just Build Tools)."
+          }
+          $msbuild = & $vswhere -latest -requires Microsoft.Component.MSBuild `
+                     -find "MSBuild\**\Bin\MSBuild.exe" | Select-Object -First 1
+          if (-not $msbuild) {
+            throw "MSBuild not found. Fix: install the MSBuild component of Visual Studio Build Tools."
+          }
+          "TF_EXE=$tfExe"        | Out-File -FilePath $env:GITHUB_ENV -Append
+          "MSBUILD_EXE=$msbuild" | Out-File -FilePath $env:GITHUB_ENV -Append
+          Write-Host "tf.exe : $tfExe"
+          Write-Host "MSBuild: $msbuild"
+          Write-Host "Pre-flight passed. Mode: $env:RUN_MODE"
+
+      # ───────────────────────────────────────────────────────────────
+      - name: Validate network reachability (TFS + IIS)
+        shell: pwsh
+        run: |
+          # TFS reachability
+          try {
+            $uri = [uri]$env:TFS_URL
+            $tcp = [System.Net.Sockets.TcpClient]::new()
+            $iar = $tcp.BeginConnect($uri.Host, $uri.Port, $null, $null)
+            if (-not $iar.AsyncWaitHandle.WaitOne(5000)) {
+              throw "Timeout connecting to $($uri.Host):$($uri.Port)"
+            }
+            $tcp.EndConnect($iar)
+            $tcp.Close()
+            Write-Host "TFS reachable: $($uri.Host):$($uri.Port)"
+          } catch {
+            throw "TFS unreachable at $env:TFS_URL : $_  Fix: check VPN / firewall / TFS_URL value."
+          }
+
+          # IIS UNC reachability
+          if (-not (Test-Path $env:IIS_DEPLOY_PATH)) {
+            throw "IIS UNC path not reachable: $env:IIS_DEPLOY_PATH  Fix: verify SMB perms for the runner service account; check the path is correct."
+          }
+          Write-Host "IIS deploy path reachable: $env:IIS_DEPLOY_PATH"
+
+          if ($env:RUN_MODE -eq 'validate') {
+            Write-Host ""
+            Write-Host "Mode=validate — pre-flight + network checks passed. Stopping before pull/build/deploy."
+            "VALIDATE_EXIT=1" | Out-File -FilePath $env:GITHUB_ENV -Append
+          }
+
+      # ───────────────────────────────────────────────────────────────
       - name: Prepare workspace
+        if: env.VALIDATE_EXIT != '1'
         shell: pwsh
         run: |
           $workspace = "C:\ci-workspace\MVPAccess"
@@ -58,106 +171,146 @@ jobs:
           "WORKSPACE=$workspace" | Out-File -FilePath $env:GITHUB_ENV -Append
           Write-Host "Workspace: $workspace"
 
-      - name: Locate tf.exe + MSBuild
-        shell: pwsh
-        run: |
-          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
-          if (-not (Test-Path $vswhere)) {
-            throw "vswhere.exe not found. Install Visual Studio Build Tools on this runner."
-          }
-          $vsRoot = & $vswhere -latest -property installationPath
-          if (-not $vsRoot) { throw "No Visual Studio installation found." }
-
-          $tfExe = Get-ChildItem $vsRoot -Recurse -Filter "tf.exe" -ErrorAction SilentlyContinue |
-                   Where-Object { $_.FullName -like "*CommonExtensions\Microsoft\TeamFoundation\Team Explorer\*" } |
-                   Select-Object -First 1 -ExpandProperty FullName
-          if (-not $tfExe) { throw "tf.exe not found. Install the 'Team Explorer' component of Visual Studio." }
-
-          $msbuild = & $vswhere -latest -requires Microsoft.Component.MSBuild `
-                     -find "MSBuild\**\Bin\MSBuild.exe" | Select-Object -First 1
-          if (-not $msbuild) { throw "MSBuild not found. Install the MSBuild component of Visual Studio Build Tools." }
-
-          "TF_EXE=$tfExe"         | Out-File -FilePath $env:GITHUB_ENV -Append
-          "MSBUILD_EXE=$msbuild"  | Out-File -FilePath $env:GITHUB_ENV -Append
-          Write-Host "tf.exe: $tfExe"
-          Write-Host "MSBuild: $msbuild"
-
+      # ───────────────────────────────────────────────────────────────
       - name: Pull latest from TFS
+        if: env.VALIDATE_EXIT != '1'
         shell: pwsh
         run: |
           $ws = "CI-MVPAccess-$env:COMPUTERNAME"
           $login = "$env:TFS_USERNAME,$env:TFS_PASSWORD"
-
-          # Remove any stale workspace registration with the same name
           & $env:TF_EXE workspace /delete $ws /collection:$env:TFS_URL /login:$login /noprompt 2>&1 | Out-Null
-
-          # Create a fresh workspace mapping
           & $env:TF_EXE workspace /new $ws /collection:$env:TFS_URL /login:$login /noprompt
+          if ($LASTEXITCODE -ne 0) { throw "tf workspace /new failed (exit $LASTEXITCODE). Fix: verify TFS_USERNAME/TFS_PASSWORD have permission on the collection." }
           & $env:TF_EXE workfold /map $env:TFS_PROJECT_PATH $env:WORKSPACE `
               /workspace:$ws /collection:$env:TFS_URL /login:$login
-
-          # Get latest
+          if ($LASTEXITCODE -ne 0) { throw "tf workfold /map failed. Fix: verify TFS_PROJECT_PATH (e.g. \$/MVPAccess/Main)." }
           & $env:TF_EXE get $env:WORKSPACE /recursive /version:T /noprompt /login:$login
-          if ($LASTEXITCODE -ne 0) { throw "tf get failed with exit code $LASTEXITCODE" }
-          Write-Host "Pulled latest from $env:TFS_PROJECT_PATH into $env:WORKSPACE"
+          if ($LASTEXITCODE -ne 0) { throw "tf get failed (exit $LASTEXITCODE)." }
+          Write-Host "Pulled latest from $env:TFS_PROJECT_PATH"
 
+      # ───────────────────────────────────────────────────────────────
       - name: NuGet restore + build (Release)
+        if: env.VALIDATE_EXIT != '1'
         shell: pwsh
         run: |
           $sln = Join-Path $env:WORKSPACE $env:SOLUTION_FILE
-          if (-not (Test-Path $sln)) { throw "Solution not found: $sln" }
-
+          if (-not (Test-Path $sln)) {
+            throw "Solution not found: $sln. Fix: verify SOLUTION_FILE secret is the correct path relative to the repo root."
+          }
           Write-Host "Restoring packages..."
-          & $env:MSBUILD_EXE $sln /t:Restore /p:Configuration=Release /m /nologo
-          if ($LASTEXITCODE -ne 0) { throw "NuGet restore failed." }
+          & $env:MSBUILD_EXE $sln /t:Restore /p:Configuration=Release /m /nologo `
+              /flp:LogFile=$env:WORKSPACE\restore.log
+          if ($LASTEXITCODE -ne 0) { throw "NuGet restore failed. See restore.log artifact." }
 
-          Write-Host "Building (Release) + publishing to file system..."
+          Write-Host "Building (Release) + publishing..."
           $publish = Join-Path $env:WORKSPACE "publish"
           & $env:MSBUILD_EXE $sln `
               /p:Configuration=Release `
               /p:DeployOnBuild=true `
               /p:WebPublishMethod=FileSystem `
               /p:publishUrl="$publish" `
-              /m /nologo
-          if ($LASTEXITCODE -ne 0) { throw "Build failed." }
+              /m /nologo `
+              /flp:LogFile=$env:WORKSPACE\build.log
+          if ($LASTEXITCODE -ne 0) { throw "Build failed. See build.log artifact." }
 
+          # Verify publish output contains expected web artifacts
+          $expected = @("Web.config")
+          foreach ($f in $expected) {
+            if (-not (Test-Path (Join-Path $publish $f))) {
+              throw "Build claimed success but $f missing from publish/. Fix: confirm SOLUTION_FILE points to the web project or solution that emits a publishable site."
+            }
+          }
+          $size_mb = "{0:N1}" -f (((Get-ChildItem $publish -Recurse | Measure-Object Length -Sum).Sum) / 1MB)
           "PUBLISH_DIR=$publish" | Out-File -FilePath $env:GITHUB_ENV -Append
-          Write-Host "Build output: $publish"
+          "PUBLISH_SIZE_MB=$size_mb" | Out-File -FilePath $env:GITHUB_ENV -Append
+          Write-Host "Build output: $publish ($size_mb MB)"
 
-      - name: Deploy to IIS (UNC copy)
+          # Manifest of files (lightweight) for the artifact
+          Get-ChildItem $publish -Recurse -File |
+            Select-Object FullName, Length, LastWriteTime |
+            Export-Csv -Path $env:WORKSPACE\publish-manifest.csv -NoTypeInformation
+          Write-Host "Wrote $env:WORKSPACE\publish-manifest.csv"
+
+          if ($env:RUN_MODE -eq 'dry-run') {
+            Write-Host ""
+            Write-Host "Mode=dry-run — build succeeded. Skipping deploy."
+            "DRYRUN_EXIT=1" | Out-File -FilePath $env:GITHUB_ENV -Append
+          }
+
+      # ───────────────────────────────────────────────────────────────
+      - name: Backup current deploy + deploy new build
+        if: env.VALIDATE_EXIT != '1' && env.DRYRUN_EXIT != '1'
         shell: pwsh
         run: |
-          if (-not (Test-Path $env:PUBLISH_DIR)) {
-            throw "Publish folder missing: $env:PUBLISH_DIR"
-          }
-          if (-not (Test-Path $env:IIS_DEPLOY_PATH)) {
-            throw "IIS target UNC path not reachable: $env:IIS_DEPLOY_PATH (check SMB perms + network)"
-          }
-
-          # Optional graceful shutdown: drop an app_offline.htm on target
-          # so IIS returns 503 during copy instead of serving half-copied files.
           $offline = Join-Path $env:IIS_DEPLOY_PATH "app_offline.htm"
           "<h1>MVP Access — deploying, back in ~30s</h1>" | Out-File -FilePath $offline -Encoding utf8 -Force
 
+          # Backup the current deploy (so a failed deploy is recoverable)
+          $backupRoot = Split-Path $env:IIS_DEPLOY_PATH -Parent
+          $backupDir = Join-Path $backupRoot "_previous_$(Get-Date -Format 'yyyyMMdd_HHmmss')"
           try {
-            # /MIR mirrors source -> target (deletes removed files).
-            # Exclude App_Data to preserve uploads/logs.
+            Write-Host "Backing up current deploy to: $backupDir"
+            robocopy $env:IIS_DEPLOY_PATH $backupDir /MIR /XD App_Data /XF app_offline.htm /R:3 /W:5 /NP | Out-Null
+            if ($LASTEXITCODE -ge 8) { throw "Backup robocopy failed (exit $LASTEXITCODE)" }
+            "BACKUP_DIR=$backupDir" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+            Write-Host "Deploying new build..."
             robocopy $env:PUBLISH_DIR $env:IIS_DEPLOY_PATH /MIR /XD App_Data /R:3 /W:5 /NP
-            # robocopy exit codes 0-7 are success; 8+ is failure
-            if ($LASTEXITCODE -ge 8) { throw "robocopy failed (exit $LASTEXITCODE)" }
+            if ($LASTEXITCODE -ge 8) {
+              throw "Deploy robocopy failed (exit $LASTEXITCODE). Backup retained at $backupDir for manual rollback."
+            }
+            Write-Host "Deploy complete: $env:IIS_DEPLOY_PATH"
           }
           finally {
-            # Always remove the offline marker so IIS serves the new app
             if (Test-Path $offline) { Remove-Item $offline -Force }
           }
-          Write-Host "Deploy complete: $env:IIS_DEPLOY_PATH"
 
+      # ───────────────────────────────────────────────────────────────
+      - name: Post-deploy health check
+        if: env.VALIDATE_EXIT != '1' && env.DRYRUN_EXIT != '1'
+        shell: pwsh
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:IIS_HEALTH_URL)) {
+            Write-Host "IIS_HEALTH_URL not set — skipping post-deploy health check."
+            Write-Host "(Optional: add IIS_HEALTH_URL secret for stronger deploy verification.)"
+            return
+          }
+          $deadline = (Get-Date).AddSeconds(60)
+          $healthy = $false
+          while ((Get-Date) -lt $deadline) {
+            try {
+              $r = Invoke-WebRequest -Uri $env:IIS_HEALTH_URL -UseBasicParsing -TimeoutSec 10
+              if ($r.StatusCode -eq 200) {
+                $healthy = $true
+                Write-Host "Health check OK: $env:IIS_HEALTH_URL returned 200"
+                break
+              }
+            } catch {
+              Start-Sleep -Seconds 5
+            }
+          }
+          if (-not $healthy) {
+            throw "Health check failed after 60s. New build may be broken; previous deploy is at $env:BACKUP_DIR for manual rollback."
+          }
+
+      # ───────────────────────────────────────────────────────────────
+      - name: Upload build artifacts (logs + manifest)
+        if: always() && env.VALIDATE_EXIT != '1'
+        uses: actions/upload-artifact@v4
+        with:
+          name: mvpaccess-cicd-${{ github.run_number }}
+          path: |
+            C:\ci-workspace\MVPAccess\restore.log
+            C:\ci-workspace\MVPAccess\build.log
+            C:\ci-workspace\MVPAccess\publish-manifest.csv
+          if-no-files-found: warn
+          retention-days: 14
+
+      # ───────────────────────────────────────────────────────────────
       - name: Log CICD status to NAPCO Nucleus memory
         # Writes one row to nucleus_memory.db so the morning Daily
         # Report can surface last night's build/deploy status via
         # recall_activity(task_name="mvpaccess-cicd", limit=1).
-        # Replaces the old per-workflow email — the team gets one
-        # consolidated report email per day from daily-report.yml.
         if: always()
         shell: pwsh
         run: |
@@ -172,9 +325,12 @@ jobs:
           try {
             $runUrl = "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
             $details = @{
-              run_id = "${{ github.run_id }}"
-              run_url = $runUrl
-              runner = $env:COMPUTERNAME
+              run_id        = "${{ github.run_id }}"
+              run_url       = $runUrl
+              runner        = $env:COMPUTERNAME
+              mode          = $env:RUN_MODE
+              publish_size_mb = $env:PUBLISH_SIZE_MB
+              backup_dir    = $env:BACKUP_DIR
               timestamp_bdt = (Get-Date -Format "yyyy-MM-dd HH:mm")
             } | ConvertTo-Json -Compress
             $escaped = $details.Replace("'", "''")
@@ -186,7 +342,7 @@ jobs:
             git add nucleus_memory.db
             git diff --staged --quiet
             if ($LASTEXITCODE -ne 0) {
-              git commit -m "mvpaccess-cicd: $(Get-Date -Format 'yyyy-MM-dd HH:mm') UTC — ${{ job.status }}"
+              git commit -m "mvpaccess-cicd: $(Get-Date -Format 'yyyy-MM-dd HH:mm') UTC — ${{ job.status }} (mode=$env:RUN_MODE)"
               git pull --rebase origin main
               git push
             } else {
