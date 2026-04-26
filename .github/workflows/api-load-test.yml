@@ -5,8 +5,8 @@ name: API Load Test
 
 on:
   schedule:
-    # Sunday 21:00 UTC = Monday 03:00 BDT (weekly).
-    - cron: '0 21 * * 0'
+    # 02:00 BDT daily = 20:00 UTC the previous day.
+    - cron: '0 20 * * *'
   workflow_dispatch:
     inputs:
       dry_run:

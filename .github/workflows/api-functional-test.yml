@@ -10,6 +10,9 @@ name: API Functional Test
 # MVP_PROJECTS_ROOT points tools_legacy at the parent so imports resolve.
 
 on:
+  schedule:
+    # 02:00 BDT daily = 20:00 UTC the previous day.
+    - cron: '0 20 * * *'
   workflow_dispatch:
     inputs:
       dry_run:
