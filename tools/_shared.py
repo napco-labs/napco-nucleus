@@ -78,7 +78,11 @@ try:
 except ImportError as _test_infra_err:
     logger.warning(
         f"Sibling MVP-Access-API-Test/agent not on sys.path — "
-        f"test-orchestration tools will fail at call time: {_test_infra_err}"
+        f"test-orchestration tools will fail at call time: {_test_infra_err} "
+        f"(resolved path: {_API_AGENT_DIR}, "
+        f"exists={os.path.isdir(_API_AGENT_DIR)}, "
+        f"PROJECTS_ROOT={PROJECTS_ROOT}, "
+        f"MVP_PROJECTS_ROOT env={os.getenv('MVP_PROJECTS_ROOT') or '(unset)'})"
     )
     config = None  # type: ignore[assignment]
     run_load_tests_multi = run_api_tests = run_integration_tests = None  # type: ignore[assignment]

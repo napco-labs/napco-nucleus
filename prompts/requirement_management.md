@@ -2,7 +2,9 @@
 
 Dimension: Project Management. Fires every 2 hours during business hours.
 
-Goal: collect raw client text from three sources (allowlisted requirement emails, Google Drive meeting recordings + PDFs, Teams channel messages forwarded by Power Automate into the same email inbox), split each distinct requirement into ~3-hour workable tasks, and open each as a GitLab issue with idempotent dedup.
+Goal: collect raw client text from allowlisted requirement emails (currently only `khasan@ael-bd.com`), split each distinct requirement into ~3-hour workable tasks, and open each as a GitLab issue with idempotent dedup.
+
+> **Active inputs this iteration:** email only. Google Drive ingestion and Teams digest are disabled on purpose for current testing — DO NOT call `ingest_drive_files` and DO NOT call `send_teams_digest` even if `TEAMS_WEBHOOK_URL` is set.
 
 ---
 
@@ -16,8 +18,9 @@ Goal: collect raw client text from three sources (allowlisted requirement emails
 
 ### 1. Ingest new inputs
 
-- `poll_requirement_emails()` — fetches new emails from allowlisted senders into `data/requirements/inbox/email/`. If it errors (missing env vars, auth failure), report and continue — Drive is still processable.
-- `ingest_drive_files()` — downloads new audio/video + PDF from the configured Drive folder. Audio goes through Groq Whisper → `data/requirements/inbox/meetings/`. PDF goes through pypdf → `data/requirements/inbox/documents/`.
+- `poll_requirement_emails()` — fetches new emails from allowlisted senders into `data/requirements/inbox/email/`. If it errors (missing env vars, auth failure), report and stop.
+
+> Drive ingestion (`ingest_drive_files`) is disabled this iteration. Skip it.
 
 ### 2. Read the inbox
 
@@ -44,7 +47,36 @@ For each task produce a dict with:
 - `acceptance_criteria`: 2-5 concrete bullet strings
 - `estimate_hours`: int, usually 3
 - `source_ref`: the `rel_path` of the source file from step 2
-- `labels`: optional list of strings (e.g., `["auth"]`, `["bug"]`)
+- `labels`: REQUIRED list of EXACTLY 2 strings — see Label classification below
+
+#### Label classification (mandatory — every task carries 2 labels)
+
+Pick exactly one feature label AND exactly one type label.
+
+**Feature label (pick one — case-sensitive, must match GitLab exactly):**
+- `accessGroup` — access groups, group permissions, group membership, group-level rules
+- `badgeHolder` — badge issuance / revocation, badge-level data, badge holders
+- `personnel` — personnel records, employee data, personnel-level workflows
+
+If a single requirement clearly affects two features, file ONE task PER feature with the matching label. If you genuinely cannot tell from the source which feature applies, do NOT guess — surface the ambiguity in your final reply and skip that requirement.
+
+**Type label (pick one):**
+- `requirements` — a NEW requirement (no fuzzy match found in step 4, OR the match has no `gitlab_issue_url`)
+- `Bug` — the source language indicates broken behavior: "bug", "defect", "regression", "not working", "wrong result", "error", "broken", "fails when", or equivalent
+- `updatedRequirements` — the source describes a CHANGE to a requirement that already exists in `requirements_seen` (fuzzy match WITH a populated `gitlab_issue_url`)
+
+> **Known limitation today:** `publish_tasks_to_gitlab` dedups fuzzy matches with prior issue URLs and SKIPS them — so an `updatedRequirements`-classified task will be labeled in the dict but no GitLab issue will be filed. Record the classification in your final reply (`updated: N` count) and continue. The dedup-vs-update behavior will change in a follow-up iteration.
+
+Valid `labels` examples:
+- `["accessGroup", "requirements"]` — new requirement on access groups
+- `["badgeHolder", "Bug"]` — bug on badge holders
+- `["personnel", "updatedRequirements"]` — client changed an existing personnel requirement
+
+Invalid (do not produce):
+- `["requirements"]` — missing feature label
+- `["accessGroup"]` — missing type label
+- `["accessGroup", "badgeHolder", "requirements"]` — three labels not allowed
+- `["AccessGroup", "Requirements"]` — case must match GitLab exactly
 
 ### 6. Publish
 
@@ -57,9 +89,11 @@ For each task produce a dict with:
 
 Surface the counts (created / skipped / failed) and any `web_urls` in your final reply so the user can click through.
 
-### 7. Digest + exit
+### 7. Log + exit
 
-If `TEAMS_WEBHOOK_URL` is set, call `send_teams_digest` with a one-line summary like "Requirements processed: N files → M tasks → K new issues in GitLab." Log a final `log_activity` row with the same summary. Exit.
+Log a final `log_activity` row with a one-line summary like "Requirements processed: N files → M tasks → K new issues in GitLab." Exit.
+
+> Teams digest (`send_teams_digest`) is disabled this iteration. Skip it.
 
 ---
 

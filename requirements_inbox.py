@@ -125,6 +125,105 @@ def _body_text(msg: email.message.Message) -> str:
     return ""
 
 
+_DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+
+
+def _attachment_kind(ctype: str, fname: str) -> str | None:
+    """Classify an attachment as pdf / txt / docx / doc, or None if we
+    don't handle this type."""
+    ext = fname.lower().rsplit(".", 1)[-1] if "." in fname else ""
+    if ctype == "application/pdf" or ext == "pdf":
+        return "pdf"
+    if ctype == "text/plain" or ext == "txt":
+        return "txt"
+    if ctype == _DOCX_MIME or ext == "docx":
+        return "docx"
+    if ctype == "application/msword" or ext == "doc":
+        return "doc"
+    return None
+
+
+def _extract_attachment_text(payload: bytes, kind: str, fname: str) -> str:
+    """Convert an attachment's raw bytes to plain text. Per-kind errors
+    are caught and returned as bracketed strings so callers always get
+    SOMETHING usable."""
+    import tempfile
+    from pathlib import Path as _Path
+
+    if kind == "txt":
+        try:
+            return payload.decode("utf-8", "replace").strip()
+        except Exception as e:
+            return f"[txt decode failed: {e}]"
+
+    if kind == "pdf":
+        tmp = tempfile.NamedTemporaryFile(suffix=".pdf", delete=False)
+        try:
+            tmp.write(payload)
+            tmp.close()
+            from drive_ingester import _extract_pdf_text  # lazy
+            return _extract_pdf_text(_Path(tmp.name))
+        except Exception as e:
+            return f"[pypdf extraction failed: {e}]"
+        finally:
+            try:
+                os.unlink(tmp.name)
+            except Exception:
+                pass
+
+    if kind == "docx":
+        tmp = tempfile.NamedTemporaryFile(suffix=".docx", delete=False)
+        try:
+            tmp.write(payload)
+            tmp.close()
+            from docx import Document  # lazy — python-docx
+            doc = Document(tmp.name)
+            return "\n".join(p.text for p in doc.paragraphs).strip()
+        except Exception as e:
+            return f"[python-docx extraction failed: {e}]"
+        finally:
+            try:
+                os.unlink(tmp.name)
+            except Exception:
+                pass
+
+    if kind == "doc":
+        return (f"[unsupported legacy .doc format — "
+                f"please re-send as .docx, .pdf, or .txt. file: {fname}]")
+
+    return f"[unknown attachment kind: {kind}]"
+
+
+def _extract_attachments(msg: email.message.Message) -> list[tuple[str, str]]:
+    """Walk a multipart message for attachments we can extract text
+    from (PDF / TXT / DOCX / DOC). Returns [(filename, extracted_text),
+    ...]. Only parts with Content-Disposition containing 'attachment'
+    are considered — inline body parts are NOT re-processed here."""
+    out: list[tuple[str, str]] = []
+    if not msg.is_multipart():
+        return out
+    for part in msg.walk():
+        disp = (part.get("Content-Disposition") or "").lower()
+        if "attachment" not in disp:
+            continue
+        ctype = (part.get_content_type() or "").lower()
+        fname = _decode(part.get_filename()) or ""
+        kind = _attachment_kind(ctype, fname)
+        if not kind:
+            continue
+        try:
+            payload = part.get_payload(decode=True)
+        except Exception as e:
+            out.append((fname or f"attachment.{kind}",
+                        f"[attachment decode failed: {e}]"))
+            continue
+        if not payload:
+            continue
+        text = _extract_attachment_text(payload, kind, fname)
+        out.append((fname or f"attachment.{kind}", text))
+    return out
+
+
 def _load_state() -> dict:
     if not STATE_FILE.exists():
         return {}
@@ -260,11 +359,22 @@ def poll_requirement_inbox(dry_run: bool = False, since_uid: str | None = None) 
                 received = datetime.now(timezone.utc)
             body = _body_text(msg)
 
+            # Attachments: extract text from PDF / TXT / DOCX / DOC and
+            # append each with a marker so the LLM splitter reads them
+            # together with the inline message text.
+            attachments = _extract_attachments(msg)
+            if attachments:
+                pieces: list[str] = [body] if body.strip() else []
+                for fname, text in attachments:
+                    pieces.append(f"\n\n--- attachment: {fname} ---\n{text}")
+                body = "\n".join(pieces).strip()
+
             preface = (
                 f"# source: email\n"
                 f"# from: {from_addr}\n"
                 f"# received: {received.isoformat()}\n"
-                f"# subject: {subject}\n\n"
+                f"# subject: {subject}\n"
+                f"# attachments: {len(attachments) if attachments else 0}\n\n"
             )
 
             ts = received.strftime("%Y-%m-%dT%H-%M")
