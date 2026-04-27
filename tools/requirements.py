@@ -23,6 +23,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+from datetime import datetime, timezone
 from pathlib import Path
 
 from claude_agent_sdk import tool
@@ -213,7 +214,7 @@ async def publish_tasks_to_gitlab_tool(args):
         return _text({"error": f"GitLab list failed: {e}",
                       "created": [], "skipped_existing": [], "failed": []})
 
-    created, skipped, failed = [], [], []
+    created, updated, skipped, failed = [], [], [], []
 
     for t in tasks:
         if not isinstance(t, dict):
@@ -225,23 +226,17 @@ async def publish_tasks_to_gitlab_tool(args):
             failed.append({"task": t, "error": "title and description required"})
             continue
 
-        # Exact-match dedupe against GitLab open issues.
-        if title.lower() in open_titles:
-            skipped.append({"title": title, "reason": "already open in GitLab"})
-            continue
+        # Pull classification fields up front — we need them BEFORE the
+        # dedup decision because updatedRequirements goes through a
+        # different code path (update existing item, not create new).
+        task_labels = t.get("labels") if isinstance(t.get("labels"), list) else []
+        issue_type = t.get("issue_type") if isinstance(t.get("issue_type"), str) else None
+        is_update = "updatedRequirements" in task_labels
+        updates_prior_iid = t.get("updates_prior_iid")
+        if not isinstance(updates_prior_iid, int):
+            updates_prior_iid = None
 
-        # Fuzzy-match dedupe against memory (catches spelling variants
-        # even if the original GitLab issue is now closed).
-        prior = memory.search_requirements(title, limit=1)
-        if prior and prior[0].get("gitlab_issue_iid"):
-            skipped.append({
-                "title": title,
-                "reason": "already seen in memory",
-                "prior_issue_url": prior[0].get("gitlab_issue_url"),
-            })
-            continue
-
-        # Compose body: description + acceptance criteria + estimate + source.
+        # Compose body sections used by both paths.
         body_parts = [description]
         crit = t.get("acceptance_criteria") or []
         if isinstance(crit, list) and crit:
@@ -254,11 +249,76 @@ async def publish_tasks_to_gitlab_tool(args):
         if src:
             body_parts.append(f"\n*Source: `{src}`*")
         full_body = "\n".join(body_parts)
-        labels = t.get("labels") if isinstance(t.get("labels"), list) else []
-        # issue_type controls GitLab work-item subtype: "task" or "issue".
-        # Defaults to None → GitLab creates a regular Issue work item.
-        issue_type = t.get("issue_type") if isinstance(t.get("issue_type"), str) else None
         source_bucket = _source_bucket(src)
+
+        # ── UPDATE PATH ─────────────────────────────────────────────
+        # updatedRequirements + a known prior iid → mutate the existing
+        # work item. Title swap, label swap, comment with new content.
+        # GitLab logs each change in its system-note timeline so the
+        # full history is preserved automatically.
+        if is_update and updates_prior_iid:
+            if dry_run:
+                updated.append({"iid": updates_prior_iid,
+                                "new_title": title, "dry_run": True})
+                memory.remember_requirement(
+                    title=title, source=source_bucket, source_ref=src,
+                    summary=description[:240],
+                    gitlab_issue_iid=updates_prior_iid,
+                )
+                continue
+            try:
+                gitlab_client.update_issue(
+                    iid=updates_prior_iid,
+                    title=title,
+                    add_labels=["updatedRequirements"],
+                    remove_labels=["requirements"],
+                )
+                ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+                comment_body = (
+                    f"### Update — {ts}\n\n"
+                    f"Title changed to: **{title}**\n\n"
+                    f"{full_body}"
+                )
+                gitlab_client.add_issue_note(
+                    iid=updates_prior_iid, body=comment_body,
+                )
+                # The PUT response lacks web_url consistently across
+                # GitLab versions; reconstruct from the prior memory
+                # row when we can.
+                prior_url = None
+                prior_match = memory.search_requirements(title, limit=1)
+                if prior_match:
+                    prior_url = prior_match[0].get("gitlab_issue_url")
+                updated.append({"iid": updates_prior_iid,
+                                "new_title": title,
+                                "web_url": prior_url})
+                memory.remember_requirement(
+                    title=title, source=source_bucket, source_ref=src,
+                    summary=description[:240],
+                    gitlab_issue_iid=updates_prior_iid,
+                    gitlab_issue_url=prior_url,
+                )
+            except Exception as e:
+                logger.exception(f"update_issue failed for iid={updates_prior_iid}")
+                failed.append({"iid": updates_prior_iid,
+                               "title": title, "error": str(e)})
+            continue
+
+        # ── CREATE PATH ─────────────────────────────────────────────
+        # Standard dedup: skip exact-title matches and fuzzy memory
+        # matches with a known iid.
+        if title.lower() in open_titles:
+            skipped.append({"title": title, "reason": "already open in GitLab"})
+            continue
+
+        prior = memory.search_requirements(title, limit=1)
+        if prior and prior[0].get("gitlab_issue_iid"):
+            skipped.append({
+                "title": title,
+                "reason": "already seen in memory",
+                "prior_issue_url": prior[0].get("gitlab_issue_url"),
+            })
+            continue
 
         if dry_run:
             created.append({"title": title, "iid": "DRY-RUN",
@@ -272,7 +332,7 @@ async def publish_tasks_to_gitlab_tool(args):
 
         try:
             issue = gitlab_client.create_issue(
-                title=title, description=full_body, labels=labels,
+                title=title, description=full_body, labels=task_labels,
                 issue_type=issue_type,
             )
             iid = issue.get("iid")
@@ -290,9 +350,11 @@ async def publish_tasks_to_gitlab_tool(args):
 
     memory.log_activity(
         task_name="requirement-management:publish_gitlab",
-        result=f"created={len(created)} skipped={len(skipped)} failed={len(failed)}",
+        result=(f"created={len(created)} updated={len(updated)} "
+                f"skipped={len(skipped)} failed={len(failed)}"),
         technical_details={
             "created_titles": [c["title"] for c in created],
+            "updated_iids":   [u["iid"]   for u in updated],
             "skipped_count_by_reason": {
                 "open_in_gitlab": sum(1 for s in skipped
                                       if s.get("reason") == "already open in GitLab"),
@@ -305,6 +367,7 @@ async def publish_tasks_to_gitlab_tool(args):
 
     return _text({
         "created": created,
+        "updated": updated,
         "skipped_existing": skipped,
         "failed": failed,
         "dry_run": dry_run,

@@ -30,9 +30,15 @@ Goal: collect raw client text from allowlisted requirement emails (currently onl
 
 For each file, read the content and identify every distinct requirement. A "requirement" is a user-visible capability, change, bug fix, or deliverable the client asked for — NOT process chatter, greetings, scheduling, or small-talk. Ignore those.
 
-### 4. Dedup against prior work
+### 4. Dedup vs. update — compare against prior work
 
-**Before proposing any task, call `search_requirements("<keyword from the requirement>")`.** If the result includes a row with a populated `gitlab_issue_url`, the requirement was already filed — skip it and tell the user in the final summary ("skipped N already-filed requirements").
+**Before proposing any task, call `search_requirements("<keyword from the requirement>")`.** Then:
+
+- **No fuzzy match, OR match has no `gitlab_issue_url`** → this is a NEW requirement. Proceed to step 5 with type `requirements` (or `Bug` if the source language is bug-shaped).
+- **Fuzzy match WITH `gitlab_issue_url` AND the source describes the SAME thing** (no material change — same scope, same numbers, same endpoints) → SKIP. Count it in the final summary as "skipped N already-filed requirements".
+- **Fuzzy match WITH `gitlab_issue_url` BUT the source describes a CHANGE** (different scope/numbers/endpoints, added/removed behavior) → DO NOT skip. Treat it as an update: proceed to step 5 with type `updatedRequirements` and capture the prior issue's `gitlab_issue_iid` for `updates_prior_iid`. The publish tool will then EDIT the existing GitLab work item in place (new title, swap labels, post a comment with the new content) — it does NOT create a new item. GitLab's native timeline preserves the full change history.
+
+The "material change" test is a judgment call: read the prior summary in memory (returned by `search_requirements`) and compare to the current source. If a developer reading both side-by-side would say "the spec moved", it's an update; if they'd say "they're talking about the same item", it's a skip.
 
 ### 5. Split into 3-hour tasks
 
@@ -42,13 +48,14 @@ For each file, read the content and identify every distinct requirement. A "requ
 - Never invent requirements not present in the source text.
 
 For each task produce a dict with:
-- `title`: imperative, <70 chars (e.g., "Add SSO login path")
+- `title`: imperative, <70 chars (e.g., "Add SSO login path"). For `updatedRequirements` tasks, this is the NEW title — it will REPLACE the existing work item's title (the old title is preserved in GitLab's system-note timeline).
 - `description`: why + enough context from the source that a developer can start without asking back
 - `acceptance_criteria`: 2-5 concrete bullet strings
 - `estimate_hours`: int, usually 3
 - `source_ref`: the `rel_path` of the source file from step 2
 - `labels`: REQUIRED list of EXACTLY 2 strings — see Label classification below
 - `issue_type`: REQUIRED string — `"task"` for `requirements` / `updatedRequirements`, `"issue"` for `Bug`. This controls the GitLab work-item subtype.
+- `updates_prior_iid`: REQUIRED int for `updatedRequirements` tasks ONLY — the `gitlab_issue_iid` of the existing work item being revised, taken from step 4's fuzzy match. Omit for `requirements` and `Bug`.
 
 #### Label classification (mandatory — every task carries 2 labels)
 
@@ -64,9 +71,7 @@ If a single requirement clearly affects two features, file ONE task PER feature 
 **Type label (pick one):**
 - `requirements` — a NEW requirement (no fuzzy match found in step 4, OR the match has no `gitlab_issue_url`). Set `issue_type="task"`.
 - `Bug` — the source language indicates broken behavior: "bug", "defect", "regression", "not working", "wrong result", "error", "broken", "fails when", or equivalent. Set `issue_type="issue"`.
-- `updatedRequirements` — the source describes a CHANGE to a requirement that already exists in `requirements_seen` (fuzzy match WITH a populated `gitlab_issue_url`). Set `issue_type="task"`.
-
-> **Known limitation today:** `publish_tasks_to_gitlab` dedups fuzzy matches with prior issue URLs and SKIPS them — so an `updatedRequirements`-classified task will be labeled in the dict but no GitLab issue will be filed. Record the classification in your final reply (`updated: N` count) and continue. The dedup-vs-update behavior will change in a follow-up iteration.
+- `updatedRequirements` — the source describes a CHANGE to a requirement that already exists in `requirements_seen` (fuzzy match WITH a populated `gitlab_issue_url`). Set `issue_type="task"` and provide `updates_prior_iid` so the publish tool edits the existing work item in place (new title, swap labels from `requirements` to `updatedRequirements`, post a comment with the new content).
 
 Valid `labels` + `issue_type` examples:
 - `labels=["accessGroup", "requirements"]`, `issue_type="task"` — new task on access groups

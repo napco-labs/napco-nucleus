@@ -141,6 +141,69 @@ def list_open_issue_titles(search: str | None = None, per_page: int = 100) -> li
     return titles
 
 
+def update_issue(
+    iid: int,
+    title: str | None = None,
+    description: str | None = None,
+    add_labels: Iterable[str] | None = None,
+    remove_labels: Iterable[str] | None = None,
+) -> dict:
+    """PUT /projects/:id/issues/:iid. Updates a single field set on an
+    existing work item. GitLab automatically writes a system note for
+    every change (title diff, label add, label remove), so the timeline
+    becomes our change-log without any extra work on our side.
+
+    Pass title to replace the current title. Pass add_labels /
+    remove_labels (iterables of label names) to mutate labels without
+    overwriting unrelated ones. Returns the decoded JSON body of the
+    updated issue."""
+    host, project, token, _ = _config()
+    url = f"{host}/api/v4/projects/{project}/issues/{iid}"
+    payload: dict = {}
+    if title is not None:
+        payload["title"] = title
+    if description is not None:
+        payload["description"] = description
+    if add_labels:
+        payload["add_labels"] = ",".join(add_labels)
+    if remove_labels:
+        payload["remove_labels"] = ",".join(remove_labels)
+    if not payload:
+        return {"iid": iid, "noop": True}
+    r = requests.put(
+        url,
+        headers={"PRIVATE-TOKEN": token},
+        json=payload,
+        timeout=DEFAULT_TIMEOUT_S,
+    )
+    if not r.ok:
+        raise GitLabAPIError(
+            f"PUT {url} -> {r.status_code}: {r.text[:400]}"
+        )
+    return r.json()
+
+
+def add_issue_note(iid: int, body: str) -> dict:
+    """POST /projects/:id/issues/:iid/notes. Posts a comment on the
+    issue. The note is timestamped server-side and shown in the issue's
+    discussion timeline alongside the system notes that update_issue
+    produces. Used to log the source content of a revision next to the
+    label/title swap."""
+    host, project, token, _ = _config()
+    url = f"{host}/api/v4/projects/{project}/issues/{iid}/notes"
+    r = requests.post(
+        url,
+        headers={"PRIVATE-TOKEN": token},
+        json={"body": body},
+        timeout=DEFAULT_TIMEOUT_S,
+    )
+    if not r.ok:
+        raise GitLabAPIError(
+            f"POST {url} -> {r.status_code}: {r.text[:400]}"
+        )
+    return r.json()
+
+
 def project_identity() -> dict:
     """Smoke-test helper: returns {host, project, name, web_url} so the
     caller can verify creds + project ID resolve before any writes."""
