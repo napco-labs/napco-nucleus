@@ -30,15 +30,9 @@ Goal: collect raw client text from allowlisted requirement emails (currently onl
 
 For each file, read the content and identify every distinct requirement. A "requirement" is a user-visible capability, change, bug fix, or deliverable the client asked for — NOT process chatter, greetings, scheduling, or small-talk. Ignore those.
 
-### 4. Dedup vs. update — compare against prior work
+### 4. Dedup against prior work
 
-**Before proposing any task, call `search_requirements("<keyword from the requirement>")`.** Then:
-
-- **No fuzzy match, OR match has no `gitlab_issue_url`** → this is a NEW requirement. Proceed to step 5 with type `requirements` (or `Bug` if the source language is bug-shaped).
-- **Fuzzy match WITH `gitlab_issue_url` AND the source text describes the SAME thing** (no material change — same scope, same numbers, same endpoints) → SKIP. Count it in the final summary as "skipped N already-filed requirements".
-- **Fuzzy match WITH `gitlab_issue_url` BUT the source text describes a CHANGE** (different number, different scope, added/removed behavior, modified endpoint, etc.) → DO NOT skip. Treat it as an update: proceed to step 5 with type `updatedRequirements` and capture the prior issue's IID + URL — you will pass them through so the new task can back-reference the original.
-
-The "material change" test is a judgment call: read the prior summary in memory (returned by `search_requirements`) and compare to the current source. If a developer reading both side-by-side would say "the spec moved", it's an update; if they'd say "they're talking about the same item", it's a skip.
+**Before proposing any task, call `search_requirements("<keyword from the requirement>")`.** If the result includes a row with a populated `gitlab_issue_url`, the requirement was already filed — skip it and tell the user in the final summary ("skipped N already-filed requirements").
 
 ### 5. Split into 3-hour tasks
 
@@ -55,7 +49,6 @@ For each task produce a dict with:
 - `source_ref`: the `rel_path` of the source file from step 2
 - `labels`: REQUIRED list of EXACTLY 2 strings — see Label classification below
 - `issue_type`: REQUIRED string — `"task"` for `requirements` / `updatedRequirements`, `"issue"` for `Bug`. This controls the GitLab work-item subtype.
-- `updates_prior_iid`: REQUIRED for `updatedRequirements` only — int, the IID of the prior GitLab issue this update supersedes (from step 4's fuzzy match). Omit for `requirements` and `Bug`.
 
 #### Label classification (mandatory — every task carries 2 labels)
 

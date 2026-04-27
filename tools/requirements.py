@@ -225,40 +225,24 @@ async def publish_tasks_to_gitlab_tool(args):
             failed.append({"task": t, "error": "title and description required"})
             continue
 
-        # Pull labels early — we need to know whether this is an
-        # update before deciding whether to dedup-skip.
-        task_labels = t.get("labels") if isinstance(t.get("labels"), list) else []
-        is_update = "updatedRequirements" in task_labels
-        updates_prior_iid = t.get("updates_prior_iid")
-        if not isinstance(updates_prior_iid, int):
-            updates_prior_iid = None
+        # Exact-match dedupe against GitLab open issues.
+        if title.lower() in open_titles:
+            skipped.append({"title": title, "reason": "already open in GitLab"})
+            continue
 
-        if not is_update:
-            # Standard dedup applies. Exact-match dedupe against GitLab
-            # open issues.
-            if title.lower() in open_titles:
-                skipped.append({"title": title, "reason": "already open in GitLab"})
-                continue
-
-            # Fuzzy-match dedupe against memory (catches spelling variants
-            # even if the original GitLab issue is now closed).
-            prior = memory.search_requirements(title, limit=1)
-            if prior and prior[0].get("gitlab_issue_iid"):
-                skipped.append({
-                    "title": title,
-                    "reason": "already seen in memory",
-                    "prior_issue_url": prior[0].get("gitlab_issue_url"),
-                })
-                continue
+        # Fuzzy-match dedupe against memory (catches spelling variants
+        # even if the original GitLab issue is now closed).
+        prior = memory.search_requirements(title, limit=1)
+        if prior and prior[0].get("gitlab_issue_iid"):
+            skipped.append({
+                "title": title,
+                "reason": "already seen in memory",
+                "prior_issue_url": prior[0].get("gitlab_issue_url"),
+            })
+            continue
 
         # Compose body: description + acceptance criteria + estimate + source.
         body_parts = [description]
-        if is_update and updates_prior_iid:
-            body_parts.insert(
-                0,
-                f"_Updates prior task: #{updates_prior_iid} — see "
-                f"history for original spec._\n",
-            )
         crit = t.get("acceptance_criteria") or []
         if isinstance(crit, list) and crit:
             body_parts.append("\n**Acceptance criteria**")
@@ -270,7 +254,7 @@ async def publish_tasks_to_gitlab_tool(args):
         if src:
             body_parts.append(f"\n*Source: `{src}`*")
         full_body = "\n".join(body_parts)
-        labels = task_labels
+        labels = t.get("labels") if isinstance(t.get("labels"), list) else []
         # issue_type controls GitLab work-item subtype: "task" or "issue".
         # Defaults to None → GitLab creates a regular Issue work item.
         issue_type = t.get("issue_type") if isinstance(t.get("issue_type"), str) else None
