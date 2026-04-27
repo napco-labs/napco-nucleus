@@ -48,6 +48,7 @@ For each task produce a dict with:
 - `estimate_hours`: int, usually 3
 - `source_ref`: the `rel_path` of the source file from step 2
 - `labels`: REQUIRED list of EXACTLY 2 strings — see Label classification below
+- `issue_type`: REQUIRED string — `"task"` for `requirements` / `updatedRequirements`, `"issue"` for `Bug`. This controls the GitLab work-item subtype.
 
 #### Label classification (mandatory — every task carries 2 labels)
 
@@ -61,16 +62,16 @@ Pick exactly one feature label AND exactly one type label.
 If a single requirement clearly affects two features, file ONE task PER feature with the matching label. If you genuinely cannot tell from the source which feature applies, do NOT guess — surface the ambiguity in your final reply and skip that requirement.
 
 **Type label (pick one):**
-- `requirements` — a NEW requirement (no fuzzy match found in step 4, OR the match has no `gitlab_issue_url`)
-- `Bug` — the source language indicates broken behavior: "bug", "defect", "regression", "not working", "wrong result", "error", "broken", "fails when", or equivalent
-- `updatedRequirements` — the source describes a CHANGE to a requirement that already exists in `requirements_seen` (fuzzy match WITH a populated `gitlab_issue_url`)
+- `requirements` — a NEW requirement (no fuzzy match found in step 4, OR the match has no `gitlab_issue_url`). Set `issue_type="task"`.
+- `Bug` — the source language indicates broken behavior: "bug", "defect", "regression", "not working", "wrong result", "error", "broken", "fails when", or equivalent. Set `issue_type="issue"`.
+- `updatedRequirements` — the source describes a CHANGE to a requirement that already exists in `requirements_seen` (fuzzy match WITH a populated `gitlab_issue_url`). Set `issue_type="task"`.
 
 > **Known limitation today:** `publish_tasks_to_gitlab` dedups fuzzy matches with prior issue URLs and SKIPS them — so an `updatedRequirements`-classified task will be labeled in the dict but no GitLab issue will be filed. Record the classification in your final reply (`updated: N` count) and continue. The dedup-vs-update behavior will change in a follow-up iteration.
 
-Valid `labels` examples:
-- `["accessGroup", "requirements"]` — new requirement on access groups
-- `["badgeHolder", "Bug"]` — bug on badge holders
-- `["personnel", "updatedRequirements"]` — client changed an existing personnel requirement
+Valid `labels` + `issue_type` examples:
+- `labels=["accessGroup", "requirements"]`, `issue_type="task"` — new task on access groups
+- `labels=["badgeHolder", "Bug"]`, `issue_type="issue"` — bug filed against badge holders
+- `labels=["personnel", "updatedRequirements"]`, `issue_type="task"` — client changed an existing personnel requirement
 
 Invalid (do not produce):
 - `["requirements"]` — missing feature label

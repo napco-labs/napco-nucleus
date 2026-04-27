@@ -255,6 +255,9 @@ async def publish_tasks_to_gitlab_tool(args):
             body_parts.append(f"\n*Source: `{src}`*")
         full_body = "\n".join(body_parts)
         labels = t.get("labels") if isinstance(t.get("labels"), list) else []
+        # issue_type controls GitLab work-item subtype: "task" or "issue".
+        # Defaults to None → GitLab creates a regular Issue work item.
+        issue_type = t.get("issue_type") if isinstance(t.get("issue_type"), str) else None
         source_bucket = _source_bucket(src)
 
         if dry_run:
@@ -270,6 +273,7 @@ async def publish_tasks_to_gitlab_tool(args):
         try:
             issue = gitlab_client.create_issue(
                 title=title, description=full_body, labels=labels,
+                issue_type=issue_type,
             )
             iid = issue.get("iid")
             url = issue.get("web_url")

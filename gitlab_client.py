@@ -74,11 +74,19 @@ def create_issue(
     labels: Iterable[str] | None = None,
     due_date: str | None = None,
     assignee_ids: Iterable[int] | None = None,
+    issue_type: str | None = None,
 ) -> dict:
-    """Create a single issue. Returns the decoded JSON body on success.
-    Raises GitLabConfigError or GitLabAPIError. Idempotency is the
-    CALLER's responsibility — GitLab happily creates duplicate-titled
-    issues."""
+    """Create a single work item. Returns the decoded JSON body on
+    success. Raises GitLabConfigError or GitLabAPIError. Idempotency is
+    the CALLER's responsibility — GitLab happily creates duplicate-
+    titled issues.
+
+    issue_type controls which work-item subtype gets created:
+        - "issue"     (default) — a regular Issue work item
+        - "task"      — a Task work item (visible under /-/work_items)
+        - "incident"  — an Incident
+        - "test_case" — a Test Case
+    """
     host, project, token, default_labels = _config()
     url = f"{host}/api/v4/projects/{project}/issues"
     payload: dict = {"title": title, "description": description}
@@ -89,6 +97,8 @@ def create_issue(
         payload["due_date"] = due_date
     if assignee_ids:
         payload["assignee_ids"] = list(assignee_ids)
+    if issue_type:
+        payload["issue_type"] = issue_type
 
     r = requests.post(
         url,
