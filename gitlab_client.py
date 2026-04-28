@@ -113,15 +113,18 @@ def create_issue(
     return r.json()
 
 
-def list_open_issue_titles(search: str | None = None, per_page: int = 100) -> list[str]:
-    """Return titles of open issues in the target project — used for
-    pre-publish dedupe so we don't re-create the same task every run."""
+def list_open_issues(search: str | None = None, per_page: int = 100) -> list[dict]:
+    """Return open issues with the fields the publish path needs for
+    dedupe + memory backfill: title, iid, web_url. The caller can derive
+    a title-only set if it wants; carrying iid + web_url lets the
+    dedup-skip branch upsert memory.requirements_seen so a reset DB
+    self-heals on the next run."""
     host, project, token, _ = _config()
     url = f"{host}/api/v4/projects/{project}/issues"
     params: dict = {"state": "opened", "per_page": per_page}
     if search:
         params["search"] = search
-    titles: list[str] = []
+    issues: list[dict] = []
     # One page is enough for Phase 1; if the backlog grows past 100 we'll
     # paginate via the Link header.
     r = requests.get(
@@ -135,10 +138,20 @@ def list_open_issue_titles(search: str | None = None, per_page: int = 100) -> li
             f"GET {url} -> {r.status_code}: {r.text[:400]}"
         )
     for issue in r.json():
-        t = issue.get("title")
-        if t:
-            titles.append(t)
-    return titles
+        title = issue.get("title")
+        if not title:
+            continue
+        issues.append({
+            "title":   title,
+            "iid":     issue.get("iid"),
+            "web_url": issue.get("web_url"),
+        })
+    return issues
+
+
+def list_open_issue_titles(search: str | None = None, per_page: int = 100) -> list[str]:
+    """Backwards-compat shim. Prefer `list_open_issues` for new code."""
+    return [i["title"] for i in list_open_issues(search=search, per_page=per_page)]
 
 
 def update_issue(

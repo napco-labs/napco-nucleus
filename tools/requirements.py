@@ -178,9 +178,11 @@ def _source_bucket(rel_path: str) -> str:
     "merged with GITLAB_DEFAULT_LABELS). Dedup in two layers: (1) "
     "skips any task whose title already exists as an open issue in "
     "GitLab; (2) skips any task whose normalized title is already in "
-    "memory.requirements_seen with a prior issue URL. Writes each "
-    "successful task to requirements_seen so future runs can fuzzy-"
-    "match it. Honors NAPCO_NUCLEUS_DRY_RUN.",
+    "memory.requirements_seen with a prior issue URL. Writes to "
+    "requirements_seen on BOTH paths — newly created issues AND "
+    "exact-title skips — so a reset DB self-heals on the next run "
+    "and updatedRequirements classification can find its prior_iid. "
+    "Honors NAPCO_NUCLEUS_DRY_RUN.",
     {"tasks": list},
 )
 async def publish_tasks_to_gitlab_tool(args):
@@ -192,10 +194,12 @@ async def publish_tasks_to_gitlab_tool(args):
 
     dry_run = os.environ.get("NAPCO_NUCLEUS_DRY_RUN") == "1"
 
-    # 1. Title-based dedupe against currently-open GitLab issues.
+    # 1. Pull open GitLab issues with iid + web_url so the dedup-skip
+    # branch can backfill memory.requirements_seen. Without this, a
+    # reset DB never re-learns prior issues, the fuzzy-match path stays
+    # empty, and updatedRequirements classification can never fire.
     try:
-        open_titles = {t.strip().lower()
-                       for t in gitlab_client.list_open_issue_titles()}
+        open_issues = gitlab_client.list_open_issues()
     except gitlab_client.GitLabConfigError as e:
         memory.log_activity(
             task_name="requirement-management:publish_gitlab",
@@ -205,7 +209,7 @@ async def publish_tasks_to_gitlab_tool(args):
         return _text({"error": f"GitLab config missing: {e}",
                       "created": [], "skipped_existing": [], "failed": []})
     except Exception as e:
-        logger.exception("list_open_issue_titles failed")
+        logger.exception("list_open_issues failed")
         memory.log_activity(
             task_name="requirement-management:publish_gitlab",
             result=f"error:{type(e).__name__}",
@@ -213,6 +217,11 @@ async def publish_tasks_to_gitlab_tool(args):
         )
         return _text({"error": f"GitLab list failed: {e}",
                       "created": [], "skipped_existing": [], "failed": []})
+
+    open_by_title: dict[str, dict] = {
+        i["title"].strip().lower(): i for i in open_issues if i.get("title")
+    }
+    open_titles = set(open_by_title.keys())
 
     created, updated, skipped, failed = [], [], [], []
 
@@ -306,9 +315,25 @@ async def publish_tasks_to_gitlab_tool(args):
 
         # ── CREATE PATH ─────────────────────────────────────────────
         # Standard dedup: skip exact-title matches and fuzzy memory
-        # matches with a known iid.
+        # matches with a known iid. On exact-title skip, ALSO upsert
+        # memory.requirements_seen with the existing issue's iid +
+        # web_url so a reset DB self-heals — this is what unblocks the
+        # updatedRequirements classification on subsequent runs.
         if title.lower() in open_titles:
-            skipped.append({"title": title, "reason": "already open in GitLab"})
+            existing = open_by_title.get(title.lower(), {})
+            memory.remember_requirement(
+                title=title, source=source_bucket, source_ref=src,
+                summary=description[:240],
+                gitlab_issue_iid=existing.get("iid"),
+                gitlab_issue_url=existing.get("web_url"),
+            )
+            skipped.append({
+                "title": title,
+                "reason": "already open in GitLab",
+                "iid": existing.get("iid"),
+                "web_url": existing.get("web_url"),
+                "memory_backfilled": True,
+            })
             continue
 
         prior = memory.search_requirements(title, limit=1)
