@@ -33,17 +33,28 @@ jobs:
       # Sibling test project is checked out under the workspace below,
       # so PROJECTS_ROOT points at the workspace itself.
       MVP_PROJECTS_ROOT: ${{ github.workspace }}
+      # MVP Access API creds — same set the api-functional-test workflow
+      # exports. The sibling pytest config reads these directly from
+      # os.environ (BASE_URL, no API_ prefix).
+      BASE_URL: ${{ secrets.API_BASE_URL }}
+      COMPANY_ID: ${{ secrets.COMPANY_ID }}
+      USER_ID: ${{ secrets.USER_ID }}
+      PASSWORD: ${{ secrets.PASSWORD }}
+      CLIENT_ID: ${{ secrets.CLIENT_ID }}
+      CLIENT_SECRET: ${{ secrets.CLIENT_SECRET }}
+      API_KEY: ${{ secrets.API_KEY }}
+      DEALER_USERNAME: ${{ secrets.DEALER_USERNAME }}
+      DEALER_PASSWORD: ${{ secrets.DEALER_PASSWORD }}
+      DEALER_ACCOUNT: ${{ secrets.DEALER_ACCOUNT }}
       SMTP_HOST: ${{ secrets.SMTP_HOST }}
       SMTP_PORT: ${{ secrets.SMTP_PORT }}
       SMTP_USER: ${{ secrets.SMTP_USER }}
       SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
       SMTP_FROM: ${{ secrets.SMTP_FROM }}
+      SMTP_FROM_NAME: ${{ secrets.SMTP_FROM_NAME }}
+      EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
       TEAM_EMAILS: ${{ secrets.TEAM_EMAILS }}
       TEAMS_WEBHOOK_URL: ${{ secrets.TEAMS_WEBHOOK_URL }}
-      API_BASE_URL: ${{ secrets.API_BASE_URL }}
-      CLIENT_ID: ${{ secrets.CLIENT_ID }}
-      USER_ID: ${{ secrets.USER_ID }}
-      COMPANY_ID: ${{ secrets.COMPANY_ID }}
 
     steps:
       - name: Checkout napco-nucleus
