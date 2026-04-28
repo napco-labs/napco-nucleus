@@ -76,7 +76,14 @@ try:
     import teams_notifier # noqa: E402 — optional digest to Microsoft Teams webhook
     TEST_INFRA_AVAILABLE = True
 except ImportError as _test_infra_err:
-    logger.warning(
+    # Two cases on this branch:
+    #   (a) the sibling path doesn't exist — expected on runners that
+    #       only run req-mgmt / daily-report (not the test-* workflows).
+    #       Demote to debug; nothing's actually wrong.
+    #   (b) the sibling path exists but the import fails — a real
+    #       breakage worth surfacing as a warning, e.g. someone added
+    #       a new dep to MVP-Access-API-Test/agent and forgot to pin it.
+    _msg = (
         f"Sibling MVP-Access-API-Test/agent not on sys.path — "
         f"test-orchestration tools will fail at call time: {_test_infra_err} "
         f"(resolved path: {_API_AGENT_DIR}, "
@@ -84,6 +91,10 @@ except ImportError as _test_infra_err:
         f"PROJECTS_ROOT={PROJECTS_ROOT}, "
         f"MVP_PROJECTS_ROOT env={os.getenv('MVP_PROJECTS_ROOT') or '(unset)'})"
     )
+    if os.path.isdir(_API_AGENT_DIR):
+        logger.warning(_msg)
+    else:
+        logger.debug(_msg)
     config = None  # type: ignore[assignment]
     run_load_tests_multi = run_api_tests = run_integration_tests = None  # type: ignore[assignment]
     _generate_pdf = None  # type: ignore[assignment]
