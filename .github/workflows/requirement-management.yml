@@ -5,13 +5,15 @@ name: Requirement Management
 # same allowlisted email inbox). Claude splits each source into
 # ~3-hour tasks and publishes to GitLab with idempotent dedup.
 #
-# Fires every 2 hours during business hours + workflow_dispatch.
+# Fires twice daily, 12 hours apart, every day + workflow_dispatch.
 
 on:
   schedule:
-    # 3:00 / 5:00 / 7:00 / 9:00 / 11:00 UTC = 9:00 / 11:00 / 13:00 /
-    # 15:00 / 17:00 BDT — a comfortable 5-slot business-hours poll.
-    - cron: '0 3,5,7,9,11 * * 0-4'
+    # 19:00 UTC = 01:00 BDT next day (post-midnight poll, picks up
+    # the day's late + any overnight requirements). 07:00 UTC =
+    # 13:00 BDT (mid-afternoon poll). Two runs/day, every day.
+    - cron: '0 19 * * *'
+    - cron: '0 7 * * *'
   workflow_dispatch:
     inputs:
       dry_run:
