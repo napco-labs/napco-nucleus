@@ -42,11 +42,10 @@ jobs:
       REQ_IMAP_USER: ${{ secrets.REQ_IMAP_USER }}
       REQ_IMAP_PASSWORD: ${{ secrets.REQ_IMAP_PASSWORD }}
       REQ_SENDER_ALLOWLIST: ${{ secrets.REQ_SENDER_ALLOWLIST }}
-      # GitLab backlog destination.
-      GITLAB_HOST: ${{ secrets.GITLAB_HOST }}
-      GITLAB_PROJECT_ID: ${{ secrets.GITLAB_PROJECT_ID }}
-      GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
-      GITLAB_DEFAULT_LABELS: ${{ secrets.GITLAB_DEFAULT_LABELS }}
+      # OpenProject backlog destination (replaces GitLab as of 2026-04-28).
+      OPENPROJECT_URL: ${{ secrets.OPENPROJECT_URL }}
+      OPENPROJECT_PROJECT_ID: ${{ secrets.OPENPROJECT_PROJECT_ID }}
+      OPENPROJECT_API_KEY: ${{ secrets.OPENPROJECT_API_KEY }}
       # Google Drive + Groq Whisper.
       GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
       GDRIVE_AUDIO_FOLDER_ID: ${{ secrets.GDRIVE_AUDIO_FOLDER_ID }}

@@ -118,7 +118,7 @@ def claude_cli_path() -> str | None:
     return raw if os.path.exists(raw) else None
 
 
-# ─── GitLab + Drive + IMAP env sanity ───────────────────────────────
+# ─── OpenProject + Drive + IMAP env sanity ─────────────────────────
 def validate_requirement_env() -> dict:
     """Quick sanity check for the requirement-management dimension.
     Returns a dict of what's set / what's missing. Not an assertion."""
@@ -126,7 +126,7 @@ def validate_requirement_env() -> dict:
         "REQ_IMAP_USER", "REQ_IMAP_PASSWORD", "REQ_SENDER_ALLOWLIST",
         "GDRIVE_AUDIO_FOLDER_ID",
         "GROQ_API_KEY",
-        "GITLAB_PROJECT_ID", "GITLAB_TOKEN",
+        "OPENPROJECT_URL", "OPENPROJECT_PROJECT_ID", "OPENPROJECT_API_KEY",
     ]
     status = {k: bool(os.environ.get(k)) for k in req}
     # Google credentials can come from either a file path (preferred,

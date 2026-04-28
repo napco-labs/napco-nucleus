@@ -69,8 +69,10 @@ CREATE TABLE IF NOT EXISTS requirements_seen (
     source            TEXT NOT NULL,
     source_ref        TEXT NOT NULL DEFAULT '',
     summary           TEXT NOT NULL DEFAULT '',
-    gitlab_issue_iid  INTEGER,
-    gitlab_issue_url  TEXT,
+    -- OpenProject Work Package id + URL (renamed from gitlab_issue_*
+    -- on 2026-04-28 when the backlog backend swapped to OpenProject).
+    wp_id             INTEGER,
+    wp_url            TEXT,
     first_seen        TEXT NOT NULL,
     last_seen         TEXT NOT NULL,
     touch_count       INTEGER NOT NULL DEFAULT 1
@@ -221,11 +223,16 @@ def remember_requirement(
     source: str,
     source_ref: str = "",
     summary: str = "",
-    gitlab_issue_iid: int | None = None,
-    gitlab_issue_url: str | None = None,
+    wp_id: int | None = None,
+    wp_url: str | None = None,
 ) -> bool:
     """Upsert into requirements_seen. Dedup key is (title_norm, source).
-    Merges summary + GitLab link on repeat; increments touch_count."""
+    Merges summary + Work Package link on repeat; increments touch_count.
+
+    `wp_id` / `wp_url` point at the OpenProject Work Package this
+    requirement was published as (renamed from `gitlab_issue_iid` /
+    `gitlab_issue_url` on 2026-04-28 when the backlog backend swapped
+    from GitLab to OpenProject)."""
     if not title:
         return False
     norm = _norm_title(title)
@@ -235,7 +242,7 @@ def remember_requirement(
     try:
         with _conn() as c:
             existing = c.execute(
-                "SELECT id, summary, gitlab_issue_iid, gitlab_issue_url "
+                "SELECT id, summary, wp_id, wp_url "
                 "FROM requirements_seen WHERE title_norm = ? AND source = ?",
                 (norm, source),
             ).fetchone()
@@ -245,21 +252,20 @@ def remember_requirement(
                     "  last_seen = ?, "
                     "  touch_count = touch_count + 1, "
                     "  summary = CASE WHEN ? = '' THEN summary ELSE ? END, "
-                    "  gitlab_issue_iid = COALESCE(?, gitlab_issue_iid), "
-                    "  gitlab_issue_url = COALESCE(?, gitlab_issue_url) "
+                    "  wp_id = COALESCE(?, wp_id), "
+                    "  wp_url = COALESCE(?, wp_url) "
                     "WHERE id = ?",
-                    (ts, summary, summary, gitlab_issue_iid,
-                     gitlab_issue_url, existing["id"]),
+                    (ts, summary, summary, wp_id, wp_url, existing["id"]),
                 )
             else:
                 c.execute(
                     "INSERT INTO requirements_seen "
                     "(title, title_norm, source, source_ref, summary, "
-                    " gitlab_issue_iid, gitlab_issue_url, "
+                    " wp_id, wp_url, "
                     " first_seen, last_seen, touch_count) "
                     "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)",
                     (title.strip(), norm, source, source_ref, summary,
-                     gitlab_issue_iid, gitlab_issue_url, ts, ts),
+                     wp_id, wp_url, ts, ts),
                 )
         return True
     except Exception as e:
@@ -391,7 +397,7 @@ def search_requirements(query: str, limit: int = 20) -> list[dict]:
         with _conn() as c:
             rows = c.execute(
                 "SELECT r.id, r.title, r.source, r.source_ref, r.summary, "
-                "       r.gitlab_issue_iid, r.gitlab_issue_url, "
+                "       r.wp_id, r.wp_url, "
                 "       r.first_seen, r.last_seen, r.touch_count, "
                 "       snippet(requirements_fts, 0, '[', ']', '...', 15) AS hit "
                 "FROM requirements_fts "

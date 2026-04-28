@@ -3,20 +3,22 @@ NAPCO Nucleus — Requirement Management tools.
 
 Four MCP tools for the Project Management dimension:
 
-    poll_requirement_emails  IMAP poll from allowlisted senders
-    ingest_drive_files       Google Drive → Whisper / pypdf → inbox files
-    read_requirement_inbox   Read all raw .txt files Claude will split
-    publish_tasks_to_gitlab  Create GitLab issues (dedup against open +
-                             SQLite requirements_seen)
+    poll_requirement_emails   IMAP poll from allowlisted senders
+    ingest_drive_files        Google Drive → Whisper / pypdf → inbox files
+    read_requirement_inbox    Read all raw .txt files Claude will split
+    publish_tasks_to_backlog  Create OpenProject Work Packages (dedup
+                              against open WPs + SQLite requirements_seen)
 
 Each tool is a thin wrapper around the deterministic module that does
-the real work (requirements_inbox / drive_ingester / gitlab_client).
+the real work (requirements_inbox / drive_ingester / openproject_client).
 Claude-side reasoning happens in the prompts that call these tools.
 
 Memory side-effects (best-effort, never block the primary flow):
     - Every call logs one activity_logs row
-    - publish_tasks_to_gitlab also writes to requirements_seen on
-      success so future runs can dedup via search_requirements
+    - publish_tasks_to_backlog writes to requirements_seen on BOTH the
+      created path AND the dedup-skip-on-already-open path, so a reset
+      DB self-heals and updatedRequirements classification can find its
+      `updates_prior_id` on subsequent runs.
 """
 from __future__ import annotations
 
@@ -168,25 +170,30 @@ def _source_bucket(rel_path: str) -> str:
 
 
 @tool(
-    "publish_tasks_to_gitlab",
-    "Create one GitLab issue per task in the configured project. Each "
-    "task must be a dict with keys: title (required, <70 chars, "
-    "imperative), description (required — why + context), "
-    "acceptance_criteria (optional list of strings, appended as a "
-    "bulleted section), estimate_hours (default 3), source_ref "
-    "(optional — rel_path of the source file), labels (optional list, "
-    "merged with GITLAB_DEFAULT_LABELS). Dedup in two layers: (1) "
-    "skips any task whose title already exists as an open issue in "
-    "GitLab; (2) skips any task whose normalized title is already in "
-    "memory.requirements_seen with a prior issue URL. Writes to "
-    "requirements_seen on BOTH paths — newly created issues AND "
-    "exact-title skips — so a reset DB self-heals on the next run "
-    "and updatedRequirements classification can find its prior_iid. "
-    "Honors NAPCO_NUCLEUS_DRY_RUN.",
+    "publish_tasks_to_backlog",
+    "Create one OpenProject Work Package per task in the mvp-access "
+    "project's backlog. Each task must be a dict with keys: title "
+    "(required, <70 chars, imperative), description (required — why + "
+    "context), acceptance_criteria (optional list of strings, appended "
+    "as a bulleted section), estimate_hours (default 3), source_ref "
+    "(optional — rel_path of the source file), labels (REQUIRED — "
+    "exactly one feature label from {AccessGroup, BadgeHolder, "
+    "Personnel} mapped to the WP's Category field, plus exactly one "
+    "type label from {requirements, Bug, updatedRequirements}), "
+    "issue_type ('task' for requirements/updatedRequirements, 'issue' "
+    "for Bug — sets the WP Type), updates_prior_id (REQUIRED for "
+    "updatedRequirements, the int Work Package id of the prior WP "
+    "being revised). Dedup in two layers: (1) skips any task whose "
+    "title already exists as an open WP; (2) skips any task whose "
+    "normalized title is already in memory.requirements_seen with a "
+    "prior wp_url. Writes to requirements_seen on BOTH paths — newly "
+    "created WPs AND exact-title skips — so a reset DB self-heals on "
+    "the next run and updatedRequirements classification can find its "
+    "prior_id. Honors NAPCO_NUCLEUS_DRY_RUN.",
     {"tasks": list},
 )
-async def publish_tasks_to_gitlab_tool(args):
-    import gitlab_client  # lazy
+async def publish_tasks_to_backlog_tool(args):
+    import openproject_client as op_client  # lazy
 
     tasks = args.get("tasks") or []
     if not isinstance(tasks, list) or not tasks:
@@ -194,32 +201,32 @@ async def publish_tasks_to_gitlab_tool(args):
 
     dry_run = os.environ.get("NAPCO_NUCLEUS_DRY_RUN") == "1"
 
-    # 1. Pull open GitLab issues with iid + web_url so the dedup-skip
-    # branch can backfill memory.requirements_seen. Without this, a
-    # reset DB never re-learns prior issues, the fuzzy-match path stays
-    # empty, and updatedRequirements classification can never fire.
+    # 1. Pull open OpenProject Work Packages with id + web_url so the
+    # dedup-skip branch can backfill memory.requirements_seen. Without
+    # this, a reset DB never re-learns prior WPs, the fuzzy-match path
+    # stays empty, and updatedRequirements classification can never fire.
     try:
-        open_issues = gitlab_client.list_open_issues()
-    except gitlab_client.GitLabConfigError as e:
+        open_wps = op_client.list_open_work_packages()
+    except op_client.OpenProjectConfigError as e:
         memory.log_activity(
-            task_name="requirement-management:publish_gitlab",
+            task_name="requirement-management:publish_backlog",
             result="error:config_missing",
             technical_details={"error": str(e)},
         )
-        return _text({"error": f"GitLab config missing: {e}",
-                      "created": [], "skipped_existing": [], "failed": []})
+        return _text({"error": f"OpenProject config missing: {e}",
+                      "created": [], "updated": [], "skipped_existing": [], "failed": []})
     except Exception as e:
-        logger.exception("list_open_issues failed")
+        logger.exception("list_open_work_packages failed")
         memory.log_activity(
-            task_name="requirement-management:publish_gitlab",
+            task_name="requirement-management:publish_backlog",
             result=f"error:{type(e).__name__}",
             technical_details={"error": str(e)},
         )
-        return _text({"error": f"GitLab list failed: {e}",
-                      "created": [], "skipped_existing": [], "failed": []})
+        return _text({"error": f"OpenProject list failed: {e}",
+                      "created": [], "updated": [], "skipped_existing": [], "failed": []})
 
     open_by_title: dict[str, dict] = {
-        i["title"].strip().lower(): i for i in open_issues if i.get("title")
+        i["title"].strip().lower(): i for i in open_wps if i.get("title")
     }
     open_titles = set(open_by_title.keys())
 
@@ -237,13 +244,28 @@ async def publish_tasks_to_gitlab_tool(args):
 
         # Pull classification fields up front — we need them BEFORE the
         # dedup decision because updatedRequirements goes through a
-        # different code path (update existing item, not create new).
+        # different code path (update existing WP, not create new).
         task_labels = t.get("labels") if isinstance(t.get("labels"), list) else []
-        issue_type = t.get("issue_type") if isinstance(t.get("issue_type"), str) else None
+        # Accept both new id name and legacy iid name in input dicts.
         is_update = "updatedRequirements" in task_labels
-        updates_prior_iid = t.get("updates_prior_iid")
-        if not isinstance(updates_prior_iid, int):
-            updates_prior_iid = None
+        updates_prior_id = t.get("updates_prior_id") or t.get("updates_prior_iid")
+        if not isinstance(updates_prior_id, int):
+            updates_prior_id = None
+
+        # Translate label set to OpenProject native fields.
+        # Feature label → Category (the project has 3 configured:
+        # AccessGroup, BadgeHolder, Personnel).
+        _FEATURE_CATEGORIES = {"AccessGroup", "BadgeHolder", "Personnel"}
+        op_category = next(
+            (l for l in task_labels if l in _FEATURE_CATEGORIES), None,
+        )
+        # Type label → Work Package Type. Bug rows go to type=Bug; new
+        # requirements + revisions both use type=Task. The
+        # `updatedRequirements` distinction lives in the comment + the
+        # subject change, NOT in a status flip — this OP instance's
+        # workflow doesn't permit New → In specification for the
+        # service-account role (see openproject_client smoke-test note).
+        op_type = "Bug" if "Bug" in task_labels else "Task"
 
         # Compose body sections used by both paths.
         body_parts = [description]
@@ -261,26 +283,28 @@ async def publish_tasks_to_gitlab_tool(args):
         source_bucket = _source_bucket(src)
 
         # ── UPDATE PATH ─────────────────────────────────────────────
-        # updatedRequirements + a known prior iid → mutate the existing
-        # work item. Title swap, label swap, comment with new content.
-        # GitLab logs each change in its system-note timeline so the
-        # full history is preserved automatically.
-        if is_update and updates_prior_iid:
+        # updatedRequirements + a known prior id → mutate the existing
+        # WP. Title swap + comment with new content. OpenProject's
+        # native Activity timeline preserves the full history (subject
+        # change is recorded as a journal entry automatically).
+        if is_update and updates_prior_id:
             if dry_run:
-                updated.append({"iid": updates_prior_iid,
+                updated.append({"id": updates_prior_id,
                                 "new_title": title, "dry_run": True})
                 memory.remember_requirement(
                     title=title, source=source_bucket, source_ref=src,
                     summary=description[:240],
-                    gitlab_issue_iid=updates_prior_iid,
+                    wp_id=updates_prior_id,
                 )
                 continue
             try:
-                gitlab_client.update_issue(
-                    iid=updates_prior_iid,
+                op_client.update_work_package(
+                    updates_prior_id,
                     title=title,
-                    add_labels=["updatedRequirements"],
-                    remove_labels=["requirements"],
+                    # No status= — workflow rejects New → In spec for
+                    # the API user's role on this instance. The subject
+                    # change + the timestamped comment below are the
+                    # "updated" signal.
                 )
                 ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
                 comment_body = (
@@ -288,35 +312,36 @@ async def publish_tasks_to_gitlab_tool(args):
                     f"Title changed to: **{title}**\n\n"
                     f"{full_body}"
                 )
-                gitlab_client.add_issue_note(
-                    iid=updates_prior_iid, body=comment_body,
+                op_client.add_work_package_comment(
+                    updates_prior_id, comment_body,
                 )
-                # The PUT response lacks web_url consistently across
-                # GitLab versions; reconstruct from the prior memory
-                # row when we can.
+                # OP's PATCH response includes _links.self.href; we
+                # reconstruct the user-facing URL the same way
+                # list_open_work_packages does. But the prior memory
+                # row already has the URL, so prefer that.
                 prior_url = None
                 prior_match = memory.search_requirements(title, limit=1)
                 if prior_match:
-                    prior_url = prior_match[0].get("gitlab_issue_url")
-                updated.append({"iid": updates_prior_iid,
+                    prior_url = prior_match[0].get("wp_url")
+                updated.append({"id": updates_prior_id,
                                 "new_title": title,
                                 "web_url": prior_url})
                 memory.remember_requirement(
                     title=title, source=source_bucket, source_ref=src,
                     summary=description[:240],
-                    gitlab_issue_iid=updates_prior_iid,
-                    gitlab_issue_url=prior_url,
+                    wp_id=updates_prior_id,
+                    wp_url=prior_url,
                 )
             except Exception as e:
-                logger.exception(f"update_issue failed for iid={updates_prior_iid}")
-                failed.append({"iid": updates_prior_iid,
+                logger.exception(f"update_work_package failed for id={updates_prior_id}")
+                failed.append({"id": updates_prior_id,
                                "title": title, "error": str(e)})
             continue
 
         # ── CREATE PATH ─────────────────────────────────────────────
         # Standard dedup: skip exact-title matches and fuzzy memory
-        # matches with a known iid. On exact-title skip, ALSO upsert
-        # memory.requirements_seen with the existing issue's iid +
+        # matches with a known id. On exact-title skip, ALSO upsert
+        # memory.requirements_seen with the existing WP's id +
         # web_url so a reset DB self-heals — this is what unblocks the
         # updatedRequirements classification on subsequent runs.
         if title.lower() in open_titles:
@@ -324,29 +349,29 @@ async def publish_tasks_to_gitlab_tool(args):
             memory.remember_requirement(
                 title=title, source=source_bucket, source_ref=src,
                 summary=description[:240],
-                gitlab_issue_iid=existing.get("iid"),
-                gitlab_issue_url=existing.get("web_url"),
+                wp_id=existing.get("id"),
+                wp_url=existing.get("web_url"),
             )
             skipped.append({
                 "title": title,
-                "reason": "already open in GitLab",
-                "iid": existing.get("iid"),
+                "reason": "already open in OpenProject",
+                "id": existing.get("id"),
                 "web_url": existing.get("web_url"),
                 "memory_backfilled": True,
             })
             continue
 
         prior = memory.search_requirements(title, limit=1)
-        if prior and prior[0].get("gitlab_issue_iid"):
+        if prior and prior[0].get("wp_id"):
             skipped.append({
                 "title": title,
                 "reason": "already seen in memory",
-                "prior_issue_url": prior[0].get("gitlab_issue_url"),
+                "prior_url": prior[0].get("wp_url"),
             })
             continue
 
         if dry_run:
-            created.append({"title": title, "iid": "DRY-RUN",
+            created.append({"title": title, "id": "DRY-RUN",
                             "web_url": None, "dry_run": True})
             memory.remember_requirement(
                 title=title, source=source_bucket, source_ref=src,
@@ -356,35 +381,35 @@ async def publish_tasks_to_gitlab_tool(args):
             continue
 
         try:
-            issue = gitlab_client.create_issue(
-                title=title, description=full_body, labels=task_labels,
-                issue_type=issue_type,
+            wp = op_client.create_work_package(
+                title=title, description=full_body,
+                type=op_type, status="New", category=op_category,
             )
-            iid = issue.get("iid")
-            url = issue.get("web_url")
-            created.append({"title": title, "iid": iid, "web_url": url})
+            wp_id = wp.get("id")
+            url = wp.get("web_url")
+            created.append({"title": title, "id": wp_id, "web_url": url})
             memory.remember_requirement(
                 title=title, source=source_bucket, source_ref=src,
                 summary=description[:240],
-                gitlab_issue_iid=iid, gitlab_issue_url=url,
+                wp_id=wp_id, wp_url=url,
             )
             open_titles.add(title.lower())
         except Exception as e:
-            logger.exception(f"create_issue failed for {title!r}")
+            logger.exception(f"create_work_package failed for {title!r}")
             failed.append({"title": title, "error": str(e)})
 
     memory.log_activity(
-        task_name="requirement-management:publish_gitlab",
+        task_name="requirement-management:publish_backlog",
         result=(f"created={len(created)} updated={len(updated)} "
                 f"skipped={len(skipped)} failed={len(failed)}"),
         technical_details={
             "created_titles": [c["title"] for c in created],
-            "updated_iids":   [u["iid"]   for u in updated],
+            "updated_ids":   [u["id"]   for u in updated],
             "skipped_count_by_reason": {
-                "open_in_gitlab": sum(1 for s in skipped
-                                      if s.get("reason") == "already open in GitLab"),
-                "seen_in_memory": sum(1 for s in skipped
-                                      if s.get("reason") == "already seen in memory"),
+                "open_in_backlog": sum(1 for s in skipped
+                                       if s.get("reason") == "already open in OpenProject"),
+                "seen_in_memory":  sum(1 for s in skipped
+                                       if s.get("reason") == "already seen in memory"),
             },
             "dry_run": dry_run,
         },
@@ -403,12 +428,12 @@ TOOLS = [
     poll_requirement_emails_tool,
     ingest_drive_files_tool,
     read_requirement_inbox_tool,
-    publish_tasks_to_gitlab_tool,
+    publish_tasks_to_backlog_tool,
 ]
 
 TOOL_NAMES = [
     "poll_requirement_emails",
     "ingest_drive_files",
     "read_requirement_inbox",
-    "publish_tasks_to_gitlab",
+    "publish_tasks_to_backlog",
 ]
