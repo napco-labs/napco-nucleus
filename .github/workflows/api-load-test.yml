@@ -29,7 +29,9 @@ jobs:
     timeout-minutes: 60
 
     env:
-      MVP_PROJECTS_ROOT: 'E:\Projects'
+      # Sibling test project is checked out under the workspace below,
+      # so PROJECTS_ROOT points at the workspace itself.
+      MVP_PROJECTS_ROOT: ${{ github.workspace }}
       SMTP_HOST: ${{ secrets.SMTP_HOST }}
       SMTP_PORT: ${{ secrets.SMTP_PORT }}
       SMTP_USER: ${{ secrets.SMTP_USER }}
@@ -43,10 +45,27 @@ jobs:
       COMPANY_ID: ${{ secrets.COMPANY_ID }}
 
     steps:
-      - uses: actions/checkout@v5
+      - name: Checkout napco-nucleus
+        uses: actions/checkout@v5
+
+      - name: Checkout MVP-Access-API-Test (sibling)
+        uses: actions/checkout@v5
+        with:
+          repository: titucse/MVP-Access-API-Test
+          token: ${{ secrets.CROSS_REPO_PAT }}
+          path: MVP-Access-API-Test
 
       - name: Install Python dependencies
         run: py -3 -m pip install -r requirements.txt
+
+      - name: Install MVP-Access-API-Test dependencies
+        shell: pwsh
+        run: |
+          if (Test-Path "MVP-Access-API-Test/requirements.txt") {
+            py -3 -m pip install -r MVP-Access-API-Test/requirements.txt
+          } else {
+            Write-Host "no MVP-Access-API-Test/requirements.txt found, skipping"
+          }
 
       - name: Run API Load Test
         shell: pwsh
