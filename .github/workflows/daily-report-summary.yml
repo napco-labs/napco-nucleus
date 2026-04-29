@@ -8,8 +8,8 @@ name: Daily Report — Executive Summary
 
 on:
   schedule:
-    # 09:30 BDT = 03:30 UTC.
-    - cron: '30 3 * * *'
+    # 22:30 BDT = 16:30 UTC.
+    - cron: '30 16 * * *'
   workflow_dispatch:
 
 permissions:
