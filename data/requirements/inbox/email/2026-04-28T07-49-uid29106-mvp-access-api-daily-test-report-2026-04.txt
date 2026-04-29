@@ -1,0 +1,1909 @@
+# source: email
+# from: khasan@ael-bd.com
+# received: 2026-04-28T07:49:32-07:00
+# subject: MVP Access API - Daily Test Report - 2026-04-28
+# attachments: 2
+
+Hello Team,
+
+Please find attached the daily test reports for MVP Access API.
+
+Report Date: April 28, 2026 at 08:02 PM
+
+Attached Reports:
+  1. Test Report - Load Testing, API Testing & Integration Testing results
+  2. API Bug Report - Detailed bug report with issues found during API testing
+
+Please review the results and take action on any failures.
+
+Best regards,
+MVP Access API Test Agent
+
+
+--- attachment: Test_Report_20260428_200222.pdf ---
+MVP Access
+ Comprehensive Test Report
+ April 28, 2026 at 08:02 PM
+ CRITICAL
+System non-functional at 10K Users (99% failure under 10,000
+users)
+Real users will see errors during traffic spikes.
+ Decision needed: Hold release; investigate auth/throttling layer collapse before retrying load.
+Run Environment
+Target URL
+http://172.16.205.209:9096
+Portal URL
+https://staging.mvpaccess.online
+Test account
+Company 500842 · user democustomer1
+Auth method
+Basic (client credentials) → Bearer JWT + api-key
+Build / commit
+22ae14e · branch main
+Runner
+Hasan · Windows 11
+Reported by
+MVP Access AI Agent
+Run time
+2026-04-28 20:02:22
+Test Category
+Detail
+Status
+API Load Test - 10 Users
+10 users | 878 reqs | 4.9% fail
+DEGRADED
+API Load Test - 100 Users
+100 users | 856 reqs | 2.1% fail
+DEGRADED
+API Load Test - 500 Users
+500 users | 953 reqs | 2.6% fail
+DEGRADED
+API Load Test - 1K Users
+1,000 users | 1,307 reqs | 2.1% fail
+DEGRADED
+API Load Test - 10K Users
+10,000 users | 155,249 reqs | 99.4% fail
+CRITICAL
+
+
+Executive Summary
+Capacity ceiling: 10 concurrent users. At that tier the failure rate is 4.9% (just under the 5%
+threshold) with an average response time of 1,617ms and throughput of 3.0 RPS. Beyond 10
+users, response times degrade catastrophically while throughput stays flat: 30.6s avg at 100
+users, 104.7s at 500 users, 147.5s at 1K users, all at the same 3.0-4.4 RPS. At 10K users the
+system collapsed entirely with 99.4% failures. This is the first recorded load test run, so no
+prior-week comparison is available.
+The flat RPS (~3 requests/second) across all tiers from 10 to 1,000 concurrent users is the
+defining signal. The server processes requests at a fixed rate regardless of how many clients
+are waiting. This pattern points to a serialized bottleneck: either a database connection pool
+capped at a very low number, a single-threaded request handler, or a global lock in the
+middleware. Two endpoints were already slow before load was applied: GET /api/Audit (11.0s
+at zero concurrency) and GET /api/Holiday (7.5s at zero concurrency). POST /api/Schedule
+returned HTTP 500 before the test started, meaning it was broken independent of load. These
+three endpoints likely amplified degradation under concurrency by holding connections longer
+than others.
+Recommendations: (1) Profile the DB connection pool size and increase it from the current
+setting (likely 1-5) to at least 20-50 for the expected user base. (2) Add a database index on the
+Audit table, the 11s response at zero load suggests a full table scan. (3) Investigate the Holiday
+list endpoint for a similar missing index or unoptimized query. (4) Fix the POST /api/Schedule
+500 error, which is a code-level bug unrelated to load. (5) Instrument the API with request-level
+timing (middleware logging) to identify whether the bottleneck is in the application layer or the
+database layer. Until the ~3 RPS throughput ceiling is resolved, scaling users beyond 10
+concurrent will produce unacceptable response times.
+
+
+Regressions Since Last Run
+No regressions detected — all tracked metrics held or improved.
+
+
+Swagger Coverage
+Metric
+Value
+Total endpoints (spec)
+55
+Covered by ≥1 test
+41
+Untested
+14
+Coverage %
+74.5%
+Untested endpoints
+Method
+Path
+DELETE
+/api/AccessGroup/{id}
+DELETE
+/api/Badge/{id}
+DELETE
+/api/BadgeAccess/{id}
+DELETE
+/api/DepartmentInfo/{id}
+DELETE
+/api/FacilityCode/{id}
+DELETE
+/api/Holiday/{id}
+DELETE
+/api/LocationInfo/{id}
+DELETE
+/api/Operator/{id}
+DELETE
+/api/Person/{id}
+DELETE
+/api/PersonImage/{id}
+DELETE
+/api/Schedule/{id}
+GET
+/api/DeviceStatus/{type}
+POST
+/api/ApiCredentials
+PUT
+/api/AccessGroup/{id}
+PUT
+/api/Badge/{id}
+PUT
+/api/BadgeAccess/{badgeId}
+PUT
+/api/DepartmentInfo/{id}
+PUT
+/api/Event/Acknowledge/{eventId}
+PUT
+/api/FacilityCode/{id}
+PUT
+/api/Holiday/{id}
+PUT
+/api/LocationInfo/{id}
+PUT
+/api/Operator/{id}
+PUT
+/api/Person/{id}
+PUT
+/api/PersonImage/{id}
+PUT
+/api/Schedule/{id}
+
+
+API Load Test Results
+The load suite ran Locust across 5 concurrency tier(s) (10 Users, 100 Users, 500 Users, 1K
+Users, 10K Users) targeting user counts of 10, 100, 500, 1,000, 10,000, generating 159,243 total
+requests. The 10 Users, 100 Users, 500 Users, 1K Users tier(s) stayed healthy with minor
+flake-level failures. At 10K Users (10,000 concurrent users) the failure rate reached 99% — the
+auth and throttling layer collapsed and every endpoint began returning 4xx/5xx. This is the single
+most important finding in the load run and must be investigated before the next release.
+ CRITICAL
+System non-functional at 10K Users (99% failure under 10,000
+users).
+Every endpoint began returning 4xx/5xx at this concurrency. Investigate
+auth/throttling/connection-pool layer.
+Per-Tier Health
+10 Users
+10u  5% fail
+100 Users
+100u  2% fail
+500 Users
+500u  3% fail
+1K Users
+1,000u  2% fail
+10K Users
+10,000u  99% fail
+Tier Comparison
+Metric
+10 Users
+(10 Users)
+100 Users
+(100 Users)
+500 Users
+(500 Users)
+1K Users
+(1,000 Users)
+10K Users
+(10,000 Users)
+Total Requests
+878
+856
+953
+1,307
+155,249
+Total Failures
+43
+18
+25
+27
+154,284
+Failure Rate %
+4.90%
+2.10%
+2.62%
+2.07%
+99.38%
+Avg Response Time (ms)
+1,617
+30,565
+104,699
+147,536
+10,807
+Min Response Time (ms)
+5
+26
+48
+56
+3
+Max Response Time (ms)
+29,433
+70,321
+179,004
+266,280
+292,007
+Requests/sec
+2.96
+2.90
+3.19
+4.38
+515.63
+Spawn Rate
+5
+20
+30
+50
+100
+Duration
+5m
+5m
+5m
+5m
+5m
+Status
+DEGRADED
+DEGRADED
+DEGRADED
+DEGRADED
+CRITICAL
+
+
+Top 10 Slowest Endpoints (Across All Tiers)
+Tier
+Method
+Endpoint
+Reqs
+Fails
+Avg (ms)
+Max (ms)
+RPS
+1K Users
+DELETE
+DELETE /api/AccessGroup/{id}
+11
+0
+236,437
+250,456
+0.0
+1K Users
+DELETE
+DELETE /api/LocationInfo/{id}
+14
+14
+235,603
+249,423
+0.0
+1K Users
+DELETE
+DELETE /api/Holiday/{id}
+11
+0
+226,215
+250,486
+0.0
+1K Users
+DELETE
+DELETE /api/DepartmentInfo/{id
+19
+0
+212,680
+249,871
+0.1
+1K Users
+DELETE
+DELETE /api/Schedule/{id}
+12
+0
+203,938
+250,473
+0.0
+1K Users
+GET
+/api/Event/EventClassDefinatio
+61
+0
+158,612
+249,790
+0.2
+1K Users
+GET
+/api/Holiday
+49
+2
+156,631
+266,280
+0.2
+1K Users
+GET
+/api/AccessGroup
+48
+0
+156,120
+249,834
+0.2
+1K Users
+GET
+/api/Badge
+45
+0
+155,390
+249,853
+0.2
+1K Users
+GET
+/api/BadgeFormat
+53
+0
+151,606
+249,483
+0.2
+Error Summary (All Tiers)
+Tier
+Method
+Endpoint
+Error
+Count
+10 Users
+POST
+POST /api/Schedule
+CatchResponseError('create failed: 500')
+3
+10 Users
+DELETE
+DELETE /api/LocationInfo/
+HTTPError('500 Server Error: Internal Server Error
+for url: DELETE /api/Location
+40
+100 Users
+POST
+POST /api/Schedule
+CatchResponseError('create failed: 500')
+1
+100 Users
+POST
+POST /api/Holiday
+CatchResponseError('create failed: 500')
+1
+100 Users
+GET
+/api/Holiday
+HTTPError('500 Server Error: Internal Server Error
+for url: /api/Holiday')
+2
+100 Users
+DELETE
+DELETE /api/LocationInfo/
+HTTPError('500 Server Error: Internal Server Error
+for url: DELETE /api/Location
+14
+500 Users
+POST
+POST /api/Schedule
+CatchResponseError('create failed: 500')
+4
+500 Users
+POST
+POST /api/Holiday
+CatchResponseError('create failed: 500')
+5
+500 Users
+GET
+/api/Holiday
+HTTPError('500 Server Error: Internal Server Error
+for url: /api/Holiday')
+3
+500 Users
+DELETE
+DELETE /api/LocationInfo/
+HTTPError('500 Server Error: Internal Server Error
+for url: DELETE /api/Location
+12
+500 Users
+POST
+POST /api/AccessGroup
+CatchResponseError('create failed: 500')
+1
+1K Users
+POST
+POST /api/Schedule
+CatchResponseError('create failed: 500')
+3
+1K Users
+POST
+POST /api/Holiday
+CatchResponseError('create failed: 500')
+5
+1K Users
+GET
+/api/Holiday
+HTTPError('500 Server Error: Internal Server Error
+for url: /api/Holiday')
+2
+
+
+Tier
+Method
+Endpoint
+Error
+Count
+1K Users
+DELETE
+DELETE /api/LocationInfo/
+HTTPError('500 Server Error: Internal Server Error
+for url: DELETE /api/Location
+14
+1K Users
+POST
+POST /api/AccessGroup
+CatchResponseError('create failed: 500')
+3
+10K Users
+POST
+POST /api/Schedule
+CatchResponseError('create failed: 503')
+6050
+10K Users
+GET
+/api/BadgeFormat
+HTTPError('503 Server Error: Service Unavailable
+for url: /api/BadgeFormat')
+6420
+10K Users
+DELETE
+DELETE /api/AccessGroup/{
+HTTPError('503 Server Error: Service Unavailable
+for url: DELETE /api/AccessGrou
+23
+10K Users
+POST
+POST /api/Holiday
+CatchResponseError('create failed: 503')
+6170
+10K Users
+POST
+POST /api/AccessGroup
+CatchResponseError('create failed: 503')
+6342
+10K Users
+GET
+/api/DepartmentInfo
+HTTPError('503 Server Error: Service Unavailable
+for url: /api/DepartmentInfo')
+6621
+10K Users
+POST
+POST /api/LocationInfo
+CatchResponseError('create failed: 503')
+6066
+10K Users
+GET
+/api/PartitionGroup
+HTTPError('503 Server Error: Service Unavailable
+for url: /api/PartitionGroup')
+6599
+10K Users
+GET
+/api/AccessGroup
+HTTPError('503 Server Error: Service Unavailable
+for url: /api/AccessGroup')
+6512
+10K Users
+POST
+POST /api/Schedule
+CatchResponseError('create failed: 500')
+2
+10K Users
+GET
+/api/Operator
+HTTPError('503 Server Error: Service Unavailable
+for url: /api/Operator')
+6427
+10K Users
+GET
+/api/Event
+HTTPError('503 Server Error: Service Unavailable
+for url: /api/Event')
+6579
+10K Users
+GET
+/api/Reader
+HTTPError('503 Server Error: Service Unavailable
+for url: /api/Reader')
+6586
+10K Users
+POST
+POST /api/Holiday
+CatchResponseError('create failed: 500')
+2
+10K Users
+POST
+POST /api/DepartmentInfo
+CatchResponseError('create failed: 503')
+6286
+10K Users
+GET
+/api/Badge
+HTTPError('503 Server Error: Service Unavailable
+for url: /api/Badge')
+6363
+10K Users
+GET
+/api/PersonImage
+HTTPError('503 Server Error: Service Unavailable
+for url: /api/PersonImage')
+6516
+10K Users
+GET
+/api/Holiday
+HTTPError('503 Server Error: Service Unavailable
+for url: /api/Holiday')
+6543
+10K Users
+DELETE
+DELETE /api/Holiday/{id}
+HTTPError('503 Server Error: Service Unavailable
+for url: DELETE /api/Holiday/{i
+18
+10K Users
+GET
+/api/Schedule
+HTTPError('503 Server Error: Service Unavailable
+for url: /api/Schedule')
+6516
+10K Users
+GET
+/api/Panel
+HTTPError('503 Server Error: Service Unavailable
+for url: /api/Panel')
+6424
+10K Users
+DELETE
+DELETE /api/LocationInfo/
+HTTPError('503 Server Error: Service Unavailable
+for url: DELETE /api/LocationIn
+36
+
+
+Tier
+Method
+Endpoint
+Error
+Count
+10K Users
+DELETE
+DELETE /api/Schedule/{id}
+HTTPError('503 Server Error: Service Unavailable
+for url: DELETE /api/Schedule/{
+19
+10K Users
+GET
+/api/Audit
+HTTPError('503 Server Error: Service Unavailable
+for url: /api/Audit')
+6416
+10K Users
+DELETE
+DELETE /api/LocationInfo/
+HTTPError('500 Server Error: Internal Server Error
+for url: DELETE /api/Location
+2
+10K Users
+GET
+/api/BadgeAccess
+HTTPError('503 Server Error: Service Unavailable
+for url: /api/BadgeAccess')
+6452
+10K Users
+DELETE
+DELETE /api/DepartmentInf
+HTTPError('503 Server Error: Service Unavailable
+for url: DELETE /api/Department
+33
+10K Users
+GET
+/api/FacilityCode
+HTTPError('503 Server Error: Service Unavailable
+for url: /api/FacilityCode')
+6454
+10K Users
+GET
+/api/LocationInfo
+HTTPError('503 Server Error: Service Unavailable
+for url: /api/LocationInfo')
+6474
+10K Users
+POST
+POST /api/AccessGroup
+CatchResponseError('create failed: 500')
+1
+10K Users
+GET
+/api/Event/EventClassDefi
+HTTPError('503 Server Error: Service Unavailable
+for url: /api/Event/EventClassD
+6474
+10K Users
+GET
+/api/Person
+HTTPError('503 Server Error: Service Unavailable
+for url: /api/Person')
+6502
+10K Users
+GET
+/api/Role
+HTTPError('503 Server Error: Service Unavailable
+for url: /api/Role')
+6356
+Endpoint Performance - 10 Users (10 Users)
+Method
+Endpoint
+Reqs
+Fails
+Avg (ms)
+Min (ms)
+Max (ms)
+RPS
+GET
+/api/AccessGroup
+27
+0
+2,759
+48
+20,408
+0.1
+GET
+/api/Audit
+27
+0
+10,439
+8,010
+15,517
+0.1
+GET
+/api/Badge
+29
+0
+88
+42
+346
+0.1
+GET
+/api/BadgeAccess
+39
+0
+21
+13
+43
+0.1
+GET
+/api/BadgeFormat
+33
+0
+67
+43
+94
+0.1
+GET
+/api/DepartmentInfo
+20
+0
+53
+36
+118
+0.1
+GET
+/api/Event
+36
+0
+22
+10
+91
+0.1
+GET
+/api/Event/EventClassDefinations
+35
+0
+47
+24
+133
+0.1
+GET
+/api/FacilityCode
+25
+0
+57
+36
+124
+0.1
+GET
+/api/Holiday
+34
+0
+10,429
+5,901
+22,987
+0.1
+GET
+/api/LocationInfo
+30
+0
+54
+38
+84
+0.1
+GET
+/api/Operator
+28
+0
+66
+48
+110
+0.1
+GET
+/api/Panel
+26
+0
+57
+39
+87
+0.1
+GET
+/api/PartitionGroup
+34
+0
+34
+24
+70
+0.1
+
+
+Method
+Endpoint
+Reqs
+Fails
+Avg (ms)
+Min (ms)
+Max (ms)
+RPS
+GET
+/api/Person
+24
+0
+53
+34
+115
+0.1
+GET
+/api/PersonImage
+28
+0
+525
+364
+1,073
+0.1
+GET
+/api/Reader
+29
+0
+79
+36
+531
+0.1
+GET
+/api/Role
+43
+0
+1,001
+616
+2,282
+0.1
+GET
+/api/Schedule
+32
+0
+2,816
+721
+17,283
+0.1
+DELETE
+DELETE /api/AccessGroup/{id}
+21
+0
+43
+18
+95
+0.1
+DELETE
+DELETE /api/DepartmentInfo/{id}
+33
+0
+14
+5
+29
+0.1
+DELETE
+DELETE /api/Holiday/{id}
+21
+0
+27
+12
+127
+0.1
+DELETE
+DELETE /api/LocationInfo/{id}
+40
+40
+35
+18
+77
+0.1
+DELETE
+DELETE /api/Schedule/{id}
+33
+0
+96
+40
+378
+0.1
+POST
+POST /api/AccessGroup
+21
+0
+6,002
+32
+20,472
+0.1
+POST
+POST /api/DepartmentInfo
+33
+0
+34
+17
+122
+0.1
+POST
+POST /api/Holiday
+21
+0
+5,450
+34
+18,166
+0.1
+POST
+POST /api/LocationInfo
+40
+0
+53
+27
+135
+0.1
+POST
+POST /api/Schedule
+36
+3
+8,062
+31
+29,433
+0.1
+Endpoint Performance - 100 Users (100 Users)
+Method
+Endpoint
+Reqs
+Fails
+Avg (ms)
+Min (ms)
+Max (ms)
+RPS
+GET
+/api/AccessGroup
+33
+0
+32,274
+160
+61,318
+0.1
+GET
+/api/Audit
+35
+0
+40,558
+19,903
+63,085
+0.1
+GET
+/api/Badge
+25
+0
+27,861
+2,286
+60,577
+0.1
+GET
+/api/BadgeAccess
+40
+0
+25,903
+26
+43,552
+0.1
+GET
+/api/BadgeFormat
+30
+0
+25,061
+126
+43,541
+0.1
+GET
+/api/DepartmentInfo
+22
+0
+30,141
+14,062
+59,417
+0.1
+GET
+/api/Event
+44
+0
+25,831
+36
+46,768
+0.1
+GET
+/api/Event/EventClassDefinations
+27
+0
+28,148
+13,459
+38,821
+0.1
+GET
+/api/FacilityCode
+30
+0
+24,691
+50
+42,515
+0.1
+GET
+/api/Holiday
+37
+2
+44,850
+20,255
+70,321
+0.1
+GET
+/api/LocationInfo
+30
+0
+30,011
+3,779
+55,646
+0.1
+GET
+/api/Operator
+29
+0
+30,297
+14,039
+43,693
+0.1
+GET
+/api/Panel
+30
+0
+27,667
+152
+44,611
+0.1
+GET
+/api/PartitionGroup
+31
+0
+30,466
+71
+61,109
+0.1
+GET
+/api/Person
+36
+0
+27,664
+112
+43,513
+0.1
+GET
+/api/PersonImage
+24
+0
+28,685
+3,635
+60,540
+0.1
+
+
+Method
+Endpoint
+Reqs
+Fails
+Avg (ms)
+Min (ms)
+Max (ms)
+RPS
+GET
+/api/Reader
+35
+0
+28,930
+91
+44,198
+0.1
+GET
+/api/Role
+40
+0
+29,361
+2,989
+46,025
+0.1
+GET
+/api/Schedule
+40
+0
+32,477
+1,969
+52,327
+0.1
+DELETE
+DELETE /api/AccessGroup/{id}
+23
+0
+32,011
+13,292
+45,594
+0.1
+DELETE
+DELETE /api/DepartmentInfo/{id}
+22
+0
+27,183
+40
+45,530
+0.1
+DELETE
+DELETE /api/Holiday/{id}
+26
+0
+31,178
+13,672
+45,498
+0.1
+DELETE
+DELETE /api/LocationInfo/{id}
+14
+14
+22,240
+96
+40,707
+0.0
+DELETE
+DELETE /api/Schedule/{id}
+25
+0
+29,117
+13,902
+45,596
+0.1
+POST
+POST /api/AccessGroup
+29
+0
+34,973
+18,675
+61,743
+0.1
+POST
+POST /api/DepartmentInfo
+24
+0
+29,442
+146
+59,968
+0.1
+POST
+POST /api/Holiday
+30
+1
+36,158
+19,991
+63,000
+0.1
+POST
+POST /api/LocationInfo
+15
+0
+27,989
+94
+44,192
+0.1
+POST
+POST /api/Schedule
+30
+1
+36,696
+19,123
+60,588
+0.1
+Endpoint Performance - 500 Users (500 Users)
+Method
+Endpoint
+Reqs
+Fails
+Avg (ms)
+Min (ms)
+Max (ms)
+RPS
+GET
+/api/AccessGroup
+27
+0
+114,588
+15,367
+156,883
+0.1
+GET
+/api/Audit
+46
+0
+109,835
+9,276
+172,228
+0.2
+GET
+/api/Badge
+37
+0
+116,549
+16,063
+154,314
+0.1
+GET
+/api/BadgeAccess
+39
+0
+97,024
+68
+157,736
+0.1
+GET
+/api/BadgeFormat
+31
+0
+90,836
+256
+149,380
+0.1
+GET
+/api/DepartmentInfo
+43
+0
+106,519
+183
+157,494
+0.1
+GET
+/api/Event
+34
+0
+96,043
+92
+156,236
+0.1
+GET
+/api/Event/EventClassDefinations
+38
+0
+99,115
+287
+157,334
+0.1
+GET
+/api/FacilityCode
+31
+0
+81,303
+61
+155,815
+0.1
+GET
+/api/Holiday
+34
+3
+120,058
+20,156
+179,004
+0.1
+GET
+/api/LocationInfo
+36
+0
+108,111
+103
+156,334
+0.1
+GET
+/api/Operator
+42
+0
+99,895
+15,471
+153,140
+0.1
+GET
+/api/Panel
+33
+0
+97,427
+186
+157,013
+0.1
+GET
+/api/PartitionGroup
+41
+0
+100,372
+76
+155,691
+0.1
+GET
+/api/Person
+49
+0
+99,088
+179
+158,143
+0.2
+GET
+/api/PersonImage
+37
+0
+104,702
+18,277
+152,629
+0.1
+GET
+/api/Reader
+34
+0
+89,147
+80
+153,943
+0.1
+GET
+/api/Role
+45
+0
+89,335
+847
+156,662
+0.2
+
+
+Method
+Endpoint
+Reqs
+Fails
+Avg (ms)
+Min (ms)
+Max (ms)
+RPS
+GET
+/api/Schedule
+21
+0
+111,797
+17,917
+158,683
+0.1
+DELETE
+DELETE /api/AccessGroup/{id}
+18
+0
+128,779
+16,846
+158,672
+0.1
+DELETE
+DELETE /api/DepartmentInfo/{id}
+14
+0
+127,563
+48
+156,569
+0.0
+DELETE
+DELETE /api/Holiday/{id}
+22
+0
+135,565
+122,089
+158,660
+0.1
+DELETE
+DELETE /api/LocationInfo/{id}
+12
+12
+129,757
+235
+158,622
+0.0
+DELETE
+DELETE /api/Schedule/{id}
+18
+0
+131,214
+16,887
+158,750
+0.1
+POST
+POST /api/AccessGroup
+26
+1
+95,138
+145
+152,786
+0.1
+POST
+POST /api/DepartmentInfo
+29
+0
+102,678
+275
+154,883
+0.1
+POST
+POST /api/Holiday
+48
+5
+105,288
+15,979
+173,109
+0.2
+POST
+POST /api/LocationInfo
+27
+0
+103,916
+81
+157,403
+0.1
+POST
+POST /api/Schedule
+41
+4
+113,242
+222
+171,238
+0.1
+Endpoint Performance - 1K Users (1,000 Users)
+Method
+Endpoint
+Reqs
+Fails
+Avg (ms)
+Min (ms)
+Max (ms)
+RPS
+GET
+/api/AccessGroup
+48
+0
+156,120
+826
+249,834
+0.2
+GET
+/api/Audit
+39
+0
+141,937
+9,778
+262,199
+0.1
+GET
+/api/Badge
+45
+0
+155,390
+167
+249,853
+0.2
+GET
+/api/BadgeAccess
+56
+0
+145,341
+56
+249,894
+0.2
+GET
+/api/BadgeFormat
+53
+0
+151,606
+251
+249,483
+0.2
+GET
+/api/DepartmentInfo
+52
+0
+141,810
+152
+249,710
+0.2
+GET
+/api/Event
+47
+0
+139,316
+27,682
+249,968
+0.2
+GET
+/api/Event/EventClassDefinations
+61
+0
+158,612
+31,068
+249,790
+0.2
+GET
+/api/FacilityCode
+50
+0
+139,165
+66
+248,921
+0.2
+GET
+/api/Holiday
+49
+2
+156,631
+15,512
+266,280
+0.2
+GET
+/api/LocationInfo
+62
+0
+134,146
+594
+249,321
+0.2
+GET
+/api/Operator
+62
+0
+145,823
+191
+249,861
+0.2
+GET
+/api/Panel
+57
+0
+137,272
+93
+250,035
+0.2
+GET
+/api/PartitionGroup
+60
+0
+141,012
+89
+249,352
+0.2
+GET
+/api/Person
+55
+0
+130,674
+449
+250,308
+0.2
+GET
+/api/PersonImage
+47
+0
+119,267
+1,574
+250,148
+0.2
+GET
+/api/Reader
+48
+0
+137,516
+29,375
+249,582
+0.2
+GET
+/api/Role
+47
+0
+151,371
+1,869
+251,769
+0.2
+GET
+/api/Schedule
+48
+0
+149,581
+1,218
+264,861
+0.2
+DELETE
+DELETE /api/AccessGroup/{id}
+11
+0
+236,437
+230,262
+250,456
+0.0
+
+
+Method
+Endpoint
+Reqs
+Fails
+Avg (ms)
+Min (ms)
+Max (ms)
+RPS
+DELETE
+DELETE /api/DepartmentInfo/{id}
+19
+0
+212,680
+12,321
+249,871
+0.1
+DELETE
+DELETE /api/Holiday/{id}
+11
+0
+226,215
+137,872
+250,486
+0.0
+DELETE
+DELETE /api/LocationInfo/{id}
+14
+14
+235,603
+229,681
+249,423
+0.0
+DELETE
+DELETE /api/Schedule/{id}
+12
+0
+203,938
+30,670
+250,473
+0.0
+POST
+POST /api/AccessGroup
+50
+3
+143,869
+29,767
+249,862
+0.2
+POST
+POST /api/DepartmentInfo
+49
+0
+136,442
+214
+249,861
+0.2
+POST
+POST /api/Holiday
+48
+5
+146,341
+9,905
+258,556
+0.2
+POST
+POST /api/LocationInfo
+51
+0
+145,750
+27,519
+249,290
+0.2
+POST
+POST /api/Schedule
+56
+3
+140,350
+119
+262,252
+0.2
+Endpoint Performance - 10K Users (10,000 Users)
+Method
+Endpoint
+Reqs
+Fails
+Avg (ms)
+Min (ms)
+Max (ms)
+RPS
+GET
+/api/AccessGroup
+6550
+6512
+10,563
+3
+272,180
+21.8
+GET
+/api/Audit
+6451
+6416
+10,656
+3
+268,727
+21.4
+GET
+/api/Badge
+6411
+6363
+10,557
+3
+290,148
+21.3
+GET
+/api/BadgeAccess
+6495
+6452
+11,265
+3
+268,966
+21.6
+GET
+/api/BadgeFormat
+6460
+6420
+11,004
+3
+269,690
+21.5
+GET
+/api/DepartmentInfo
+6658
+6621
+10,861
+3
+272,116
+22.1
+GET
+/api/Event
+6621
+6579
+10,870
+3
+269,710
+22.0
+GET
+/api/Event/EventClassDefinations
+6514
+6474
+10,514
+3
+291,996
+21.6
+GET
+/api/FacilityCode
+6489
+6454
+10,868
+3
+291,996
+21.6
+GET
+/api/Holiday
+6580
+6543
+10,710
+3
+292,007
+21.9
+GET
+/api/LocationInfo
+6518
+6474
+10,730
+3
+276,124
+21.6
+GET
+/api/Operator
+6458
+6427
+11,025
+3
+256,184
+21.4
+GET
+/api/Panel
+6464
+6424
+10,564
+3
+269,565
+21.5
+GET
+/api/PartitionGroup
+6649
+6599
+10,862
+3
+290,010
+22.1
+GET
+/api/Person
+6544
+6502
+10,743
+3
+269,879
+21.7
+GET
+/api/PersonImage
+6561
+6516
+10,708
+3
+289,936
+21.8
+GET
+/api/Reader
+6646
+6586
+10,612
+3
+269,068
+22.1
+GET
+/api/Role
+6393
+6356
+10,944
+3
+269,959
+21.2
+GET
+/api/Schedule
+6556
+6516
+10,743
+3
+272,918
+21.8
+DELETE
+DELETE /api/AccessGroup/{id}
+24
+23
+1,576
+10
+37,393
+0.1
+DELETE
+DELETE /api/DepartmentInfo/{id}
+33
+33
+40
+10
+376
+0.1
+DELETE
+DELETE /api/Holiday/{id}
+18
+18
+24
+12
+45
+0.1
+
+
+Method
+Endpoint
+Reqs
+Fails
+Avg (ms)
+Min (ms)
+Max (ms)
+RPS
+DELETE
+DELETE /api/LocationInfo/{id}
+38
+38
+2,154
+10
+54,817
+0.1
+DELETE
+DELETE /api/Schedule/{id}
+19
+19
+26
+10
+95
+0.1
+POST
+POST /api/AccessGroup
+6378
+6343
+10,473
+3
+268,838
+21.2
+POST
+POST /api/DepartmentInfo
+6321
+6286
+11,032
+4
+272,252
+21.0
+POST
+POST /api/Holiday
+6205
+6172
+10,397
+3
+268,737
+20.6
+POST
+POST /api/LocationInfo
+6107
+6066
+11,342
+3
+276,290
+20.3
+POST
+POST /api/Schedule
+6088
+6052
+11,582
+4
+268,967
+20.2
+
+
+Reported by MVP Access AI Agent  ·  2026-04-28 20:49:20
+
+
+--- attachment: BUG_DRAFTS_20260428_200222.md ---
+[pypdf extraction failed: Stream has ended unexpectedly]
