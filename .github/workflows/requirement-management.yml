@@ -37,6 +37,13 @@ jobs:
 
     env:
       MVP_PROJECTS_ROOT: 'E:\Projects'
+      # Claude CLI path on the runner. The npm-installed CLI is the
+      # authenticated one (Claude Max via `claude /login`); the legacy
+      # .exe at %USERPROFILE%\.local\bin\claude.exe is a stale install
+      # that doesn't speak the current SDK control protocol and causes
+      # `Control request timeout: initialize`. Point the SDK at the
+      # working .cmd shim explicitly. (Read by napco_config.claude_cli_path.)
+      CLAUDE_CLI_PATH: 'C:\Users\samin\AppData\Roaming\npm\claude.cmd'
       # IMAP for requirement-email ingestion.
       REQ_IMAP_HOST: ${{ secrets.REQ_IMAP_HOST }}
       REQ_IMAP_USER: ${{ secrets.REQ_IMAP_USER }}
