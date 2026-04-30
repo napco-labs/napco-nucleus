@@ -6,7 +6,7 @@ This task ships ONE email: the **executive summary** to `SUMMARY_EMAILS` (leader
 
 This is the at-a-glance dashboard. **6 short blocks, 3-4 lines each.** A leader skims it in 60 seconds. No pie charts, no tables, no marketing.
 
-**Scope: 4 tests + CICD + Runner Status.** Specifically: API Functional, API Integration, API Load, MVP Access E2E, MVPAccess CICD, and the self-hosted runner's health.
+**Scope: 4 tests + Requirement Management + CICD + Runner Status.** Specifically: API Functional, API Integration, API Load, MVP Access E2E, today's Requirement Management ingestion, MVPAccess CICD, and the self-hosted runner's health.
 
 ---
 
@@ -17,7 +17,7 @@ This is the at-a-glance dashboard. **6 short blocks, 3-4 lines each.** A leader 
 - `memory_stats()` — sanity check.
 - `recall_test_runs(since="<24h ago ISO>", limit=10)` — last 24h test runs.
 - `recall_activity(task_name="mvpaccess-cicd", limit=1)` — last CICD result.
-- `recall_activity(since="<24h ago ISO>", limit=100)` — for runner health and workflow error scan.
+- `recall_activity(since="<24h ago ISO>", limit=100)` — for runner health, workflow error scan, AND today's `requirement-management:*` entries (poll_email / publish_backlog rows).
 
 ### 1. Check VM runner status
 
@@ -44,6 +44,14 @@ prior day's run.>
 MVP ACCESS E2E TEST
 <3-4 lines: pass rate, count of failures grouped by suspected root cause,
 any browser-specific failures.>
+
+REQUIREMENT MANAGEMENT
+<3-4 lines: headline = total Work Packages filed today against
+OpenProject mvp-access, broken down by Category (AccessGroup /
+BadgeHolder / Personnel). Note count of emails polled vs. ingested.
+Flag any publish errors. Example: "9 work packages filed today
+(AccessGroup 3, Personnel 3, BadgeHolder 3) from 1 ingested email,
+0 publish errors. OpenProject backlog at 172.16.205.123:8080.">
 
 MVPACCESS CICD
 <If CICD has not been wired up yet (TFS secrets missing): one line

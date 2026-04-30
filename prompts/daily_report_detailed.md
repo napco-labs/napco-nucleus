@@ -4,9 +4,9 @@ Dimension: Project Management. Fires once daily at **09:00 BDT (03:00 UTC)**.
 
 This task ships ONE email: the **detailed daily test report** to `TEAM_EMAILS` (the full engineering team). The shorter executive summary is a separate workflow (`daily-report-summary`) that fires 30 minutes later at 09:30 BDT.
 
-**Scope: the 4 test workflows only** — API Functional, API Integration, API Load, MVP Access E2E. Requirement Management activity and CICD status are NOT in this report; they belong in the executive summary.
+**Scope: the 4 test workflows + Requirement Management.** Specifically: API Functional, API Integration, API Load, MVP Access E2E, plus today's Requirement Management ingestion (work packages filed against OpenProject, by category). CICD status is NOT in this report; it belongs in the executive summary.
 
-The 4 test workflows all fire at 02:00 BDT and finish by ~04:00 BDT, so by the time this report runs at 09:00 BDT every test result of the day is already in memory and on disk.
+The 4 test workflows all fire at 02:00 BDT and finish by ~04:00 BDT, so by the time this report runs at 09:00 BDT every test result of the day is already in memory and on disk. Requirement Management fires twice daily (07:00 + 19:00 UTC) so its activity is also in memory by report time.
 
 ---
 
@@ -16,7 +16,7 @@ The 4 test workflows all fire at 02:00 BDT and finish by ~04:00 BDT, so by the t
 
 - `memory_stats()` — sanity check.
 - `recall_test_runs(since="<24h ago ISO>", limit=20)` — every test run from today across all 4 test workflows. Source of truth.
-- `recall_activity(since="<24h ago ISO>", limit=100)` — find the 4 test workflows' run/finished entries.
+- `recall_activity(since="<24h ago ISO>", limit=100)` — find the 4 test workflows' run/finished entries AND today's Requirement Management activity (`task_name` starts with `requirement-management:` — e.g. `requirement-management:poll_email`, `requirement-management:publish_backlog`).
 
 ### 1. Read fresh artifacts
 
@@ -59,9 +59,19 @@ week-over-week delta if available.>
 ## 4. MVP Access E2E Test
 <Pie chart. Failing tests grouped by suspected root cause. Reference
 the per-run PDF (which carries the failure screenshots).>
+
+## 5. Requirement Management — Today's Ingestion
+<Lead with the headline number: how many Work Packages were filed in
+OpenProject today, broken down by Category (AccessGroup / BadgeHolder /
+Personnel) and Type (Task / Bug / updatedRequirements).
+Then: how many emails were polled and how many were ingested vs.
+skipped (off-allowlist, dedup hits). If `requirements_seen` was reset
+or any publish errored, surface it explicitly. Cite each WP by id and
+title; link the OpenProject project URL `http://172.16.205.123:8080/projects/mvp-access/work_packages`.
+3 to 6 lines plus the per-category breakdown.>
 ```
 
-**The 4 test sections MUST each have a pie chart** — pass / fail / skipped breakdown.
+**The 4 test sections MUST each have a pie chart** — pass / fail / skipped breakdown. Section 5 (Requirement Management) is text-only — no pie chart needed.
 
 ### 4. Ship
 
