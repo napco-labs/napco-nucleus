@@ -28,6 +28,8 @@ import sys
 
 from claude_agent_sdk import tool
 
+import memory
+
 from tools._shared import (
     E2E_PROJECTS,
     API_TEST_PROJECT,
@@ -79,6 +81,22 @@ async def run_load_tests_tool(_args):
     os.makedirs(config.REPORTS_DIR, exist_ok=True)
     results = run_load_tests_multi()
     STATE["load"] = results
+    # Persist to test_run_history so the Daily Report can find this run.
+    # Load is per-tier; aggregate across tiers for the summary row.
+    total = sum(r.get("total_requests", 0) for r in results)
+    failed = sum(r.get("total_failures", 0) for r in results)
+    passed = max(0, total - failed)
+    tiers_passed = sum(1 for r in results if r.get("status") == "PASSED")
+    notes = "; ".join(
+        f"{r.get('tier','?')}={r.get('status','?')}@{r.get('users','?')}u"
+        for r in results
+    )
+    memory.log_test_run(
+        task_name="api-load-test",
+        total=total, passed=passed, failed=failed,
+        suite=f"{tiers_passed}/{len(results)} tiers passed",
+        notes=notes,
+    )
     return _text(_summarize_load(results))
 
 
@@ -92,6 +110,21 @@ async def run_api_tests_tool(_args):
     os.makedirs(config.REPORTS_DIR, exist_ok=True)
     result = _run_api_tests()
     STATE["api"] = result
+    # Persist to test_run_history so the Daily Report can find this run.
+    # Sanity-check duration_ms: upstream sometimes returns a raw epoch
+    # timestamp (~1.7e12) instead of elapsed time. Treat anything
+    # > 24 h (86_400_000 ms) as garbage and store None.
+    dur_ms = result.get("duration_ms", 0) or 0
+    duration_s = dur_ms / 1000.0 if 0 < dur_ms < 86_400_000 else None
+    memory.log_test_run(
+        task_name="api-functional-test",
+        total=int(result.get("total", 0) or 0),
+        passed=int(result.get("passed", 0) or 0),
+        failed=int(result.get("failed", 0) or 0),
+        skipped=int(result.get("skipped", 0) or 0),
+        duration_s=duration_s,
+        notes=f"status={result.get('status', '')}",
+    )
     return _text(_summarize_api(result))
 
 
@@ -105,6 +138,18 @@ async def run_integration_tests_tool(_args):
     os.makedirs(config.REPORTS_DIR, exist_ok=True)
     result = _run_integration_tests()
     STATE["integration"] = result
+    # Persist to test_run_history so the Daily Report can find this run.
+    duration_s_raw = result.get("duration", 0) or 0
+    duration_s = float(duration_s_raw) if 0 < duration_s_raw < 86_400 else None
+    memory.log_test_run(
+        task_name="api-integration-test",
+        total=int(result.get("total", 0) or 0),
+        passed=int(result.get("passed", 0) or 0),
+        failed=int(result.get("failed", 0) or 0),
+        skipped=int(result.get("skipped", 0) or 0),
+        duration_s=duration_s,
+        notes=f"status={result.get('status', '')}",
+    )
     return _text(_summarize_integration(result))
 
 
@@ -248,6 +293,19 @@ async def run_e2e_tests_tool(args):
         result["error"] = str(e)
 
     STATE["e2e"] = result
+    # Persist to test_run_history so the Daily Report can find this run.
+    duration_s_raw = result.get("duration_s", 0) or 0
+    duration_s = float(duration_s_raw) if 0 < duration_s_raw < 86_400 else None
+    memory.log_test_run(
+        task_name="e2e-test",
+        total=int(result.get("total", 0) or 0),
+        passed=int(result.get("passed", 0) or 0),
+        failed=int(result.get("failed", 0) or 0),
+        skipped=int(result.get("skipped", 0) or 0),
+        duration_s=duration_s,
+        suite=str(result.get("suite", "")),
+        notes=f"status={result.get('status', '')}",
+    )
     # Trim the returned summary so the agent's context doesn't balloon with
     # screenshot paths on every call. The full rich dict stays in STATE for
     # the PDF renderer.
