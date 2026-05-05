@@ -8,12 +8,9 @@ name: Requirement Management
 # Fires twice daily, 12 hours apart, every day + workflow_dispatch.
 
 on:
-  schedule:
-    # 19:00 UTC = 01:00 BDT next day (post-midnight poll, picks up
-    # the day's late + any overnight requirements). 07:00 UTC =
-    # 13:00 BDT (mid-afternoon poll). Two runs/day, every day.
-    - cron: '0 19 * * *'
-    - cron: '0 7 * * *'
+  # Schedule disabled 2026-05-05 — v1 of requirement management runs
+  # locally inside Teams-Requirement-Watcher. Re-enable once that v1
+  # is proven and we migrate the pipeline back to the runner.
   workflow_dispatch:
     inputs:
       dry_run:
