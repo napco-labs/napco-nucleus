@@ -5,9 +5,7 @@ name: MVP Access E2E Test
 # ships to Dev + QA.
 
 on:
-  schedule:
-    # 02:00 BDT daily = 20:00 UTC the previous day.
-    - cron: '0 20 * * *'
+  # Schedule disabled 2026-05-05 — paused while requirement_management is built out.
   workflow_dispatch:
     inputs:
       suite:

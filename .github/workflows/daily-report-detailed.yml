@@ -6,9 +6,7 @@ name: Daily Report — Detailed
 # separate workflow (daily-report-summary) that fires 30 min later.
 
 on:
-  schedule:
-    # 09:00 BDT = 03:00 UTC.
-    - cron: '0 3 * * *'
+  # Schedule disabled 2026-05-05 — paused while requirement_management is built out.
   workflow_dispatch:
 
 permissions:

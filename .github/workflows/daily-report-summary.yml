@@ -7,9 +7,7 @@ name: Daily Report — Executive Summary
 # full data.
 
 on:
-  schedule:
-    # 22:30 BDT = 16:30 UTC.
-    - cron: '30 16 * * *'
+  # Schedule disabled 2026-05-05 — paused while requirement_management is built out.
   workflow_dispatch:
 
 permissions:

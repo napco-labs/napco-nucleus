@@ -25,8 +25,7 @@ name: MVPAccess CICD
 # if the response is not 200 within 60 seconds.
 
 on:
-  schedule:
-    - cron: '0 16 * * *'    # 22:00 BDT
+  # Schedule disabled 2026-05-05 — paused while requirement_management is built out.
   workflow_dispatch:
     inputs:
       mode:
