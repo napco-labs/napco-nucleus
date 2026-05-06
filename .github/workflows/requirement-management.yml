@@ -64,24 +64,6 @@ jobs:
       - name: Install Python dependencies
         run: py -3 -m pip install -r requirements.txt
 
-      - name: TEMP-DIAG service-context auth probe
-        shell: pwsh
-        run: |
-          Write-Host "WHOAMI=$(whoami)"
-          Write-Host "USERPROFILE=$env:USERPROFILE"
-          Write-Host "HOME=$env:HOME"
-          Write-Host "APPDATA=$env:APPDATA"
-          Write-Host "Has creds at USERPROFILE\.claude\.credentials.json: $(Test-Path "$env:USERPROFILE\.claude\.credentials.json")"
-          Write-Host "Has creds at C:\Users\samin\.claude\.credentials.json: $(Test-Path 'C:\Users\samin\.claude\.credentials.json')"
-          Write-Host "--- claude.exe -p test ---"
-          try {
-            & "C:\Users\samin\.local\bin\claude.exe" -p "say hi" --output-format text 2>&1
-            Write-Host "claude.exe exit=$LASTEXITCODE"
-          } catch {
-            Write-Host "claude.exe ERROR: $_"
-          }
-          $global:LASTEXITCODE = 0
-
       - name: Run Requirement Management
         shell: pwsh
         run: py -3 agent.py --task requirement-management ${{ github.event.inputs.dry_run == 'true' && '--dry-run' || '' }}
