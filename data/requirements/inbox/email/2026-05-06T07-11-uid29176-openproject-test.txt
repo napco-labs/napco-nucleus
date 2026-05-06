@@ -1,0 +1,11 @@
+# source: email
+# from: khasan@ael-bd.com
+# received: 2026-05-06T07:11:55+00:00
+# subject: OpenProject Test
+# attachments: 0
+
+This is a test email sent by OpenProject.
+OpenProject URL: http://172.16.205.123:8080/
+
+
+--
