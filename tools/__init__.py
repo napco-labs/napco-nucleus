@@ -26,20 +26,21 @@ from tools.files              import TOOLS as _FILE_TOOLS,      TOOL_NAMES as _F
 from tools.git                import TOOLS as _GIT_TOOLS,       TOOL_NAMES as _GIT_NAMES
 from tools.report             import TOOLS as _RPT_TOOLS,       TOOL_NAMES as _RPT_NAMES
 from tools.docx_writer        import TOOLS as _DOCX_TOOLS,      TOOL_NAMES as _DOCX_NAMES
-from tools.teams_chat         import TOOLS as _TEAMS_TOOLS,     TOOL_NAMES as _TEAMS_NAMES
-from tools.transcribe         import TOOLS as _TRANS_TOOLS,     TOOL_NAMES as _TRANS_NAMES
 from tools.verification_email import TOOLS as _VERIFY_TOOLS,    TOOL_NAMES as _VERIFY_NAMES
-from tools.aggregation_email import TOOLS as _AGG_TOOLS,       TOOL_NAMES as _AGG_NAMES
+from tools.aggregation_email  import TOOLS as _AGG_TOOLS,       TOOL_NAMES as _AGG_NAMES
+
+# Teams chat ingest + audio transcription live in Teams-Requirement-Watcher
+# (sibling project). TRW runs locally and writes its outputs directly into
+# NN's data/requirements/inbox/{chat,meetings}/ so the agent picks them up
+# via read_requirement_inbox without NN duplicating TRW's reader logic.
 
 ALL_TOOLS: list = [
     *_MEMORY_TOOLS, *_REQ_TOOLS, *_TEST_TOOLS,
     *_FILE_TOOLS, *_GIT_TOOLS, *_RPT_TOOLS,
-    *_DOCX_TOOLS, *_TEAMS_TOOLS, *_TRANS_TOOLS,
-    *_VERIFY_TOOLS, *_AGG_TOOLS,
+    *_DOCX_TOOLS, *_VERIFY_TOOLS, *_AGG_TOOLS,
 ]
 TOOL_NAMES: list[str] = [
     *_MEMORY_NAMES, *_REQ_NAMES, *_TEST_NAMES,
     *_FILE_NAMES, *_GIT_NAMES, *_RPT_NAMES,
-    *_DOCX_NAMES, *_TEAMS_NAMES, *_TRANS_NAMES,
-    *_VERIFY_NAMES, *_AGG_NAMES,
+    *_DOCX_NAMES, *_VERIFY_NAMES, *_AGG_NAMES,
 ]

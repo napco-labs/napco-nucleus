@@ -20,12 +20,13 @@ Goal: collect every raw input that arrived since the last run (email, Google Dri
 
 ### 1. Collect from every channel
 
-Call these in order. If a tool errors with missing env vars, log the error and continue with the channels that ARE available — partial collection is fine, total failure is not.
+NN owns email + Google Drive collection. Teams chat and call transcripts are produced by **Teams-Requirement-Watcher** (sibling project) running on the same machine — TRW writes directly into NN's `data/requirements/inbox/chat/` and `inbox/meetings/`, so they appear in step 2's read with no extra ingest tool needed here.
+
+If a tool errors with missing env vars, log the error and continue with the channels that ARE available — partial collection is fine, total failure is not.
 
 - **Email**: `poll_requirement_emails()` — fetches new emails from allowlisted senders into `data/requirements/inbox/email/`.
 - **Google Drive**: `ingest_drive_files()` — pulls audio/video → Whisper → `inbox/meetings/`, PDF → pypdf → `inbox/documents/`. (Word docs `.docx` and plain text `.txt` are NOT yet supported by the ingester — open follow-up; do not try to process them.)
-- **Teams chat**: `ingest_teams_chat()` — reads the consumer Teams desktop cache, writes the conversation to `inbox/chat/`. Defaults to ContiHosting; pass `conversation_id` to override. **Fails on the runner** — only run on a local box where Teams desktop is signed in.
-- **Audio meetings**: `transcribe_call_audio()` — if there are unprocessed `*_mic.wav` / `*_speaker.wav` pairs in `inbox/audio/`, transcribes the latest session (Bangla source → English output). Skip if the audio inbox is empty.
+- **Teams chat & call transcripts**: produced by TRW out-of-band. NN does NOT call any ingest tool for these. If the user wants a fresh chat dump or call transcript before this run, they invoke `dump_chat.py <number>` or `transcribe_call.py` from TRW themselves.
 
 ### 2. Read the inbox
 

@@ -5,4 +5,3 @@ google-api-python-client>=2.100.0
 google-auth>=2.23.0
 pypdf>=4.0.0
 python-docx>=1.1.0
-ccl_chromium_reader @ git+https://github.com/cclgroupltd/ccl_chromium_reader.git
