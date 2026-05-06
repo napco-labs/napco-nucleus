@@ -19,18 +19,24 @@ evolve via prompt edits instead of code changes.
 """
 from __future__ import annotations
 
-from tools.memory       import TOOLS as _MEMORY_TOOLS, TOOL_NAMES as _MEMORY_NAMES
-from tools.requirements import TOOLS as _REQ_TOOLS,    TOOL_NAMES as _REQ_NAMES
-from tools.tests        import TOOLS as _TEST_TOOLS,   TOOL_NAMES as _TEST_NAMES
-from tools.files        import TOOLS as _FILE_TOOLS,   TOOL_NAMES as _FILE_NAMES
-from tools.git          import TOOLS as _GIT_TOOLS,    TOOL_NAMES as _GIT_NAMES
-from tools.report       import TOOLS as _RPT_TOOLS,    TOOL_NAMES as _RPT_NAMES
+from tools.memory             import TOOLS as _MEMORY_TOOLS,    TOOL_NAMES as _MEMORY_NAMES
+from tools.requirements       import TOOLS as _REQ_TOOLS,       TOOL_NAMES as _REQ_NAMES
+from tools.tests              import TOOLS as _TEST_TOOLS,      TOOL_NAMES as _TEST_NAMES
+from tools.files              import TOOLS as _FILE_TOOLS,      TOOL_NAMES as _FILE_NAMES
+from tools.git                import TOOLS as _GIT_TOOLS,       TOOL_NAMES as _GIT_NAMES
+from tools.report             import TOOLS as _RPT_TOOLS,       TOOL_NAMES as _RPT_NAMES
+from tools.docx_writer        import TOOLS as _DOCX_TOOLS,      TOOL_NAMES as _DOCX_NAMES
+from tools.teams_chat         import TOOLS as _TEAMS_TOOLS,     TOOL_NAMES as _TEAMS_NAMES
+from tools.transcribe         import TOOLS as _TRANS_TOOLS,     TOOL_NAMES as _TRANS_NAMES
+from tools.verification_email import TOOLS as _VERIFY_TOOLS,    TOOL_NAMES as _VERIFY_NAMES
 
 ALL_TOOLS: list = [
     *_MEMORY_TOOLS, *_REQ_TOOLS, *_TEST_TOOLS,
     *_FILE_TOOLS, *_GIT_TOOLS, *_RPT_TOOLS,
+    *_DOCX_TOOLS, *_TEAMS_TOOLS, *_TRANS_TOOLS, *_VERIFY_TOOLS,
 ]
 TOOL_NAMES: list[str] = [
     *_MEMORY_NAMES, *_REQ_NAMES, *_TEST_NAMES,
     *_FILE_NAMES, *_GIT_NAMES, *_RPT_NAMES,
+    *_DOCX_NAMES, *_TEAMS_NAMES, *_TRANS_NAMES, *_VERIFY_NAMES,
 ]
