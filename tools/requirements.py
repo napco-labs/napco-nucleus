@@ -116,11 +116,12 @@ async def ingest_drive_files_tool(args):
 
 @tool(
     "read_requirement_inbox",
-    "Return the contents of every .txt file in data/requirements/inbox/ "
-    "(email, meetings, chat, documents sub-folders). Use AFTER "
-    "poll_requirement_emails + ingest_drive_files so you can read all "
-    "pending raw requirement text in one call, then split it into "
-    "~3-hour tasks and call publish_tasks_to_gitlab. Optional source= "
+    "Return the contents of every .txt and .md file in data/requirements/"
+    "inbox/ (email, meetings, chat, documents sub-folders). Use AFTER the "
+    "collect-stage tools (poll_requirement_emails, ingest_drive_files, "
+    "ingest_teams_chat, transcribe_call_audio) so you can read every "
+    "raw requirement source in one call. Email + Drive PDFs land as .txt; "
+    "Teams chat dumps and call transcripts land as .md. Optional source= "
     "filter: email / meetings / chat / documents — defaults to all.",
     {"source": str},
 )
@@ -135,7 +136,7 @@ async def read_requirement_inbox_tool(args):
         if not sub_dir.is_dir():
             continue
         for name in sorted(os.listdir(sub_dir)):
-            if name.startswith(".") or not name.endswith(".txt"):
+            if name.startswith(".") or not name.lower().endswith((".txt", ".md")):
                 continue
             path = sub_dir / name
             try:
