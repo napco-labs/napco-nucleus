@@ -29,14 +29,17 @@ from tools.docx_writer        import TOOLS as _DOCX_TOOLS,      TOOL_NAMES as _D
 from tools.teams_chat         import TOOLS as _TEAMS_TOOLS,     TOOL_NAMES as _TEAMS_NAMES
 from tools.transcribe         import TOOLS as _TRANS_TOOLS,     TOOL_NAMES as _TRANS_NAMES
 from tools.verification_email import TOOLS as _VERIFY_TOOLS,    TOOL_NAMES as _VERIFY_NAMES
+from tools.aggregation_email import TOOLS as _AGG_TOOLS,       TOOL_NAMES as _AGG_NAMES
 
 ALL_TOOLS: list = [
     *_MEMORY_TOOLS, *_REQ_TOOLS, *_TEST_TOOLS,
     *_FILE_TOOLS, *_GIT_TOOLS, *_RPT_TOOLS,
-    *_DOCX_TOOLS, *_TEAMS_TOOLS, *_TRANS_TOOLS, *_VERIFY_TOOLS,
+    *_DOCX_TOOLS, *_TEAMS_TOOLS, *_TRANS_TOOLS,
+    *_VERIFY_TOOLS, *_AGG_TOOLS,
 ]
 TOOL_NAMES: list[str] = [
     *_MEMORY_NAMES, *_REQ_NAMES, *_TEST_NAMES,
     *_FILE_NAMES, *_GIT_NAMES, *_RPT_NAMES,
-    *_DOCX_NAMES, *_TEAMS_NAMES, *_TRANS_NAMES, *_VERIFY_NAMES,
+    *_DOCX_NAMES, *_TEAMS_NAMES, *_TRANS_NAMES,
+    *_VERIFY_NAMES, *_AGG_NAMES,
 ]

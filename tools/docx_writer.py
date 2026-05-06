@@ -132,13 +132,13 @@ async def write_aggregation_docx_tool(args):
 
 @tool(
     "write_verification_docx",
-    "Write the client-facing verification Word document. Each requirement "
-    "gets a heading + a 2-5 paragraph summary in plain prose (NOT bullets). "
-    "Tone: neutral developer English, no jargon, no marketing voice. "
-    "Input `requirements` is a list of dicts with keys: title (str — short "
-    "<80 chars), summary (str — 2-5 paragraphs separated by blank lines), "
-    "source_refs (optional list of source filenames so the client can trace "
-    "back). Output filename format is 'Requirements Verification <YYYY-MM-DD>.docx' "
+    "Write the client-facing verification Word document as a flat numbered "
+    "list. Each requirement is one numbered paragraph: '1. <title> - "
+    "<one-paragraph summary>'. Tone: neutral developer English, no jargon, "
+    "no marketing voice. Input `requirements` is a list of dicts with keys: "
+    "title (str - short, <80 chars), summary (str - exactly ONE paragraph, "
+    "no blank lines), source_refs (optional list of source filenames). "
+    "Output filename format is 'Requirements Verification <YYYY-MM-DD>.docx' "
     "in data/requirements/. Returns {path, requirement_count}.",
     {"requirements": list, "output_path": str},
 )
@@ -165,7 +165,7 @@ async def write_verification_docx_tool(args):
     intro.add_run(
         "Below are the requirements identified from your recent communications "
         "(email, Teams messages, and call discussions). Please review each "
-        "summary and reply to confirm the interpretation, or send corrections. "
+        "item and reply to confirm the interpretation, or send corrections. "
         "Each item will be tracked separately once you confirm."
     )
     doc.add_paragraph()
@@ -177,13 +177,16 @@ async def write_verification_docx_tool(args):
         summary = (r.get("summary") or "").strip()
         source_refs = r.get("source_refs") or []
 
-        doc.add_heading(f"{i}. {title}", level=1)
-
+        # Flat numbered line: "1. " + bold(title) + " - " + summary
+        p = doc.add_paragraph()
+        p.add_run(f"{i}. ").bold = True
+        p.add_run(title).bold = True
         if summary:
-            for para in [p.strip() for p in summary.split("\n\n") if p.strip()]:
-                doc.add_paragraph(para)
+            # Collapse any blank lines — this format is one paragraph per item.
+            collapsed = " ".join(line.strip() for line in summary.splitlines() if line.strip())
+            p.add_run(f" - {collapsed}")
         else:
-            p = doc.add_paragraph()
+            p.add_run(" - ")
             p.add_run("(no summary supplied)").italic = True
 
         if isinstance(source_refs, list) and source_refs:
@@ -192,8 +195,7 @@ async def write_verification_docx_tool(args):
             ref_run.italic = True
             ref_run.font.size = Pt(9)
 
-        doc.add_paragraph()
-
+    doc.add_paragraph()
     closing = doc.add_paragraph()
     closing.add_run(
         "Please reply to this email confirming the above interpretation is "
