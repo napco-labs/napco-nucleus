@@ -439,11 +439,83 @@ async def publish_tasks_to_backlog_tool(args):
     })
 
 
+# ─── pull-session helpers ──────────────────────────────────────────
+
+@tool(
+    "read_pull_session",
+    "Return the contents of the current pull-session Word doc at "
+    "data/requirements/sessions/current.docx. Returns the full text "
+    "(joined paragraphs) plus a list of section titles so the agent "
+    "can see what was pulled. Use this in the verify-session task "
+    "instead of read_requirement_inbox — the session doc is the single "
+    "input for on-demand identify runs.",
+    {},
+)
+async def read_pull_session_tool(args):
+    from tools import _session_doc as session_doc  # lazy
+    if not session_doc.SESSION_PATH.exists():
+        return _text({"error": "No active pull session — start one with "
+                               "start_pull_session and pull data first.",
+                      "exists": False})
+    from docx import Document  # lazy
+    doc = Document(str(session_doc.SESSION_PATH))
+    paragraphs = [p.text for p in doc.paragraphs]
+    section_titles = [p.text for p in doc.paragraphs
+                      if p.style.name.startswith("Heading 1")]
+    content = "\n".join(paragraphs)
+    meta = session_doc._load_meta()
+    return _text({
+        "exists": True,
+        "session_path": str(session_doc.SESSION_PATH.relative_to(_HERE)
+                            .as_posix()),
+        "started_at": meta.get("started_at"),
+        "label": meta.get("label", ""),
+        "section_count": len(section_titles),
+        "sections": section_titles,
+        "chars": len(content),
+        "content": content,
+    })
+
+
+@tool(
+    "start_pull_session",
+    "Archive the current pull-session doc (if any) and start a fresh one. "
+    "Optional `label` argument is stored in meta and used in the archive "
+    "filename. Use when the user says 'start a new session'.",
+    {"label": str},
+)
+async def start_pull_session_tool(args):
+    from tools import _session_doc as session_doc  # lazy
+    label = (args.get("label") or "").strip() or None
+    result = session_doc.reset(label=label)
+    memory.log_activity(
+        task_name="requirement-collection:start_pull_session",
+        result="reset",
+        technical_details=result,
+    )
+    return _text(result)
+
+
+@tool(
+    "pull_session_status",
+    "Inspect the current pull-session doc — returns whether it exists, "
+    "when it was started, label (if any), and the list of section "
+    "titles already in it. No side effects.",
+    {},
+)
+async def pull_session_status_tool(args):
+    from tools import _session_doc as session_doc  # lazy
+    return _text(session_doc.status())
+
+
 TOOLS = [
     poll_requirement_emails_tool,
     ingest_drive_files_tool,
     read_requirement_inbox_tool,
     publish_tasks_to_backlog_tool,
+    read_pull_session_tool,
+    start_pull_session_tool,
+    pull_session_status_tool,
 ]
 
 TOOL_NAMES = [
@@ -451,4 +523,7 @@ TOOL_NAMES = [
     "ingest_drive_files",
     "read_requirement_inbox",
     "publish_tasks_to_backlog",
+    "read_pull_session",
+    "start_pull_session",
+    "pull_session_status",
 ]
