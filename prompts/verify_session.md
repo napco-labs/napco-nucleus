@@ -50,14 +50,22 @@ If ALL candidates were dedup hits, STOP and report "All identified requirements 
 
 `write_verification_docx(requirements=<list from step 2>)` — writes `data/requirements/Requirements Verification <YYYY-MM-DD>.docx`. Output shape is a flat numbered list, one paragraph per requirement: `1. <title> - <summary>`. Capture the returned `path`.
 
-### 4. Draft ONE client email
+### 4. Draft ONE client email — with TWO attachments
 
-`draft_verification_email(docx_path=<path from step 3>)`. Default recipient is `VERIFICATION_TO` env (configured by user). The tool:
-- Writes a `.eml` to `data/requirements/drafts/<YYYY-MM-DD>/`
+`draft_verification_email(docx_path=<path from step 3>, session_docx_path=<session_path from step 1>)`.
+
+Two attachments go into ONE email:
+1. **Requirements Verification .docx** (the curated list from step 3)
+2. **Pull Session .docx** — the raw aggregation of email + Teams chat + Drive + meeting transcript that the items were drawn from. Pass `session_docx_path` = the `session_path` value returned by `read_pull_session` in step 1.
+
+Default recipient is `VERIFICATION_TO` env. The tool:
+- Writes one `.eml` to `data/requirements/drafts/<YYYY-MM-DD>/` with both files attached
 - Pushes the same message into the user's IMAP Drafts folder (Outlook / Gmail web)
-- Returns `{drafted, draft_path, absolute_path, imap_appended, drafts_folder, ...}`
+- Returns `{drafted, draft_path, absolute_path, imap_appended, drafts_folder, attachments, ...}` — note `attachments` is a list with both filenames
 
-Both honor `NAPCO_NUCLEUS_DRY_RUN=1` for safe testing — they return `{drafted: false, dry_run: true, ...}` and write nothing.
+The default email body is auto-selected based on whether one or two attachments are passed; for two it explains both attachments to the client.
+
+Honors `NAPCO_NUCLEUS_DRY_RUN=1` for safe testing — returns `{drafted: false, dry_run: true, ...}` and writes nothing.
 
 ### 4.5 Remember each NEW requirement (mandatory after drafting)
 
