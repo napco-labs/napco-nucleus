@@ -9,17 +9,19 @@ One MCP tool:
                                manual send.
 
 Per the approved On-Demand workflow, NAPCO Nucleus does NOT send email
-itself. It produces an .eml draft on disk; the user opens that file in
-their own mail client, reviews, and sends it manually.
+itself. For each draft it:
 
-Output:
-    data/requirements/drafts/<YYYY-MM-DD>/verification_<HHMM>_<recipient>.eml
+  1. writes a local .eml copy to data/requirements/drafts/<date>/  (audit trail)
+  2. APPENDs the message to the user's IMAP Drafts folder so it appears
+     in Outlook / Gmail web alongside other drafts, ready for manual send.
 
 Env vars:
     SMTP_FROM            optional, From: header address (defaults to
                          REQ_IMAP_USER if available, else "nucleus@local")
     SMTP_FROM_NAME       optional display name (e.g. "NAPCO Nucleus")
     VERIFICATION_TO      default recipient (e.g. titucse@gmail.com)
+    REQ_IMAP_HOST/PORT/USER/PASSWORD   used by the IMAP draft push
+    IMAP_DRAFTS_FOLDER   optional override (auto-detected via \\Drafts flag)
 """
 from __future__ import annotations
 
@@ -36,6 +38,7 @@ from pathlib import Path
 from claude_agent_sdk import tool
 
 import memory
+from tools._imap_drafts import append_draft
 
 logger = logging.getLogger(__name__)
 
@@ -169,21 +172,41 @@ async def draft_verification_email_tool(args):
                       "to": to_addr, "from": from_addr})
 
     rel = draft_path.relative_to(Path(__file__).parent.parent).as_posix()
+
+    # Push into the user's IMAP Drafts folder so it appears in Outlook /
+    # Gmail web alongside other drafts. .eml on disk is kept as a local
+    # copy + audit trail.
+    imap_result = append_draft(msg)
+
     memory.log_activity(
         task_name="requirement-collection:draft_verification",
-        result="drafted",
+        result="drafted" + ("+imap" if imap_result["appended"] else ""),
         technical_details={"to": to_addr, "from": from_addr, "subject": subject,
-                           "attachment": p.name, "draft_path": rel},
+                           "attachment": p.name, "draft_path": rel,
+                           "imap_appended": imap_result["appended"],
+                           "imap_folder": imap_result["folder"],
+                           "imap_error": imap_result["error"]},
     )
+
+    if imap_result["appended"]:
+        next_step = (f"Open '{imap_result['folder']}' in your mail client — "
+                     f"the draft is waiting there for review and send.")
+    else:
+        next_step = (f"IMAP push failed ({imap_result['error']}). "
+                     f"Open the .eml file directly: {draft_path}")
+
     return _text({
         "drafted": True,
         "draft_path": rel,
         "absolute_path": str(draft_path),
+        "imap_appended": imap_result["appended"],
+        "drafts_folder": imap_result["folder"],
+        "imap_error": imap_result["error"],
         "to": to_addr,
         "from": from_addr,
         "subject": subject,
         "attachment": p.name,
-        "next_step": "Open the .eml in your mail client, review, and send manually.",
+        "next_step": next_step,
     })
 
 

@@ -59,7 +59,7 @@ Only if step 4 produced at least one requirement.
 
 ### 6. Draft the two emails (manual send by user)
 
-NAPCO Nucleus does NOT send email itself (per the approved On-Demand workflow). It writes `.eml` drafts to `data/requirements/drafts/<YYYY-MM-DD>/`. The user opens each draft in their mail client (Outlook), reviews, and sends manually.
+NAPCO Nucleus does NOT send email itself (per the approved On-Demand workflow). It writes `.eml` drafts to `data/requirements/drafts/<YYYY-MM-DD>/` AND pushes each one into the user's IMAP Drafts folder so the draft appears in Outlook / Gmail web ready for manual review and send.
 
 The aggregation draft is always produced (records artifact). The verification draft is produced only if step 5 ran.
 
