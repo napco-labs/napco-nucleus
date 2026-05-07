@@ -203,6 +203,9 @@ def main() -> int:
     sel.add_argument("--name", help="Substring of group title, participant, or sender")
     sel.add_argument("--number", type=int, help="Chat number from registry")
     sel.add_argument("--id", help="Full conversation_id (19:...@thread.v2 / .skype)")
+    p.add_argument("--last-minutes", type=int, default=None,
+                   help="Pull the last N minutes (now - N min .. now). "
+                        "Supersedes --from / --to / --date.")
     p.add_argument("--from", dest="from_t", default="00:00",
                    help="Start time (HH:MM or '3 PM'). Default 00:00.")
     p.add_argument("--to", dest="to_t", default="23:59",
@@ -226,20 +229,39 @@ def main() -> int:
 
     cid, title, number = resolved
 
-    target_date = (dt.datetime.strptime(args.date, "%Y-%m-%d").date()
-                   if args.date else dt.date.today())
-    try:
-        from_t = _parse_time(args.from_t)
-        to_t = _parse_time(args.to_t)
-    except ValueError as e:
-        print(f"Time parse error: {e}", file=sys.stderr)
-        return 1
+    # Resolve absolute (start_dt, end_dt) from either --last-minutes
+    # or --from/--to/--date. --last-minutes wins if both are given.
+    if args.last_minutes is not None:
+        if args.last_minutes <= 0:
+            print("--last-minutes must be > 0", file=sys.stderr)
+            return 1
+        end_dt = dt.datetime.now()
+        start_dt = end_dt - dt.timedelta(minutes=args.last_minutes)
+        target_date = start_dt.date()
+        from_t = start_dt.time()
+        to_t = end_dt.time()
+    else:
+        target_date = (dt.datetime.strptime(args.date, "%Y-%m-%d").date()
+                       if args.date else dt.date.today())
+        try:
+            from_t = _parse_time(args.from_t)
+            to_t = _parse_time(args.to_t)
+        except ValueError as e:
+            print(f"Time parse error: {e}", file=sys.stderr)
+            return 1
+        start_dt = dt.datetime.combine(target_date, from_t)
+        end_dt = dt.datetime.combine(target_date, to_t)
 
-    from_ms = int(dt.datetime.combine(target_date, from_t).timestamp() * 1000)
-    to_ms = int(dt.datetime.combine(target_date, to_t).timestamp() * 1000)
+    from_ms = int(start_dt.timestamp() * 1000)
+    to_ms = int(end_dt.timestamp() * 1000)
 
     print(f"Chat:    #{number}  {title}")
-    print(f"Window:  {target_date}  {from_t.strftime('%H:%M')} -> {to_t.strftime('%H:%M')}")
+    if args.last_minutes is not None:
+        print(f"Window:  last {args.last_minutes} min  "
+              f"({start_dt:%Y-%m-%d %H:%M:%S} -> {end_dt:%H:%M:%S})")
+    else:
+        print(f"Window:  {target_date}  "
+              f"{from_t.strftime('%H:%M')} -> {to_t.strftime('%H:%M')}")
 
     grouped = reader.read_messages_by_conversations({cid})
     msgs = grouped.get(cid, [])
