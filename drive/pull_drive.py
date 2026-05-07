@@ -128,12 +128,14 @@ def main() -> int:
 
     # Resolve absolute (start_dt, end_dt) window if any time filter set.
     from_dt = to_dt = None
+    target_date = None
     if args.last_minutes is not None:
         if args.last_minutes <= 0:
             print("--last-minutes must be > 0", file=sys.stderr)
             return 1
         to_dt = dt.datetime.now()
         from_dt = to_dt - dt.timedelta(minutes=args.last_minutes)
+        target_date = from_dt.date()
     elif args.from_t or args.to_t or args.date:
         target_date = (dt.datetime.strptime(args.date, "%Y-%m-%d").date()
                        if args.date else dt.date.today())

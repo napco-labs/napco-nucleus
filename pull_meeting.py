@@ -85,7 +85,11 @@ def main() -> int:
             if text:
                 all_segs.append({"start": s.start, "end": s.end,
                                  "text": text, "speaker": label})
-                print(f"    {s.start:7.2f}->{s.end:7.2f}  {label:5}  {text[:80]}")
+                # Encode-safe progress print (Windows cp1252 console can't render
+                # all Unicode the model returns; the actual text variable is kept
+                # as-is for the docx).
+                safe = text[:80].encode("ascii", "replace").decode("ascii")
+                print(f"    {s.start:7.2f}->{s.end:7.2f}  {label:5}  {safe}")
 
     all_segs.sort(key=lambda s: s["start"])
 

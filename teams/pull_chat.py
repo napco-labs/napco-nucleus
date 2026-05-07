@@ -203,6 +203,11 @@ def main() -> int:
     sel.add_argument("--name", help="Substring of group title, participant, or sender")
     sel.add_argument("--number", type=int, help="Chat number from registry")
     sel.add_argument("--id", help="Full conversation_id (19:...@thread.v2 / .skype)")
+    sel.add_argument("--all-chats", action="store_true",
+                     help="Pull from EVERY chat in the registry within the "
+                          "time window. Requires --last-minutes or --from/--to. "
+                          "Each chat with messages in the window gets its own "
+                          "section in the session doc.")
     p.add_argument("--last-minutes", type=int, default=None,
                    help="Pull the last N minutes (now - N min .. now). "
                         "Supersedes --from / --to / --date.")
@@ -224,14 +229,34 @@ def main() -> int:
                         "appending to NN's pull-session doc.")
     args = p.parse_args()
 
-    arg = args.id or (str(args.number) if args.number is not None else None) or args.name
-    resolved = _resolve(arg)
-    if not resolved:
-        print(f"No chat matching {arg!r}.", file=sys.stderr)
-        print("Run `py list_chats.py` to see available chats.", file=sys.stderr)
-        return 2
+    # --all-chats: build a list of (cid, title, number) tuples for every
+    # chat in the registry. Each one gets resolved + appended below.
+    if args.all_chats:
+        if args.last_minutes is None and not args.from_t and not args.to_t:
+            print("--all-chats needs a time window — use --last-minutes N "
+                  "or --from/--to.", file=sys.stderr)
+            return 1
+        rows = store.list_chat_registry(order="activity")
+        if not rows:
+            print("Chat registry is empty. Run "
+                  "`python -m teams.list_chats` first.", file=sys.stderr)
+            return 1
+        chat_list = [(r["conversation_id"],
+                       r["title"] or f"(chat #{r['chat_number']})",
+                       r["chat_number"]) for r in rows]
+        print(f"--all-chats: scanning {len(chat_list)} chats")
+    else:
+        arg = (args.id or
+               (str(args.number) if args.number is not None else None) or
+               args.name)
+        resolved = _resolve(arg)
+        if not resolved:
+            print(f"No chat matching {arg!r}.", file=sys.stderr)
+            print("Run `python -m teams.list_chats` to see available chats.",
+                  file=sys.stderr)
+            return 2
+        chat_list = [resolved]
 
-    cid, title, number = resolved
 
     # Resolve absolute (start_dt, end_dt) from either --last-minutes
     # or --from/--to/--date. --last-minutes wins if both are given.
@@ -259,7 +284,6 @@ def main() -> int:
     from_ms = int(start_dt.timestamp() * 1000)
     to_ms = int(end_dt.timestamp() * 1000)
 
-    print(f"Chat:    #{number}  {title}")
     if args.last_minutes is not None:
         print(f"Window:  last {args.last_minutes} min  "
               f"({start_dt:%Y-%m-%d %H:%M:%S} -> {end_dt:%H:%M:%S})")
@@ -267,68 +291,100 @@ def main() -> int:
         print(f"Window:  {target_date}  "
               f"{from_t.strftime('%H:%M')} -> {to_t.strftime('%H:%M')}")
 
-    grouped = reader.read_messages_by_conversations({cid})
-    msgs = grouped.get(cid, [])
-    filtered = [m for m in msgs if from_ms <= (m.get("arrival_ms") or 0) <= to_ms]
-    in_window = len(filtered)
+    if args.no_session and len(chat_list) > 1:
+        print("--no-session is incompatible with --all-chats", file=sys.stderr)
+        return 1
 
-    if args.sender:
-        needle = args.sender.lower()
-        filtered = [m for m in filtered
-                    if needle in (m.get("sender_name") or "").lower()]
-        print(f"Messages in window: {in_window} of {len(msgs)} total; "
-              f"{len(filtered)} after --sender '{args.sender}' filter")
-    else:
-        print(f"Messages in window: {in_window} of {len(msgs)} total")
+    # Read all chats at once (one IndexedDB pass for all conversation_ids).
+    cids_to_read = {c[0] for c in chat_list}
+    grouped_all = reader.read_messages_by_conversations(cids_to_read)
 
-    if not filtered:
-        print("No messages in the requested window. Nothing written.")
-        return 0
+    chats_with_messages = 0
+    total_appended_lines = 0
 
-    senders = sorted({m.get("sender_name") or "(unknown)" for m in filtered})
+    for cid, title, number in chat_list:
+        msgs = grouped_all.get(cid, [])
+        filtered = [m for m in msgs
+                    if from_ms <= (m.get("arrival_ms") or 0) <= to_ms]
+        in_window = len(filtered)
 
-    if args.no_session:
-        # Legacy path: standalone .docx in inbox/chat/
-        safe = re.sub(r"[^A-Za-z0-9_-]+", "_",
-                      (title or f"chat-{number}")).strip("_")[:40] or "chat"
-        fname = (f"teams_{safe}_{target_date}_"
-                 f"{from_t.strftime('%H%M')}-{to_t.strftime('%H%M')}.docx")
-        out_path = Path(args.out_dir) / fname
-        _build_docx(out_path, title=title, chat_number=number, cid=cid,
-                    target_date=target_date, from_t=from_t, to_t=to_t,
-                    msgs=filtered, senders=senders)
-        print(f"\nWrote: {out_path.resolve()}")
-        print(f"Participants: {', '.join(senders)}")
-        return 0
+        if args.sender:
+            needle = args.sender.lower()
+            filtered = [m for m in filtered
+                        if needle in (m.get("sender_name") or "").lower()]
 
-    # Default path: append to NN's pull-session doc
-    body_lines: list[str] = []
-    for m in filtered:
-        ts = dt.datetime.fromtimestamp((m.get("arrival_ms") or 0) / 1000)
-        sender = m.get("sender_name") or "(unknown)"
-        body = (m.get("body") or "").strip()
-        if not body:
+        if not filtered:
+            if not args.all_chats:
+                # Single-chat mode prints "no messages" once.
+                if args.sender:
+                    print(f"Messages in window: {in_window} of {len(msgs)} total; "
+                          f"0 after --sender '{args.sender}' filter")
+                else:
+                    print(f"Messages in window: 0 of {len(msgs)} total")
+                print("No messages in the requested window. Nothing written.")
             continue
-        body_lines.append(f"[{ts:%H:%M}] {sender}: {body}")
 
-    headline = f"{title} (chat #{number})" if number else title
-    if args.sender:
-        headline += f"  · sender: {args.sender}"
-    result = session_doc.append_section(
-        source="TEAMS CHAT",
-        headline=headline,
-        metadata={
-            "Date": str(target_date),
-            "Window": f"{from_t.strftime('%H:%M')} -> {to_t.strftime('%H:%M')}",
-            "Messages": str(len(filtered)),
-            "Participants": ", ".join(senders),
-        },
-        body_paragraphs=body_lines,
-    )
+        senders = sorted({m.get("sender_name") or "(unknown)" for m in filtered})
 
-    print(f"\nAppended to session doc: {result['absolute_path']}")
-    print(f"Section: {result['section']}")
-    print(f"Lines added: {result['appended_paragraphs']}")
+        if args.no_session:
+            # Legacy single-chat standalone .docx path
+            safe = re.sub(r"[^A-Za-z0-9_-]+", "_",
+                          (title or f"chat-{number}")).strip("_")[:40] or "chat"
+            fname = (f"teams_{safe}_{target_date}_"
+                     f"{from_t.strftime('%H%M')}-{to_t.strftime('%H%M')}.docx")
+            out_path = Path(args.out_dir) / fname
+            _build_docx(out_path, title=title, chat_number=number, cid=cid,
+                        target_date=target_date, from_t=from_t, to_t=to_t,
+                        msgs=filtered, senders=senders)
+            print(f"\nWrote: {out_path.resolve()}")
+            print(f"Participants: {', '.join(senders)}")
+            return 0
+
+        body_lines: list[str] = []
+        for m in filtered:
+            ts = dt.datetime.fromtimestamp((m.get("arrival_ms") or 0) / 1000)
+            sender = m.get("sender_name") or "(unknown)"
+            body = (m.get("body") or "").strip()
+            if body:
+                body_lines.append(f"[{ts:%H:%M}] {sender}: {body}")
+
+        if not body_lines:
+            continue
+
+        headline = f"{title} (chat #{number})" if number else title
+        if args.sender:
+            headline += f"  · sender: {args.sender}"
+
+        result = session_doc.append_section(
+            source="TEAMS CHAT",
+            headline=headline,
+            metadata={
+                "Date": str(target_date),
+                "Window": f"{from_t.strftime('%H:%M')} -> {to_t.strftime('%H:%M')}",
+                "Messages": str(len(filtered)),
+                "Participants": ", ".join(senders),
+            },
+            body_paragraphs=body_lines,
+        )
+
+        chats_with_messages += 1
+        total_appended_lines += result["appended_paragraphs"]
+
+        if args.all_chats:
+            print(f"  + #{number} {title}: {len(filtered)} msg, "
+                  f"{result['appended_paragraphs']} lines")
+        else:
+            print(f"\nAppended to session doc: {result['absolute_path']}")
+            print(f"Section: {result['section']}")
+            print(f"Lines added: {result['appended_paragraphs']}")
+
+    if args.all_chats:
+        if chats_with_messages == 0:
+            print("\n--all-chats: 0 chats had messages in the window.")
+        else:
+            print(f"\n--all-chats summary: {chats_with_messages} chat(s) "
+                  f"with messages, {total_appended_lines} lines appended.")
+
     return 0
 
 

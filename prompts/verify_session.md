@@ -15,6 +15,7 @@ Goal: read the user's current pull-session Word document (the consolidated captu
 
 - `recall_activity(task_name="requirement-collection:start_pull_session", limit=3)` — when did this session start?
 - `recall_activity(task_name="requirement-collection:draft_verification", limit=5)` — recent drafts.
+- `memory_stats()` — confirm requirements_seen has the rows from prior runs (this is the dedup table you'll consult in step 2.5).
 
 ### 1. Read the session doc
 
@@ -37,6 +38,14 @@ For each requirement produce a dict with:
 
 If you cannot identify any requirements (e.g. the session was all process chatter), STOP and report "No requirements identified in this session — nothing drafted." Do not produce an empty verification doc, do not draft an email.
 
+### 2.5 Dedup against memory (mandatory before drafting)
+
+For EACH candidate requirement from step 2, call `search_requirements(query="<title>", limit=3)`. If the search returns a hit whose stored title closely matches the candidate (same intent, same scope — minor wording differences are fine), the requirement was already drafted in a prior session. SKIP it. Do not include it in the verification doc.
+
+The remaining requirements (those NOT found in `requirements_seen`) are the NEW ones for this session. Only those go forward to step 3.
+
+If ALL candidates were dedup hits, STOP and report "All identified requirements were already drafted in prior sessions. No new requirements to verify." Do not produce an empty verification doc, do not draft an email.
+
 ### 3. Write the Requirements Verification doc
 
 `write_verification_docx(requirements=<list from step 2>)` — writes `data/requirements/Requirements Verification <YYYY-MM-DD>.docx`. Output shape is a flat numbered list, one paragraph per requirement: `1. <title> - <summary>`. Capture the returned `path`.
@@ -49,6 +58,16 @@ If you cannot identify any requirements (e.g. the session was all process chatte
 - Returns `{drafted, draft_path, absolute_path, imap_appended, drafts_folder, ...}`
 
 Both honor `NAPCO_NUCLEUS_DRY_RUN=1` for safe testing — they return `{drafted: false, dry_run: true, ...}` and write nothing.
+
+### 4.5 Remember each NEW requirement (mandatory after drafting)
+
+For EACH requirement that went into the verification doc (i.e. those that survived step 2.5), call:
+
+`remember_requirement(title="<title>", source="<lowercase channel: email | meetings | chat | documents>", source_ref="<the rel_path of the strongest source for this requirement>", summary="<the same summary used in the doc, truncated to <= 240 chars>")`
+
+This writes the requirement into `requirements_seen` so the NEXT collect_all run will dedup it in step 2.5. Do not skip this — without it, the same requirement gets re-drafted on the next run.
+
+Pick the source value from the section the requirement primarily came from: `EMAIL` → `email`, `TEAMS CHAT` → `chat`, `MEETING` → `meetings`, `DRIVE` → `documents`.
 
 ### 5. Log + exit
 
