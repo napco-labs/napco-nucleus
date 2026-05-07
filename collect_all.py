@@ -8,14 +8,24 @@ Runs the full requirement-management flow in sequence:
   4. Latest call recording (if one was captured recently)  Whisper transcribe
   5. Identify requirements + draft client email           agent verify_session
 
-Sections accumulate in the current pull-session doc — it is NOT reset
-unless --reset is passed. The final draft is pushed to your Outlook /
-Gmail Drafts folder for manual review and send.
+Each run RESETS the pull-session doc by default (the previous one is
+archived) so the batch is clean. Pass --no-reset to keep accumulating
+into the existing session.
+
+The verify step (5) checks each candidate requirement against
+requirements_seen and skips ones that were already drafted in prior
+runs — so running collect_all every 30/60 min won't re-draft the same
+requirement repeatedly. New requirements are saved into the table at
+the end so the next run dedups them.
+
+The final draft is pushed to your Outlook / Gmail Drafts folder for
+manual review and send.
 
 Usage:
-    python collect_all.py                       # default: last 15 min
+    python collect_all.py                       # default: last 15 min, reset
     python collect_all.py --last-minutes 30
-    python collect_all.py --last-minutes 60 --reset
+    python collect_all.py --last-minutes 60
+    python collect_all.py --last-minutes 60 --no-reset   # accumulate
     python collect_all.py --skip-meeting        # don't transcribe call audio
 
 Env:
