@@ -1,24 +1,29 @@
 """Record system loopback (call audio) + microphone to two WAV files.
 
-Stop with Ctrl+C. Output files start at the same wall-clock time so a later
-transcription pass can merge their timestamps.
+Two ways to stop:
+  1. Ctrl+C in this terminal
+  2. Create the sentinel file `data/teams/.stop_recording` (lets a separate
+     process — e.g. an agent running `python -m teams.stop_recording` —
+     stop a recording started in the background)
 
-  data/calls/<YYYYMMDD-HHMMSS>_speaker.wav  -- whatever your speakers played
-  data/calls/<YYYYMMDD-HHMMSS>_mic.wav      -- your default input mic
+  data/teams/calls/<YYYYMMDD-HHMMSS>_speaker.wav  -- system speaker output
+  data/teams/calls/<YYYYMMDD-HHMMSS>_mic.wav      -- default input mic
 
-Run: python record_call.py
+Run: python -m teams.record_call
 """
 from __future__ import annotations
 
 import datetime
 import sys
 import threading
+import time
 import wave
 from pathlib import Path
 
 import pyaudiowpatch as pyaudio
 
 CHUNK = 1024
+STOP_FILE = Path(__file__).parent.parent / "data" / "teams" / ".stop_recording"
 
 
 def resolve_loopback(p: pyaudio.PyAudio) -> dict:
@@ -60,6 +65,11 @@ def main() -> int:
     spk_path = out_dir / f"{stamp}_speaker.wav"
     mic_path = out_dir / f"{stamp}_mic.wav"
 
+    # Clear any leftover stop sentinel so we don't terminate immediately
+    STOP_FILE.parent.mkdir(parents=True, exist_ok=True)
+    if STOP_FILE.exists():
+        STOP_FILE.unlink()
+
     p = pyaudio.PyAudio()
     try:
         loopback = resolve_loopback(p)
@@ -72,14 +82,21 @@ def main() -> int:
         ]
 
         print(f"Recording -> {out_dir.resolve()}")
-        print("Press Ctrl+C to stop.\n")
+        print(f"Stop with Ctrl+C, or `touch {STOP_FILE}`\n")
         for t in threads:
             t.start()
 
         try:
             while all(t.is_alive() for t in threads):
+                if STOP_FILE.exists():
+                    print("\nStop sentinel detected — stopping...")
+                    STOP_FILE.unlink()
+                    stop.set()
+                    break
                 for t in threads:
                     t.join(timeout=0.5)
+            for t in threads:
+                t.join()
         except KeyboardInterrupt:
             print("\nStopping...")
             stop.set()
