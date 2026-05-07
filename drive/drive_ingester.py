@@ -80,18 +80,22 @@ PDF_MIMES = {"application/pdf"}
 PDF_EXT = {".pdf"}
 DOCX_MIMES = {"application/vnd.openxmlformats-officedocument.wordprocessingml.document"}
 DOCX_EXT = {".docx"}
+DOC_MIMES = {"application/msword"}
+DOC_EXT = {".doc"}
 TXT_MIMES = {"text/plain"}
 TXT_EXT = {".txt"}
 
 
 def _classify(file: dict) -> str:
-    """Return 'audio', 'pdf', 'docx', 'txt', or 'skip' for a Drive file dict."""
+    """Return 'audio', 'pdf', 'docx', 'doc', 'txt', or 'skip' for a Drive file dict."""
     mt = (file.get("mimeType") or "").lower()
     ext = Path(file.get("name") or "").suffix.lower()
     if mt.startswith(AUDIO_MIME_PREFIXES) or ext in AUDIO_EXT_FALLBACK:
         return "audio"
     if mt in PDF_MIMES or ext in PDF_EXT:
         return "pdf"
+    if mt in DOC_MIMES or ext in DOC_EXT:
+        return "doc"
     if mt in DOCX_MIMES or ext in DOCX_EXT:
         return "docx"
     if mt in TXT_MIMES or ext in TXT_EXT:
@@ -280,6 +284,34 @@ def _extract_docx_text(docx_path: Path) -> str:
     return "\n\n".join(parts)
 
 
+def _extract_doc_text(doc_path: Path) -> str:
+    """Best-effort text extraction from legacy .doc (OLE compound).
+
+    Pure Python options for .doc are limited. This walks the binary and
+    pulls out printable ASCII / UTF-8 runs ≥ 4 chars, which catches the
+    bulk of plaintext content in most .doc files. Result is rougher
+    than .docx extraction — for a clean output, the user should re-save
+    the file as .docx.
+    """
+    raw = doc_path.read_bytes()
+    out: list[str] = []
+    buf: list[int] = []
+    for b in raw:
+        if 32 <= b < 127 or b in (9, 10, 13):
+            buf.append(b)
+        else:
+            if len(buf) >= 4:
+                out.append(bytes(buf).decode("utf-8", "replace"))
+            buf = []
+    if len(buf) >= 4:
+        out.append(bytes(buf).decode("utf-8", "replace"))
+    text = "\n".join(s for s in out if s.strip())
+    if not text:
+        return ("[legacy .doc — no plain text found via byte scan; "
+                "please re-save as .docx for a clean extract]")
+    return text
+
+
 def _extract_txt_text(txt_path: Path) -> str:
     return txt_path.read_text(encoding="utf-8", errors="replace")
 
@@ -396,6 +428,17 @@ def process_new_drive_files(dry_run: bool = False) -> dict:
                 logger.exception(f"txt read failed for {name}")
                 results.append({"file": name, "id": fid, "kind": kind,
                                 "error": f"txt: {e}"})
+                try: tmp_path.unlink()
+                except Exception: pass
+                continue
+        elif kind == "doc":
+            try:
+                logger.info(f"extracting text from {name} (legacy .doc, byte scan)...")
+                text = _extract_doc_text(tmp_path)
+            except Exception as e:
+                logger.exception(f"doc extraction failed for {name}")
+                results.append({"file": name, "id": fid, "kind": kind,
+                                "error": f"doc: {e}"})
                 try: tmp_path.unlink()
                 except Exception: pass
                 continue

@@ -1,20 +1,32 @@
 """
 On-demand Google Drive pull — fetch matching files from the configured
-Drive folder, extract content (audio/PDF/docx/txt), and append to the
-pull-session doc.
+Drive folder, extract content, and append to the pull-session doc.
+
+File types handled:
+    PDF                .pdf            (pypdf)
+    Plain text         .txt            (direct read)
+    Word               .docx           (python-docx)
+    Word legacy        .doc            (byte-scan, best-effort)
+    Audio / video      .mp3 .mp4 .m4a .wav .webm .mkv ...  (Groq Whisper)
+
+Filters (all optional, AND'd):
+    --filename "<text>"        substring match on filename
+    --last-files N             keep only the N most recently created of the matches
+    --last-minutes N           createdTime within last N min (now - N min .. now)
+    --from-time "<HH:MM>"      manual createdTime window start (with --date)
+    --to-time "<HH:MM>"        manual createdTime window end (with --date)
+    --date YYYY-MM-DD          target date for the manual window (default today)
+
+Examples:
+    python -m drive.pull_drive --last-files 1
+    python -m drive.pull_drive --last-files 3
+    python -m drive.pull_drive --last-minutes 10
+    python -m drive.pull_drive --filename "budget"
+    python -m drive.pull_drive --from-time "3 PM" --to-time "9 PM"
 
 Differs from the auto-poll model (drive_ingester.py): explicitly user-
-commanded with name/time filters, writes ONE consolidated section into
-the session doc instead of one .txt per file in inbox/.
-
-Usage:
-    python pull_drive.py --filename "requirements_v2"
-    python pull_drive.py --from-time 09:00 --to-time 18:00
-    python pull_drive.py --filename "budget" --date 2026-05-06
-
-Filters are AND'd. Time window applies to the file's createdTime.
-At least one filter (--filename / --date / --from-time + --to-time) must
-be specified to keep this distinct from a "pull everything" command.
+commanded with filters, writes ONE consolidated section into the
+session doc instead of one .txt per file in inbox/.
 
 Env vars (same as drive_ingester.py):
     GOOGLE_CREDENTIALS_PATH    service-account JSON path
@@ -77,9 +89,20 @@ def _extract(tmp_path: Path, kind: str) -> str:
         return di._extract_pdf_text(tmp_path)
     if kind == "docx":
         return di._extract_docx_text(tmp_path)
+    if kind == "doc":
+        return di._extract_doc_text(tmp_path)
     if kind == "txt":
         return di._extract_txt_text(tmp_path)
     return ""
+
+
+def _created_local(file: dict) -> dt.datetime | None:
+    ct_str = file.get("createdTime") or ""
+    try:
+        ct = dt.datetime.fromisoformat(ct_str.replace("Z", "+00:00"))
+        return ct.astimezone().replace(tzinfo=None)
+    except Exception:
+        return None
 
 
 def main() -> int:
@@ -88,6 +111,13 @@ def main() -> int:
         formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--filename", default=None,
                    help="Filename substring filter")
+    p.add_argument("--last-files", type=int, default=None,
+                   help="Take the N most recently created files matching "
+                        "the other filters. E.g. --last-files 3")
+    p.add_argument("--last-minutes", type=int, default=None,
+                   help="Files whose createdTime is within the last N "
+                        "minutes (now - N min .. now). Supersedes "
+                        "--from-time / --to-time / --date.")
     p.add_argument("--from-time", dest="from_t", default=None,
                    help="Start of createdTime window (HH:MM or '3 PM')")
     p.add_argument("--to-time", dest="to_t", default=None,
@@ -96,14 +126,17 @@ def main() -> int:
                    help="Target date YYYY-MM-DD (default today, used with time filter)")
     args = p.parse_args()
 
-    if not (args.filename or args.from_t or args.to_t):
-        print("Need at least --filename or --from-time/--to-time", file=sys.stderr)
-        return 1
-
-    target_date = (dt.datetime.strptime(args.date, "%Y-%m-%d").date()
-                   if args.date else dt.date.today())
+    # Resolve absolute (start_dt, end_dt) window if any time filter set.
     from_dt = to_dt = None
-    if args.from_t or args.to_t:
+    if args.last_minutes is not None:
+        if args.last_minutes <= 0:
+            print("--last-minutes must be > 0", file=sys.stderr)
+            return 1
+        to_dt = dt.datetime.now()
+        from_dt = to_dt - dt.timedelta(minutes=args.last_minutes)
+    elif args.from_t or args.to_t or args.date:
+        target_date = (dt.datetime.strptime(args.date, "%Y-%m-%d").date()
+                       if args.date else dt.date.today())
         from_t = _parse_time(args.from_t) if args.from_t else dt.time(0, 0)
         to_t = _parse_time(args.to_t) if args.to_t else dt.time(23, 59)
         from_dt = dt.datetime.combine(target_date, from_t)
@@ -116,15 +149,29 @@ def main() -> int:
 
     print(f"Listing Drive folder {folder_id}...")
     print(f"  Filename:    {args.filename or '(any)'}")
-    if from_dt:
-        print(f"  CreatedTime: {from_dt.strftime('%Y-%m-%d %H:%M')} -> "
-              f"{to_dt.strftime('%H:%M')}")
+    if args.last_minutes is not None:
+        print(f"  Last:        {args.last_minutes} min "
+              f"({from_dt:%Y-%m-%d %H:%M:%S} -> {to_dt:%H:%M:%S})")
+    elif from_dt:
+        print(f"  CreatedTime: {from_dt:%Y-%m-%d %H:%M} -> {to_dt:%H:%M}")
+    if args.last_files is not None:
+        print(f"  Top-N:       most recent {args.last_files} of matches")
 
     drive = di._drive_service()
     listed = di._list_ingestable_files(drive, folder_id)
     matched = [f for f in listed
                if _matches_filters(f, name_substr=args.filename,
                                    from_dt=from_dt, to_dt=to_dt)]
+
+    # Apply --last-files: sort by createdTime desc, take top N
+    if args.last_files is not None:
+        if args.last_files <= 0:
+            print("--last-files must be > 0", file=sys.stderr)
+            return 1
+        matched.sort(key=lambda f: _created_local(f) or dt.datetime.min,
+                     reverse=True)
+        matched = matched[: args.last_files]
+
     print(f"  Matched: {len(matched)} of {len(listed)} ingestable file(s)")
 
     if not matched:
