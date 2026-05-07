@@ -67,10 +67,12 @@ _DRAFTS_ROOT = Path(__file__).parent.parent / "data" / "requirements" / "drafts"
 _DEFAULT_RECIPIENT = "hasan.celloscope@gmail.com"
 
 _DEFAULT_BODY = (
-    "Internal records — raw aggregation of every source ingested in the "
-    "latest requirement-collection cycle (email, Teams chat, call "
-    "transcripts, attachments). Attached for traceability. No action "
-    "required.\n"
+    "Hi,\n\n"
+    "Attached is today's raw aggregation from the requirement-collection "
+    "cycle (email, Teams chats, call transcripts, attachments) bundled "
+    "into one document for the records.\n\n"
+    "Logged for traceability. No action needed on your end.\n\n"
+    "Thanks"
 )
 
 

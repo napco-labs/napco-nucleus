@@ -63,12 +63,15 @@ _DRAFTS_ROOT = Path(__file__).parent.parent / "data" / "requirements" / "drafts"
 
 _DEFAULT_BODY = (
     "Hi,\n\n"
-    "Please find attached the requirements interpretation summary based on "
-    "our recent discussions (email, Teams messages, and call). Please review "
-    "and reply to this email confirming the interpretation, or send any "
-    "corrections inline. Once confirmed, each item will be filed for "
-    "development.\n\n"
-    "Thanks."
+    "Attached is the requirements summary I prepared from our recent "
+    "discussions across email, Teams, and our last call.\n\n"
+    "Please take a few minutes to review each item and let me know "
+    "whether the interpretation matches what you intended. If anything "
+    "needs adjusting (wording, scope, what's in or what's out), just "
+    "reply with the changes inline and I will revise before the items "
+    "move into the development backlog.\n\n"
+    "Looking forward to your reply.\n\n"
+    "Thanks"
 )
 
 
