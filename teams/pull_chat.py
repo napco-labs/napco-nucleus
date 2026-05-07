@@ -206,6 +206,10 @@ def main() -> int:
     p.add_argument("--last-minutes", type=int, default=None,
                    help="Pull the last N minutes (now - N min .. now). "
                         "Supersedes --from / --to / --date.")
+    p.add_argument("--sender", default=None,
+                   help="Filter messages to ones whose sender_name "
+                        "contains this substring (case-insensitive). "
+                        "E.g. --sender Salman.")
     p.add_argument("--from", dest="from_t", default="00:00",
                    help="Start time (HH:MM or '3 PM'). Default 00:00.")
     p.add_argument("--to", dest="to_t", default="23:59",
@@ -266,7 +270,16 @@ def main() -> int:
     grouped = reader.read_messages_by_conversations({cid})
     msgs = grouped.get(cid, [])
     filtered = [m for m in msgs if from_ms <= (m.get("arrival_ms") or 0) <= to_ms]
-    print(f"Messages in window: {len(filtered)} of {len(msgs)} total")
+    in_window = len(filtered)
+
+    if args.sender:
+        needle = args.sender.lower()
+        filtered = [m for m in filtered
+                    if needle in (m.get("sender_name") or "").lower()]
+        print(f"Messages in window: {in_window} of {len(msgs)} total; "
+              f"{len(filtered)} after --sender '{args.sender}' filter")
+    else:
+        print(f"Messages in window: {in_window} of {len(msgs)} total")
 
     if not filtered:
         print("No messages in the requested window. Nothing written.")
@@ -299,6 +312,8 @@ def main() -> int:
         body_lines.append(f"[{ts:%H:%M}] {sender}: {body}")
 
     headline = f"{title} (chat #{number})" if number else title
+    if args.sender:
+        headline += f"  · sender: {args.sender}"
     result = session_doc.append_section(
         source="TEAMS CHAT",
         headline=headline,
