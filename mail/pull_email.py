@@ -2,17 +2,26 @@
 On-demand email pull — fetch IMAP messages by sender / subject / time
 window and append them to NAPCO Nucleus's pull-session doc.
 
+Four filters, all optional, all AND'd:
+
+    --from-sender "addr"     match From: header (substring or full)
+    --subject "text"         match Subject: header (substring)
+    --last-minutes N         relative window: now - N min  ..  now
+    --from HH:MM --to HH:MM  manual absolute window (with optional --date)
+
+Usage:
+    python -m mail.pull_email --last-minutes 15
+    python -m mail.pull_email --from-sender "titucse@gmail.com" --last-minutes 30
+    python -m mail.pull_email --subject "budget" --from "3 PM" --to "5 PM"
+    python -m mail.pull_email --from-sender "khasan@ael-bd.com" --subject "Q3 plan"
+    python -m mail.pull_email --date 2026-05-06 --from 09:00 --to 18:00
+
+With no filters at all, default is today 00:00 -> 23:59 (full day —
+narrow with at least one filter to avoid pulling the whole inbox).
+
 Differs from the auto-poll inbox model (requirements_inbox.py): this is
 explicitly user-commanded, narrowly filtered, and writes ONE consolidated
 section into the session doc instead of one .txt per email in inbox/email/.
-
-Usage:
-    python pull_email.py --from-sender "titucse@gmail.com" --from "3 PM" --to "5 PM"
-    python pull_email.py --subject "budget" --date 2026-05-06 --from 09:00 --to 18:00
-    python pull_email.py --from-sender "khasan@ael-bd.com" --subject "Q3 plan"
-
-Filters are AND'd. At least one of --from-sender / --subject is required.
-Time window defaults to today, 00:00 -> 23:59.
 
 Env vars (same as requirements_inbox.py):
     REQ_IMAP_HOST       default imap.gmail.com
@@ -63,13 +72,13 @@ def _imap_date(d: dt.date) -> str:
 
 
 def _build_search_criteria(*, sender: str | None, subject: str | None,
-                           target_date: dt.date) -> list[str]:
-    """Build IMAP SEARCH criteria. We use date-window narrowing for
-    efficiency (SINCE / BEFORE bracket the day), then time-of-day filter
-    on the client side because IMAP SEARCH has no time-of-day predicate."""
+                           start_dt: dt.datetime,
+                           end_dt: dt.datetime) -> list[str]:
+    """Build IMAP SEARCH criteria. SINCE/BEFORE bracket the date range
+    (server-side narrowing), client filters to the exact window."""
     crit: list[str] = []
-    crit += ["SINCE", _imap_date(target_date),
-             "BEFORE", _imap_date(target_date + dt.timedelta(days=1))]
+    crit += ["SINCE", _imap_date(start_dt.date()),
+             "BEFORE", _imap_date(end_dt.date() + dt.timedelta(days=1))]
     if sender:
         crit += ["FROM", f'"{sender}"']
     if subject:
@@ -77,12 +86,12 @@ def _build_search_criteria(*, sender: str | None, subject: str | None,
     return crit
 
 
-def fetch_filtered_emails(*, sender: str | None, subject: str | None,
-                          target_date: dt.date, from_t: dt.time,
-                          to_t: dt.time) -> list[dict]:
-    """Connect to IMAP, run SEARCH for the day + filters, then narrow to
-    the time window client-side. Returns a list of parsed message dicts
-    with body + attachments already extracted."""
+def fetch_emails_in_window(*, sender: str | None, subject: str | None,
+                           start_dt: dt.datetime,
+                           end_dt: dt.datetime) -> list[dict]:
+    """Connect to IMAP, narrow by date, filter to the absolute datetime
+    window client-side. Returns parsed message dicts with body +
+    attachments already extracted."""
     host = (os.getenv("REQ_IMAP_HOST") or "imap.gmail.com").strip()
     port = int(os.getenv("REQ_IMAP_PORT", "993"))
     user = (os.getenv("REQ_IMAP_USER") or "").strip()
@@ -92,16 +101,13 @@ def fetch_filtered_emails(*, sender: str | None, subject: str | None,
     if not user or not password:
         raise RuntimeError("REQ_IMAP_USER / REQ_IMAP_PASSWORD must be set")
 
-    from_ts = dt.datetime.combine(target_date, from_t)
-    to_ts = dt.datetime.combine(target_date, to_t)
-
     out: list[dict] = []
     m = imaplib.IMAP4_SSL(host, port)
     try:
         m.login(user, password)
         m.select(mailbox, readonly=True)
         crit = _build_search_criteria(sender=sender, subject=subject,
-                                      target_date=target_date)
+                                      start_dt=start_dt, end_dt=end_dt)
         typ, data = m.uid("SEARCH", None, *crit)
         if typ != "OK":
             raise RuntimeError(f"IMAP SEARCH failed: {typ}")
@@ -126,11 +132,10 @@ def fetch_filtered_emails(*, sender: str | None, subject: str | None,
                 received = None
             received_local = (received.astimezone() if received else None)
 
-            # Client-side time-of-day filter
+            # Client-side absolute-datetime filter
             if received_local:
-                # Compare in the user's local tz against the requested window
                 naive_local = received_local.replace(tzinfo=None)
-                if not (from_ts <= naive_local <= to_ts):
+                if not (start_dt <= naive_local <= end_dt):
                     continue
 
             body = ri._body_text(msg)
@@ -184,6 +189,9 @@ def main() -> int:
                    help="Match From: header (substring or full address)")
     p.add_argument("--subject", default=None,
                    help="Match Subject: header (substring)")
+    p.add_argument("--last-minutes", type=int, default=None,
+                   help="Pull emails from the last N minutes "
+                        "(supersedes --from / --to / --date)")
     p.add_argument("--from", dest="from_t", default="00:00",
                    help="Start of time window (HH:MM or '3 PM')")
     p.add_argument("--to", dest="to_t", default="23:59",
@@ -192,29 +200,41 @@ def main() -> int:
                    help="Target date YYYY-MM-DD (default today)")
     args = p.parse_args()
 
-    if not args.from_sender and not args.subject:
-        print("Need at least one of --from-sender or --subject", file=sys.stderr)
-        return 1
+    # All four filters are optional and can be combined freely. With no
+    # filter at all, the default window is today 00:00 -> 23:59 (full
+    # day, all senders, all subjects). Sender, subject, last-minutes,
+    # and explicit --from/--to/--date are all AND'd.
 
-    target_date = (dt.datetime.strptime(args.date, "%Y-%m-%d").date()
-                   if args.date else dt.date.today())
-    try:
-        from_t = _parse_time(args.from_t)
-        to_t = _parse_time(args.to_t)
-    except ValueError as e:
-        print(f"Time parse error: {e}", file=sys.stderr)
-        return 1
+    # Resolve the absolute (start_dt, end_dt) window from either the
+    # relative --last-minutes flag or the --from/--to/--date triple.
+    if args.last_minutes is not None:
+        if args.last_minutes <= 0:
+            print("--last-minutes must be > 0", file=sys.stderr)
+            return 1
+        end_dt = dt.datetime.now()
+        start_dt = end_dt - dt.timedelta(minutes=args.last_minutes)
+    else:
+        target_date = (dt.datetime.strptime(args.date, "%Y-%m-%d").date()
+                       if args.date else dt.date.today())
+        try:
+            from_t = _parse_time(args.from_t)
+            to_t = _parse_time(args.to_t)
+        except ValueError as e:
+            print(f"Time parse error: {e}", file=sys.stderr)
+            return 1
+        start_dt = dt.datetime.combine(target_date, from_t)
+        end_dt = dt.datetime.combine(target_date, to_t)
 
     print(f"Pulling emails from mailbox...")
     print(f"  From sender: {args.from_sender or '(any)'}")
     print(f"  Subject:     {args.subject or '(any)'}")
-    print(f"  Date:        {target_date}")
-    print(f"  Window:      {from_t.strftime('%H:%M')} -> {to_t.strftime('%H:%M')}")
+    print(f"  Window:      {start_dt.strftime('%Y-%m-%d %H:%M:%S')}"
+          f" -> {end_dt.strftime('%Y-%m-%d %H:%M:%S')}")
 
     try:
-        emails = fetch_filtered_emails(
+        emails = fetch_emails_in_window(
             sender=args.from_sender, subject=args.subject,
-            target_date=target_date, from_t=from_t, to_t=to_t)
+            start_dt=start_dt, end_dt=end_dt)
     except Exception as e:
         print(f"\nIMAP error: {type(e).__name__}: {e}", file=sys.stderr)
         return 2
@@ -228,15 +248,17 @@ def main() -> int:
         headline_parts.append(f"from {args.from_sender}")
     if args.subject:
         headline_parts.append(f"subject '{args.subject}'")
-    headline = "  ".join(headline_parts) or "(no filter)"
+    if args.last_minutes is not None:
+        headline_parts.append(f"last {args.last_minutes} min")
+    headline = "  ".join(headline_parts) or "(time window)"
 
     body = _build_section_paragraphs(emails)
     result = session_doc.append_section(
         source="EMAIL",
         headline=headline,
         metadata={
-            "Date": str(target_date),
-            "Window": f"{from_t.strftime('%H:%M')} -> {to_t.strftime('%H:%M')}",
+            "Window": f"{start_dt.strftime('%Y-%m-%d %H:%M:%S')}"
+                      f" -> {end_dt.strftime('%H:%M:%S')}",
             "Matched": str(len(emails)),
             "Attachments parsed": str(sum(len(e["attachments"]) for e in emails)),
         },
