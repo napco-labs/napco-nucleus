@@ -48,11 +48,14 @@ def _text(payload) -> dict:
     "poll_requirement_emails",
     "Fetch new requirement emails from the configured IMAP mailbox and "
     "save each one under data/requirements/inbox/email/ with a short "
-    "header (source, from, received, subject) followed by the body. "
-    "Filters by REQ_SENDER_ALLOWLIST — only emails from allowlisted "
-    "senders are kept. Idempotent via UIDVALIDITY + since-UID "
-    "checkpoint. Call this FIRST when the user asks you to process "
-    "requirements.",
+    "header (source, from, received, subject, attachment count) "
+    "followed by the body. PDF / Word (.docx) / plain text (.txt) "
+    "attachments are extracted to text and appended to the body with "
+    "`--- attachment: <name> ---` markers, so they read alongside the "
+    "message. Filters by REQ_SENDER_ALLOWLIST — only emails from "
+    "allowlisted senders are kept. Idempotent via UIDVALIDITY + "
+    "since-UID checkpoint. Call this FIRST when the user asks you to "
+    "process requirements.",
     {"dry_run": bool},
 )
 async def poll_requirement_emails_tool(args):

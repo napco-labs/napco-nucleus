@@ -1,20 +1,23 @@
 """
-NAPCO Nucleus — verification email sender.
+NAPCO Nucleus — verification email DRAFT writer.
 
 One MCP tool:
 
-    send_verification_email   Email the Requirements Verification .docx to
-                              the client for review.
+    draft_verification_email   Build an .eml draft of the client-facing
+                               verification email (Requirements Verification
+                               .docx attached) and write it to disk for
+                               manual send.
 
-Standalone Gmail SMTP path — does NOT share STATE with the test-report
-email tool. Honors NAPCO_NUCLEUS_DRY_RUN (no actual send).
+Per the approved On-Demand workflow, NAPCO Nucleus does NOT send email
+itself. It produces an .eml draft on disk; the user opens that file in
+their own mail client, reviews, and sends it manually.
+
+Output:
+    data/requirements/drafts/<YYYY-MM-DD>/verification_<HHMM>_<recipient>.eml
 
 Env vars:
-    SMTP_HOST            default smtp.gmail.com
-    SMTP_PORT            default 587
-    SMTP_USER            required (auth user)
-    SMTP_PASSWORD        required (Gmail App Password)
-    SMTP_FROM            optional, defaults to SMTP_USER
+    SMTP_FROM            optional, From: header address (defaults to
+                         REQ_IMAP_USER if available, else "nucleus@local")
     SMTP_FROM_NAME       optional display name (e.g. "NAPCO Nucleus")
     VERIFICATION_TO      default recipient (e.g. titucse@gmail.com)
 """
@@ -24,9 +27,10 @@ import json
 import logging
 import mimetypes
 import os
-import smtplib
+import re
 from datetime import datetime
 from email.message import EmailMessage
+from email.utils import formatdate, make_msgid
 from pathlib import Path
 
 from claude_agent_sdk import tool
@@ -44,6 +48,16 @@ def _today_stamp() -> str:
     return datetime.now().strftime("%Y-%m-%d")
 
 
+def _now_hhmm() -> str:
+    return datetime.now().strftime("%H%M")
+
+
+def _safe_recipient(addr: str) -> str:
+    return re.sub(r"[^a-zA-Z0-9]+", "-", addr).strip("-").lower() or "recipient"
+
+
+_DRAFTS_ROOT = Path(__file__).parent.parent / "data" / "requirements" / "drafts"
+
 _DEFAULT_BODY = (
     "Hi,\n\n"
     "Please find attached the requirements interpretation summary based on "
@@ -55,27 +69,30 @@ _DEFAULT_BODY = (
 )
 
 
-# ─── send_verification_email ────────────────────────────────────────
+# ─── draft_verification_email ───────────────────────────────────────
 
 @tool(
-    "send_verification_email",
-    "Send the Requirements Verification .docx to the client. Args: "
-    "`docx_path` (REQUIRED — absolute or NN-relative path to the verification "
-    "doc to attach), `to` (optional — defaults to VERIFICATION_TO env), "
-    "`subject` (optional — defaults to 'Requirements Verification - <date>'), "
-    "`body` (optional — defaults to a short review-and-confirm message). "
-    "From: SMTP_FROM env (defaults to SMTP_USER). Returns {sent, to, "
-    "from, subject, attachment} or {error}. Honors NAPCO_NUCLEUS_DRY_RUN.",
+    "draft_verification_email",
+    "Write an .eml draft of the client-facing verification email "
+    "(Requirements Verification .docx attached) to data/requirements/"
+    "drafts/<date>/. NAPCO Nucleus does NOT send — the user opens the "
+    ".eml in their mail client, reviews, and sends manually. Args: "
+    "`docx_path` (REQUIRED — absolute or NN-relative path to the "
+    "verification doc to attach), `to` (optional — defaults to "
+    "VERIFICATION_TO env), `subject` (optional — defaults to "
+    "'Requirements Verification - <date>'), `body` (optional — defaults "
+    "to a short review-and-confirm message). From: SMTP_FROM env. "
+    "Returns {drafted, draft_path, to, from, subject, attachment} or "
+    "{error}.",
     {"docx_path": str, "to": str, "subject": str, "body": str},
 )
-async def send_verification_email_tool(args):
+async def draft_verification_email_tool(args):
     docx_path = (args.get("docx_path") or "").strip()
     if not docx_path:
         return _text({"error": "docx_path is required"})
 
     p = Path(docx_path)
     if not p.is_absolute():
-        # interpret as NN-relative
         p = Path(__file__).parent.parent / docx_path
     if not p.is_file():
         return _text({"error": f"Attachment not found: {p}"})
@@ -84,14 +101,11 @@ async def send_verification_email_tool(args):
     if not to_addr:
         return _text({"error": "Recipient missing — set VERIFICATION_TO env or pass `to`."})
 
-    host = (os.environ.get("SMTP_HOST") or "smtp.gmail.com").strip()
-    port = int(os.environ.get("SMTP_PORT", "587"))
-    user = (os.environ.get("SMTP_USER") or "").strip()
-    password = os.environ.get("SMTP_PASSWORD") or ""
-    if not user or not password:
-        return _text({"error": "SMTP_USER and SMTP_PASSWORD must be set"})
-
-    from_addr = (os.environ.get("SMTP_FROM") or user).strip()
+    from_addr = (
+        os.environ.get("SMTP_FROM")
+        or os.environ.get("REQ_IMAP_USER")
+        or "nucleus@local"
+    ).strip()
     from_name = (os.environ.get("SMTP_FROM_NAME") or "NAPCO Nucleus").strip()
     sender = f"{from_name} <{from_addr}>" if from_name else from_addr
 
@@ -100,12 +114,12 @@ async def send_verification_email_tool(args):
         subject = f"Requirements Verification - {_today_stamp()}"
     body = (args.get("body") or "").strip() or _DEFAULT_BODY
 
-    dry_run = os.environ.get("NAPCO_NUCLEUS_DRY_RUN") == "1"
-
     msg = EmailMessage()
     msg["From"] = sender
     msg["To"] = to_addr
     msg["Subject"] = subject
+    msg["Date"] = formatdate(localtime=True)
+    msg["Message-ID"] = make_msgid(domain="napco-nucleus.local")
     msg.set_content(body)
 
     ctype, _ = mimetypes.guess_type(str(p))
@@ -117,15 +131,17 @@ async def send_verification_email_tool(args):
             f.read(), maintype=maintype, subtype=subtype, filename=p.name
         )
 
+    dry_run = os.environ.get("NAPCO_NUCLEUS_DRY_RUN") == "1"
+
     if dry_run:
         memory.log_activity(
-            task_name="requirement-collection:send_verification",
+            task_name="requirement-collection:draft_verification",
             result="dry_run",
             technical_details={"to": to_addr, "from": from_addr, "subject": subject,
                                "attachment": p.name, "dry_run": True},
         )
         return _text({
-            "sent": False,
+            "drafted": False,
             "dry_run": True,
             "to": to_addr,
             "from": from_addr,
@@ -133,17 +149,18 @@ async def send_verification_email_tool(args):
             "attachment": p.name,
         })
 
+    day_dir = _DRAFTS_ROOT / _today_stamp()
+    day_dir.mkdir(parents=True, exist_ok=True)
+    draft_name = f"verification_{_now_hhmm()}_{_safe_recipient(to_addr)}.eml"
+    draft_path = day_dir / draft_name
+
     try:
-        with smtplib.SMTP(host, port, timeout=30) as s:
-            s.ehlo()
-            s.starttls()
-            s.ehlo()
-            s.login(user, password)
-            s.send_message(msg)
+        with draft_path.open("wb") as f:
+            f.write(bytes(msg))
     except Exception as e:
-        logger.exception("send_verification_email failed")
+        logger.exception("draft_verification_email failed to write .eml")
         memory.log_activity(
-            task_name="requirement-collection:send_verification",
+            task_name="requirement-collection:draft_verification",
             result=f"error:{type(e).__name__}",
             technical_details={"to": to_addr, "from": from_addr, "subject": subject,
                                "attachment": p.name, "error": str(e)},
@@ -151,20 +168,24 @@ async def send_verification_email_tool(args):
         return _text({"error": f"{type(e).__name__}: {e}",
                       "to": to_addr, "from": from_addr})
 
+    rel = draft_path.relative_to(Path(__file__).parent.parent).as_posix()
     memory.log_activity(
-        task_name="requirement-collection:send_verification",
-        result="sent",
+        task_name="requirement-collection:draft_verification",
+        result="drafted",
         technical_details={"to": to_addr, "from": from_addr, "subject": subject,
-                           "attachment": p.name},
+                           "attachment": p.name, "draft_path": rel},
     )
     return _text({
-        "sent": True,
+        "drafted": True,
+        "draft_path": rel,
+        "absolute_path": str(draft_path),
         "to": to_addr,
         "from": from_addr,
         "subject": subject,
         "attachment": p.name,
+        "next_step": "Open the .eml in your mail client, review, and send manually.",
     })
 
 
-TOOLS = [send_verification_email_tool]
-TOOL_NAMES = ["send_verification_email"]
+TOOLS = [draft_verification_email_tool]
+TOOL_NAMES = ["draft_verification_email"]

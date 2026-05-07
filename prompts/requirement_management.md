@@ -24,7 +24,7 @@ NN owns email + Google Drive collection. Teams chat and call transcripts are pro
 
 If a tool errors with missing env vars, log the error and continue with the channels that ARE available — partial collection is fine, total failure is not.
 
-- **Email**: `poll_requirement_emails()` — fetches new emails from allowlisted senders into `data/requirements/inbox/email/`.
+- **Email**: `poll_requirement_emails()` — fetches new emails from allowlisted senders into `data/requirements/inbox/email/`. PDF / Word / plain-text attachments are extracted to text and appended to each email body so the LLM reads them inline.
 - **Google Drive**: `ingest_drive_files()` — pulls audio/video → Whisper → `inbox/meetings/`, PDF → pypdf → `inbox/documents/`, Word docs `.docx` → python-docx → `inbox/documents/`, plain text `.txt` → `inbox/documents/`.
 - **Teams chat & call transcripts**: produced by TRW out-of-band. NN does NOT call any ingest tool for these. If the user wants a fresh chat dump or call transcript before this run, they invoke `dump_chat.py <number>` or `transcribe_call.py` from TRW themselves.
 
@@ -57,24 +57,28 @@ Only if step 4 produced at least one requirement.
 
 `write_verification_docx(requirements=<list from step 4>)` — writes `data/requirements/Requirements Verification <YYYY-MM-DD>.docx`. Output shape is a flat numbered list, one paragraph per requirement: `1. <title> - <summary>`. Capture the returned `path`.
 
-### 6. Send the two emails
+### 6. Draft the two emails (manual send by user)
 
-The aggregation doc always goes out (records artifact). The verification doc goes out only if step 5 ran.
+NAPCO Nucleus does NOT send email itself (per the approved On-Demand workflow). It writes `.eml` drafts to `data/requirements/drafts/<YYYY-MM-DD>/`. The user opens each draft in their mail client (Outlook), reviews, and sends manually.
 
-- **Aggregation → records inbox**: `send_aggregation_email(docx_path=<path from step 3>)`. Default recipient is `hasan.celloscope@gmail.com` (env `AGGREGATION_TO`). Internal records tone — no "please verify" wording.
-- **Verification → client**: `send_verification_email(docx_path=<path from step 5>)`. Default recipient is `titucse@gmail.com` (env `VERIFICATION_TO`). Asks the client to reply confirming the interpretation or send corrections.
+The aggregation draft is always produced (records artifact). The verification draft is produced only if step 5 ran.
 
-Both honor `NAPCO_NUCLEUS_DRY_RUN=1` for safe testing — they will return `{sent: false, dry_run: true, ...}` instead of sending.
+- **Aggregation → records inbox**: `draft_aggregation_email(docx_path=<path from step 3>)`. Default recipient is `hasan.celloscope@gmail.com` (env `AGGREGATION_TO`). Internal records tone — no "please verify" wording.
+- **Verification → client**: `draft_verification_email(docx_path=<path from step 5>)`. Default recipient is `titucse@gmail.com` (env `VERIFICATION_TO`). Asks the client to reply confirming the interpretation or send corrections.
+
+Both honor `NAPCO_NUCLEUS_DRY_RUN=1` for safe testing — they return `{drafted: false, dry_run: true, ...}` and write nothing to disk.
+
+Surface the absolute path of each `.eml` so the user can click to open it.
 
 ### 7. Log + exit
 
 Log a final `log_activity` row with a one-line summary like:
-"Collection cycle: N inbox files (E email / C chat / M meeting / D document) → R requirements identified → 2 emails sent (1 verification, 1 aggregation)."
+"Collection cycle: N inbox files (E email / C chat / M meeting / D document) → R requirements identified → 2 .eml drafts written (1 verification, 1 aggregation) for manual send."
 
 Surface in your final reply:
 - Aggregation doc path
 - Verification doc path (or "skipped — no requirements identified")
-- Both email recipients + sent/dry-run status
+- Both `.eml` draft paths (absolute) + recipients + drafted/dry-run status
 - Per-channel ingest counts from step 1
 
 ---
