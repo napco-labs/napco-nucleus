@@ -5,3 +5,14 @@ google-api-python-client>=2.100.0
 google-auth>=2.23.0
 pypdf>=4.0.0
 python-docx>=1.1.0
+
+# Teams ingest (vendored from Teams-Requirement-Watcher)
+ccl_chromium_reader @ git+https://github.com/cclgroupltd/ccl_chromium_reader.git
+# Call recording (Windows-only, WASAPI loopback)
+PyAudioWPatch>=0.2.12
+# Call transcription + Bangla->English translation
+faster-whisper>=1.2
+# Richer PDF extraction (used by mail/ attachment parser)
+pdfplumber>=0.11
+# PDF generation for boss-facing documents
+reportlab>=4.0

@@ -59,7 +59,7 @@ def _text(payload) -> dict:
     {"dry_run": bool},
 )
 async def poll_requirement_emails_tool(args):
-    import requirements_inbox  # lazy — keeps imaplib out of cold-start path
+    from mail import requirements_inbox  # lazy — keeps imaplib out of cold-start path
     dry_run = bool(args.get("dry_run", False))
     try:
         result = requirements_inbox.poll_requirement_inbox(dry_run=dry_run)
@@ -94,7 +94,7 @@ async def poll_requirement_emails_tool(args):
     {"dry_run": bool},
 )
 async def ingest_drive_files_tool(args):
-    import drive_ingester  # lazy — avoids googleapiclient import on cold start
+    from drive import drive_ingester  # lazy — avoids googleapiclient import on cold start
     dry_run = bool(args.get("dry_run", False))
     try:
         result = drive_ingester.process_new_drive_files(dry_run=dry_run)

@@ -55,7 +55,7 @@ from pathlib import Path
 import requests
 from dotenv import load_dotenv
 
-_HERE = Path(__file__).parent
+_HERE = Path(__file__).parent.parent  # drive/<file> -> NN root
 # .env wins over inherited shell env (so a real value beats an empty
 # placeholder set by the workflow). Matches agent.py's posture.
 load_dotenv(_HERE / ".env", override=True)

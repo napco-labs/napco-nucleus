@@ -39,11 +39,11 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-_HERE = Path(__file__).parent
+_HERE = Path(__file__).parent.parent  # mail/<file> -> NN root
 load_dotenv(_HERE / ".env", override=True)
 
 # Reuse requirements_inbox's parsing helpers + the session-doc helper.
-import requirements_inbox as ri  # noqa: E402
+from mail import requirements_inbox as ri  # noqa: E402
 from tools import _session_doc as session_doc  # noqa: E402
 
 

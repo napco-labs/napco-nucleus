@@ -32,10 +32,10 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-_HERE = Path(__file__).parent
+_HERE = Path(__file__).parent.parent  # drive/<file> -> NN root
 load_dotenv(_HERE / ".env", override=True)
 
-import drive_ingester as di  # noqa: E402
+from drive import drive_ingester as di  # noqa: E402
 from tools import _session_doc as session_doc  # noqa: E402
 
 
