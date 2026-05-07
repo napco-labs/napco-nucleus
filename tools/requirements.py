@@ -82,12 +82,12 @@ async def poll_requirement_emails_tool(args):
 @tool(
     "ingest_drive_files",
     "Download and ingest new files from the configured Google Drive "
-    "folder. Audio/video files are transcribed via Groq Whisper and "
-    "written to data/requirements/inbox/meetings/. PDFs are extracted "
-    "via pypdf and written to data/requirements/inbox/documents/. "
-    "Idempotent — a Drive file ID is never re-processed. Call this "
-    "alongside poll_requirement_emails during the Requirement "
-    "Management loop so both sources get captured before read_inbox.",
+    "folder. Audio/video → Groq Whisper → inbox/meetings/. PDF → pypdf "
+    "→ inbox/documents/. Word (.docx) → python-docx → inbox/documents/. "
+    "Plain text (.txt) → direct read → inbox/documents/. Idempotent — a "
+    "Drive file ID is never re-processed. Call this alongside "
+    "poll_requirement_emails during the Requirement Management loop so "
+    "both sources get captured before read_inbox.",
     {"dry_run": bool},
 )
 async def ingest_drive_files_tool(args):

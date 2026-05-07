@@ -25,7 +25,7 @@ NN owns email + Google Drive collection. Teams chat and call transcripts are pro
 If a tool errors with missing env vars, log the error and continue with the channels that ARE available — partial collection is fine, total failure is not.
 
 - **Email**: `poll_requirement_emails()` — fetches new emails from allowlisted senders into `data/requirements/inbox/email/`.
-- **Google Drive**: `ingest_drive_files()` — pulls audio/video → Whisper → `inbox/meetings/`, PDF → pypdf → `inbox/documents/`. (Word docs `.docx` and plain text `.txt` are NOT yet supported by the ingester — open follow-up; do not try to process them.)
+- **Google Drive**: `ingest_drive_files()` — pulls audio/video → Whisper → `inbox/meetings/`, PDF → pypdf → `inbox/documents/`, Word docs `.docx` → python-docx → `inbox/documents/`, plain text `.txt` → `inbox/documents/`.
 - **Teams chat & call transcripts**: produced by TRW out-of-band. NN does NOT call any ingest tool for these. If the user wants a fresh chat dump or call transcript before this run, they invoke `dump_chat.py <number>` or `transcribe_call.py` from TRW themselves.
 
 ### 2. Read the inbox

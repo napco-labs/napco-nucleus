@@ -1,11 +1,14 @@
 """
 Drive → inbox ingester.
 
-Lists audio/video AND PDF files in the configured Google Drive folder,
-downloads the unprocessed ones, and routes each to the right handler:
+Lists audio/video, PDF, Word (.docx), and plain-text (.txt) files in
+the configured Google Drive folder, downloads the unprocessed ones, and
+routes each to the right handler:
 
   - Audio / video → Groq Whisper → data/requirements/inbox/meetings/*.txt
   - PDF           → pypdf text extraction → data/requirements/inbox/documents/*.txt
+  - Word (.docx)  → python-docx paragraph extraction → inbox/documents/*.txt
+  - Plain text    → direct read → inbox/documents/*.txt
 
 All outputs carry the standard 4-line header preface so the downstream
 LLM splitter treats them identically to email-sourced text.
@@ -75,16 +78,24 @@ AUDIO_EXT_FALLBACK = {".mp3", ".mp4", ".m4a", ".mpeg", ".mpga",
                       ".wav", ".webm", ".mkv", ".ogg", ".flac"}
 PDF_MIMES = {"application/pdf"}
 PDF_EXT = {".pdf"}
+DOCX_MIMES = {"application/vnd.openxmlformats-officedocument.wordprocessingml.document"}
+DOCX_EXT = {".docx"}
+TXT_MIMES = {"text/plain"}
+TXT_EXT = {".txt"}
 
 
 def _classify(file: dict) -> str:
-    """Return 'audio', 'pdf', or 'skip' for a Drive file dict."""
+    """Return 'audio', 'pdf', 'docx', 'txt', or 'skip' for a Drive file dict."""
     mt = (file.get("mimeType") or "").lower()
     ext = Path(file.get("name") or "").suffix.lower()
     if mt.startswith(AUDIO_MIME_PREFIXES) or ext in AUDIO_EXT_FALLBACK:
         return "audio"
     if mt in PDF_MIMES or ext in PDF_EXT:
         return "pdf"
+    if mt in DOCX_MIMES or ext in DOCX_EXT:
+        return "docx"
+    if mt in TXT_MIMES or ext in TXT_EXT:
+        return "txt"
     return "skip"
 
 
@@ -166,7 +177,7 @@ def _drive_service():
 
 
 def _list_ingestable_files(drive, folder_id: str) -> list[dict]:
-    """Return non-trashed children we can handle (audio/video or PDF)."""
+    """Return non-trashed children we can handle (audio/video, PDF, docx, txt)."""
     q = f"'{folder_id}' in parents and trashed = false"
     files: list[dict] = []
     page_token = None
@@ -181,7 +192,7 @@ def _list_ingestable_files(drive, folder_id: str) -> list[dict]:
             includeItemsFromAllDrives=True,
         ).execute()
         for f in resp.get("files", []):
-            if _classify(f) in ("audio", "pdf"):
+            if _classify(f) != "skip":
                 files.append(f)
         page_token = resp.get("nextPageToken")
         if not page_token:
@@ -259,6 +270,20 @@ def _extract_pdf_text(pdf_path: Path) -> str:
     return text
 
 
+# ─────────────────────────── Word / text ──────────────────────────
+
+def _extract_docx_text(docx_path: Path) -> str:
+    """Extract paragraph text from a Word document via python-docx."""
+    from docx import Document  # lazy import — python-docx
+    doc = Document(str(docx_path))
+    parts = [para.text for para in doc.paragraphs if para.text.strip()]
+    return "\n\n".join(parts)
+
+
+def _extract_txt_text(txt_path: Path) -> str:
+    return txt_path.read_text(encoding="utf-8", errors="replace")
+
+
 # ─────────────────────────── Main ─────────────────────────────────
 
 def _preface(file: dict, source_label: str) -> str:
@@ -286,7 +311,7 @@ def process_new_drive_files(dry_run: bool = False) -> dict:
     drive = _drive_service()
     listed = _list_ingestable_files(drive, folder_id)
     logger.info(f"Drive folder {folder_id}: found {len(listed)} "
-                f"ingestable file(s) (audio + PDF)")
+                f"ingestable file(s) (audio + PDF + docx + txt)")
 
     state = _load_state()
     pending = [f for f in listed if not _already_processed(state, f["id"])]
@@ -350,6 +375,30 @@ def process_new_drive_files(dry_run: bool = False) -> dict:
                 try: tmp_path.unlink()
                 except Exception: pass
                 continue
+        elif kind == "docx":
+            try:
+                logger.info(f"extracting text from {name} via python-docx...")
+                text = _extract_docx_text(tmp_path)
+                if not text:
+                    logger.warning(f"python-docx returned empty text for {name}")
+            except Exception as e:
+                logger.exception(f"docx extraction failed for {name}")
+                results.append({"file": name, "id": fid, "kind": kind,
+                                "error": f"docx: {e}"})
+                try: tmp_path.unlink()
+                except Exception: pass
+                continue
+        elif kind == "txt":
+            try:
+                logger.info(f"reading plain text {name}...")
+                text = _extract_txt_text(tmp_path)
+            except Exception as e:
+                logger.exception(f"txt read failed for {name}")
+                results.append({"file": name, "id": fid, "kind": kind,
+                                "error": f"txt: {e}"})
+                try: tmp_path.unlink()
+                except Exception: pass
+                continue
         else:
             # Shouldn't happen — listed files already filtered.
             try: tmp_path.unlink()
@@ -361,7 +410,7 @@ def process_new_drive_files(dry_run: bool = False) -> dict:
             source_label = "meetings"
             out_dir = MEETINGS_DIR
             default_stem = "audio"
-        else:  # pdf
+        else:  # pdf, docx, txt
             source_label = "documents"
             out_dir = DOCUMENTS_DIR
             default_stem = "document"
