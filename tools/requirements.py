@@ -119,13 +119,14 @@ async def ingest_drive_files_tool(args):
 
 @tool(
     "read_requirement_inbox",
-    "Return the contents of every .txt and .md file in data/requirements/"
-    "inbox/ (email, meetings, chat, documents sub-folders). Use AFTER the "
-    "collect-stage tools (poll_requirement_emails, ingest_drive_files, "
-    "ingest_teams_chat, transcribe_call_audio) so you can read every "
-    "raw requirement source in one call. Email + Drive PDFs land as .txt; "
-    "Teams chat dumps and call transcripts land as .md. Optional source= "
-    "filter: email / meetings / chat / documents — defaults to all.",
+    "Return the contents of every .txt, .md, and .docx file in "
+    "data/requirements/inbox/ (email, meetings, chat, documents sub-"
+    "folders). Use AFTER the collect-stage tools (poll_requirement_emails, "
+    "ingest_drive_files, TRW's pull_chat / transcribe_call) so you can "
+    "read every raw requirement source in one call. Email + Drive PDFs "
+    "land as .txt; call transcripts land as .md; TRW chat pulls land as "
+    ".docx (extracted via python-docx). Optional source= filter: email / "
+    "meetings / chat / documents — defaults to all.",
     {"source": str},
 )
 async def read_requirement_inbox_tool(args):
@@ -139,11 +140,21 @@ async def read_requirement_inbox_tool(args):
         if not sub_dir.is_dir():
             continue
         for name in sorted(os.listdir(sub_dir)):
-            if name.startswith(".") or not name.lower().endswith((".txt", ".md")):
+            if name.startswith("."):
+                continue
+            lower = name.lower()
+            if not lower.endswith((".txt", ".md", ".docx")):
                 continue
             path = sub_dir / name
             try:
-                content = path.read_text(encoding="utf-8")
+                if lower.endswith(".docx"):
+                    from docx import Document  # lazy
+                    doc = Document(str(path))
+                    content = "\n\n".join(
+                        p.text for p in doc.paragraphs if p.text.strip()
+                    )
+                else:
+                    content = path.read_text(encoding="utf-8")
             except Exception as e:
                 logger.warning(f"read {path} failed: {e}")
                 continue
