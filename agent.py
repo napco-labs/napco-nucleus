@@ -49,6 +49,7 @@ sys.path.insert(0, _HERE)
 
 TASKS = {
     "requirement-management",
+    "verify_session",
     "daily-report-detailed",
     "daily-report-summary",
     "api-functional-test",
@@ -63,6 +64,15 @@ TASK_KICKOFF = {
         "Run the Requirement Management loop now. Follow the prompt: "
         "memory check-in, poll email + Drive, read the inbox, split "
         "requirements into 3-hour tasks, publish to GitLab, log, exit.",
+    "verify_session":
+        "Run the Verify Pull Session task now. Follow the prompt: "
+        "memory check-in, read_pull_session, identify distinct client "
+        "requirements from the consolidated session doc, write the "
+        "Requirements Verification .docx, draft ONE client email "
+        "(push to the user's IMAP Drafts folder), log, exit. Do NOT "
+        "call the auto-poll tools (poll_requirement_emails / "
+        "ingest_drive_files / read_requirement_inbox), do NOT draft "
+        "the records-aggregation email.",
     "daily-report-detailed":
         "Build today's Detailed Daily Test Report. Follow the prompt: "
         "memory check-in, read artifacts from the 4 test projects, "
