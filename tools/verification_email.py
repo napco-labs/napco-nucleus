@@ -165,23 +165,27 @@ async def draft_verification_email_tool(args):
     msg["Message-ID"] = make_msgid(domain="napco-nucleus.local")
     msg.set_content(body)
 
-    def _attach(path: Path) -> None:
+    def _attach(path: Path, display_name: str | None = None) -> None:
         ctype, _enc = mimetypes.guess_type(str(path))
         if not ctype:
             ctype = "application/octet-stream"
         maintype, subtype = ctype.split("/", 1)
         with path.open("rb") as f:
             msg.add_attachment(
-                f.read(), maintype=maintype, subtype=subtype, filename=path.name
+                f.read(), maintype=maintype, subtype=subtype,
+                filename=display_name or path.name,
             )
 
     _attach(p)
     if session_path:
-        _attach(session_path)
+        _attach(session_path,
+                display_name=f"Pull Session {_today_stamp()}.docx")
 
     dry_run = os.environ.get("NAPCO_NUCLEUS_DRY_RUN") == "1"
 
-    attachment_names = [p.name] + ([session_path.name] if session_path else [])
+    attachment_names = [p.name] + (
+        [f"Pull Session {_today_stamp()}.docx"] if session_path else []
+    )
 
     if dry_run:
         memory.log_activity(

@@ -106,6 +106,43 @@ def teams_webhook_url() -> str | None:
     return os.environ.get("TEAMS_WEBHOOK_URL") or None
 
 
+# ─── Central store (multi-dev capture aggregation) ─────────────────
+def central_root() -> Path | None:
+    """Root of the central capture store (UNC or local path).
+
+    Set NUCLEUS_CENTRAL_PATH in .env to enable per-dev push of WAVs +
+    chat docs + metadata. Unset = each dev keeps captures local only.
+    Typical value: \\\\172.16.205.209\\nucleus-central  (the agent VM
+    where Claude is authenticated and identify runs).
+    """
+    raw = (os.environ.get("NUCLEUS_CENTRAL_PATH") or "").strip()
+    return Path(raw) if raw else None
+
+
+def dev_name() -> str:
+    """Per-dev identifier used as the top-level folder under central_root.
+
+    Defaults to the OS username so two teammates never clash. Override
+    with NUCLEUS_DEV_NAME if you want a friendly label (e.g. 'salman').
+    """
+    raw = (os.environ.get("NUCLEUS_DEV_NAME") or "").strip()
+    if raw:
+        return raw
+    return (os.environ.get("USERNAME") or os.environ.get("USER") or "unknown").strip()
+
+
+def central_dev_day_dir(day: str | None = None) -> Path | None:
+    """Helper: <central>/<dev>/<YYYY-MM-DD>/. Returns None if central
+    isn't configured. Day defaults to today (local time)."""
+    root = central_root()
+    if root is None:
+        return None
+    if day is None:
+        from datetime import date
+        day = date.today().strftime("%Y-%m-%d")
+    return root / dev_name() / day
+
+
 # ─── Claude CLI path ────────────────────────────────────────────────
 def claude_cli_path() -> str | None:
     """Path to the locally-authenticated Claude CLI (so the agent runs

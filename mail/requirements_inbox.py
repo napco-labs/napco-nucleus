@@ -161,7 +161,7 @@ def _extract_attachment_text(payload: bytes, kind: str, fname: str) -> str:
         try:
             tmp.write(payload)
             tmp.close()
-            from drive_ingester import _extract_pdf_text  # lazy
+            from drive.drive_ingester import _extract_pdf_text  # lazy
             return _extract_pdf_text(_Path(tmp.name))
         except Exception as e:
             return f"[pypdf extraction failed: {e}]"
@@ -188,8 +188,19 @@ def _extract_attachment_text(payload: bytes, kind: str, fname: str) -> str:
                 pass
 
     if kind == "doc":
-        return (f"[unsupported legacy .doc format — "
-                f"please re-send as .docx, .pdf, or .txt. file: {fname}]")
+        tmp = tempfile.NamedTemporaryFile(suffix=".doc", delete=False)
+        try:
+            tmp.write(payload)
+            tmp.close()
+            from drive.drive_ingester import _extract_doc_text  # lazy
+            return _extract_doc_text(_Path(tmp.name))
+        except Exception as e:
+            return f"[legacy .doc byte-scan failed: {e}]"
+        finally:
+            try:
+                os.unlink(tmp.name)
+            except Exception:
+                pass
 
     return f"[unknown attachment kind: {kind}]"
 

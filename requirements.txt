@@ -10,6 +10,9 @@ python-docx>=1.1.0
 ccl_chromium_reader @ git+https://github.com/cclgroupltd/ccl_chromium_reader.git
 # Call recording (Windows-only, WASAPI loopback)
 PyAudioWPatch>=0.2.12
+# Voice daemon — detect when MS Teams has an active audio session (ringing
+# or in-call) so the "Assalamualaikum" start trigger only fires for Teams calls.
+pycaw>=20240210
 # Call transcription + Bangla->English translation
 faster-whisper>=1.2
 # Richer PDF extraction (used by mail/ attachment parser)
