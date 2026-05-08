@@ -92,7 +92,7 @@ def _scan_central(central: Path, day: str, client: str) -> dict:
             for meta_path in sorted(calls_dir.glob("*.json")):
                 try:
                     metadata = json.loads(
-                        meta_path.read_text(encoding="utf-8"))
+                        meta_path.read_text(encoding="utf-8-sig"))
                 except Exception as e:
                     print(f"  WARN: skipping {meta_path}: {e}",
                           file=sys.stderr)

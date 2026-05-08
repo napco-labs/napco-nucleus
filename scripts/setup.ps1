@@ -175,8 +175,18 @@ if (-not $SkipModelPrewarm) {
 }
 
 # --- 6. Smoke-test imports -----------------------------------------
+# Pipe the test code via stdin to avoid PowerShell's argument-quoting
+# mangling embedded double quotes when -c "..." is passed to native python.
 Write-Step "Smoke-testing imports"
-& $venvPython -c 'from faster_whisper import WhisperModel; from teams import reader; from mail import requirements_inbox; from drive import drive_ingester; from pycaw.pycaw import AudioUtilities; print("imports OK")'
+$smokeSrc = @"
+from faster_whisper import WhisperModel
+from teams import reader
+from mail import requirements_inbox
+from drive import drive_ingester
+from pycaw.pycaw import AudioUtilities
+print('imports OK')
+"@
+$smokeSrc | & $venvPython -
 if ($LASTEXITCODE -ne 0) {
     Write-Err "Some imports failed. See pip output above."
     exit 1
