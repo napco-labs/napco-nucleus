@@ -31,10 +31,14 @@ Otherwise capture `session_path`, `sections`, and `content` for the next step.
 
 Read the `content` returned from step 1 and extract every distinct **client requirement**. A requirement is a user-visible capability, change, bug fix, or deliverable the client asked for — NOT process chatter, greetings, scheduling, "thanks", calendar invites, daily test reports, or system-generated notifications.
 
+Every section in the session doc begins with a metadata block that includes a `Source ID:` value like `email/Acme-2026-05-10/abc12345`, `chat/123/1330-1345/def67890`, or `call/Titu-20260511-101500/ghi24680`. These IDs are the **machine-readable citation tokens** you cite per requirement. Use them, not free-text section titles.
+
 For each requirement produce a dict with:
 - `title`: short imperative phrase, <80 chars (e.g. "Allow access groups to inherit parent permissions").
 - `summary`: ONE paragraph in plain English, no blank lines, no bullets, 2-4 sentences. Explain what the client wants and why, in language a developer can act on. Translate from Bangla to English if the source is Bangla — translate meaning, not literal words.
-- `source_refs`: list of section titles from step 1 (the `sections` array) where this requirement appeared. A requirement raised in Teams and restated in email gets BOTH section titles.
+- `source_refs`: list of `Source ID` values (exact strings from the metadata blocks) where this requirement appeared. A requirement raised in Teams and restated in email gets BOTH Source IDs. If you saw the requirement in only one section, that's one ID — but it must be the precise Source ID, not a paraphrase.
+- `confidence`: float between 0.0 and 1.0. How certain are you this is a real client requirement and not noise? Use the rubric: ≥0.90 the client stated it explicitly in plain words; 0.75-0.89 implied but unambiguous in context; 0.50-0.74 inferred from indirect signals (the reviewer should sanity-check before sending); below 0.50 you should probably drop the item entirely.
+- `rationale`: ONE short sentence (<160 chars) on what makes this a requirement rather than chatter. The reviewer reads this when the confidence is low.
 
 If you cannot identify any requirements (e.g. the session was all process chatter), STOP and report "No requirements identified in this session — nothing drafted." Do not produce an empty verification doc, do not draft an email.
 
@@ -48,7 +52,9 @@ If ALL candidates were dedup hits, STOP and report "All identified requirements 
 
 ### 3. Write the Requirements Verification doc
 
-`write_verification_docx(requirements=<list from step 2>)` — writes `data/requirements/Requirements Verification <YYYY-MM-DD>.docx`. Output shape is a flat numbered list, one paragraph per requirement: `1. <title> - <summary>`. Capture the returned `path`.
+`write_verification_docx(requirements=<list from step 2>)` — writes `data/requirements/Requirements Verification <YYYY-MM-DD>.docx`. Output shape is a flat numbered list, one paragraph per requirement: `1. <title> - <summary>`, followed by a small grey citation/confidence/rationale line.
+
+Pass ALL five fields per requirement (title, summary, source_refs, confidence, rationale) — the tool now renders confidence and rationale in the doc, and items below 0.75 are highlighted in amber so the reviewer reads them carefully. The tool returns `{path, requirement_count, mean_confidence, low_confidence_count}` — capture all four; surface `mean_confidence` and `low_confidence_count` in the final reply so the reviewer can decide whether to send as-is or re-pull with more data.
 
 ### 4. Draft ONE client email — with TWO attachments
 
@@ -87,8 +93,10 @@ Surface in your final reply:
 - Session doc path + started_at
 - Section count + section titles
 - Requirements identified (count + titles)
+- **Mean confidence + low-confidence count** from the verification-doc tool's return value
 - Verification doc path
 - Verification email draft path (absolute) + recipient + IMAP push status (so the user knows whether to look in Outlook Drafts or open the .eml directly)
+- If `low_confidence_count > 0`, explicitly call out the titles of those items in the reply so the reviewer knows which ones to scrutinise before sending.
 
 ---
 

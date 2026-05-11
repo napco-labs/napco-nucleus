@@ -137,14 +137,18 @@ async def write_aggregation_docx_tool(args):
     "<one-paragraph summary>'. Tone: neutral developer English, no jargon, "
     "no marketing voice. Input `requirements` is a list of dicts with keys: "
     "title (str - short, <80 chars), summary (str - exactly ONE paragraph, "
-    "no blank lines), source_refs (optional list of source filenames). "
+    "no blank lines), source_refs (optional list of Source IDs from the "
+    "pull-session metadata, e.g. 'chat/123/...', 'email/.../...'), "
+    "confidence (optional float 0.0-1.0 - the LLM's certainty this is a "
+    "real client requirement), rationale (optional str - one short "
+    "sentence on why this counts as a requirement, not noise). "
     "Output filename format is 'Requirements Verification <YYYY-MM-DD>.docx' "
     "in data/requirements/. Returns {path, requirement_count}.",
     {"requirements": list, "output_path": str},
 )
 async def write_verification_docx_tool(args):
     from docx import Document  # lazy
-    from docx.shared import Pt
+    from docx.shared import Pt, RGBColor
 
     reqs = args.get("requirements") or []
     if not isinstance(reqs, list) or not reqs:
@@ -170,30 +174,65 @@ async def write_verification_docx_tool(args):
     )
     doc.add_paragraph()
 
+    _GREY = RGBColor(0x55, 0x60, 0x70)
+    _AMBER = RGBColor(0xB8, 0x7C, 0x1F)
+
+    def _confidence_color(c: float) -> RGBColor:
+        # Low-confidence items get a soft amber accent so the reviewer
+        # eyeballs them more carefully before the email goes out.
+        return _AMBER if c < 0.75 else _GREY
+
     for i, r in enumerate(reqs, 1):
         if not isinstance(r, dict):
             continue
         title = (r.get("title") or "").strip() or f"Requirement {i}"
         summary = (r.get("summary") or "").strip()
+        rationale = (r.get("rationale") or "").strip()
         source_refs = r.get("source_refs") or []
+        confidence = r.get("confidence")
+        try:
+            conf_val = float(confidence) if confidence is not None else None
+        except (TypeError, ValueError):
+            conf_val = None
 
         # Flat numbered line: "1. " + bold(title) + " - " + summary
         p = doc.add_paragraph()
         p.add_run(f"{i}. ").bold = True
         p.add_run(title).bold = True
         if summary:
-            # Collapse any blank lines — this format is one paragraph per item.
             collapsed = " ".join(line.strip() for line in summary.splitlines() if line.strip())
             p.add_run(f" - {collapsed}")
         else:
             p.add_run(" - ")
             p.add_run("(no summary supplied)").italic = True
 
+        # Citation + confidence + rationale on one grey 9pt line (or
+        # split across lines if it gets long).
+        bits: list[tuple[str, RGBColor]] = []
         if isinstance(source_refs, list) and source_refs:
+            bits.append(
+                ("Sources: " + ", ".join(str(s) for s in source_refs), _GREY))
+        if conf_val is not None:
+            color = _confidence_color(conf_val)
+            label = f"Confidence: {conf_val:.2f}"
+            if conf_val < 0.75:
+                label += " (review)"
+            bits.append((label, color))
+        if rationale:
+            bits.append((f"Why: {rationale}", _GREY))
+
+        if bits:
             ref_p = doc.add_paragraph()
-            ref_run = ref_p.add_run("Sources: " + ", ".join(str(s) for s in source_refs))
-            ref_run.italic = True
-            ref_run.font.size = Pt(9)
+            for j, (text, color) in enumerate(bits):
+                if j > 0:
+                    sep = ref_p.add_run("   ·   ")
+                    sep.italic = True
+                    sep.font.size = Pt(9)
+                    sep.font.color.rgb = _GREY
+                run = ref_p.add_run(text)
+                run.italic = True
+                run.font.size = Pt(9)
+                run.font.color.rgb = color
 
     doc.add_paragraph()
     closing = doc.add_paragraph()
@@ -206,15 +245,48 @@ async def write_verification_docx_tool(args):
     Path(out_path).parent.mkdir(parents=True, exist_ok=True)
     doc.save(out_path)
 
+    # Telemetry for the eval harness (Phase 2) to read later — keeps
+    # per-requirement confidence + citation count on the side.
+    titles = []
+    confidences = []
+    citation_counts = []
+    for r in reqs:
+        if not isinstance(r, dict):
+            continue
+        titles.append(r.get("title"))
+        c = r.get("confidence")
+        try:
+            confidences.append(float(c) if c is not None else None)
+        except (TypeError, ValueError):
+            confidences.append(None)
+        srcs = r.get("source_refs") or []
+        citation_counts.append(len(srcs) if isinstance(srcs, list) else 0)
+
+    valid_conf = [c for c in confidences if c is not None]
+    mean_conf = sum(valid_conf) / len(valid_conf) if valid_conf else None
+    low_conf = sum(1 for c in valid_conf if c < 0.75)
+
     memory.log_activity(
         task_name="requirement-collection:write_verification",
-        result=f"requirements={len(reqs)} path={Path(out_path).name}",
-        technical_details={"path": out_path, "titles": [r.get("title") for r in reqs if isinstance(r, dict)]},
+        result=(f"requirements={len(reqs)} "
+                f"mean_conf={mean_conf:.2f} " if mean_conf is not None else
+                f"requirements={len(reqs)} ") +
+               f"low_conf={low_conf} path={Path(out_path).name}",
+        technical_details={
+            "path": out_path,
+            "titles": titles,
+            "confidences": confidences,
+            "citation_counts": citation_counts,
+            "mean_confidence": mean_conf,
+            "low_confidence_count": low_conf,
+        },
     )
 
     return _text({
         "path": out_path,
         "requirement_count": len(reqs),
+        "mean_confidence": mean_conf,
+        "low_confidence_count": low_conf,
     })
 
 

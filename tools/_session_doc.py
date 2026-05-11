@@ -27,7 +27,9 @@ Used by:
 """
 from __future__ import annotations
 
+import hashlib
 import json
+import re
 import shutil
 from datetime import datetime
 from pathlib import Path
@@ -131,37 +133,74 @@ def reset(label: str | None = None) -> dict:
     }
 
 
+_SLUG_RE = re.compile(r"[^a-zA-Z0-9._-]+")
+
+
+def _slugify(s: str, max_len: int = 60) -> str:
+    """Stable, URL-ish, machine-friendly slug for use inside a source_id."""
+    s = _SLUG_RE.sub("-", (s or "").strip()).strip("-")
+    return s[:max_len] or "x"
+
+
+def _derive_source_id(source: str, headline: str) -> str:
+    """Auto-derive a stable source_id when the caller didn't supply one.
+
+    Format: <source_prefix>/<headline-slug>/<8-char-hash>. The hash keeps
+    the ID stable across runs but unique even when two sections share
+    similar headlines.
+    """
+    prefix_map = {
+        "TEAMS CHAT": "chat",
+        "TEAMS ATTACHMENT": "chat-attach",
+        "EMAIL": "email",
+        "MEETING": "call",
+        "DRIVE": "drive",
+    }
+    prefix = prefix_map.get(source.upper(), _slugify(source).lower())
+    slug = _slugify(headline)
+    h = hashlib.sha1(f"{source}|{headline}".encode("utf-8")).hexdigest()[:8]
+    return f"{prefix}/{slug}/{h}"
+
+
 def append_section(
     *,
     source: str,                # "TEAMS CHAT" / "EMAIL" / "DRIVE" / "MEETING"
     headline: str,              # e.g. 'ContiHosting (chat #123)' or 'from titucse@gmail.com'
     metadata: dict[str, str],   # key→value rows shown under the heading
     body_paragraphs: list[str], # the actual content (timestamps, message text, etc.)
+    source_id: str | None = None,  # stable citation token; auto-derived if None
 ) -> dict:
     """Append one pull section to the current session doc. Creates the doc
-    if it doesn't exist yet (lazy-init session = first pull starts it)."""
+    if it doesn't exist yet (lazy-init session = first pull starts it).
+
+    The `source_id` is rendered into the section's metadata block so the
+    identification LLM can cite it precisely in each extracted
+    requirement. If not supplied, a deterministic ID is derived from
+    `source` + `headline` so the same section always gets the same ID."""
+    sid = (source_id or _derive_source_id(source, headline)).strip()
+
     path = get_or_create()
     doc = Document(str(path))
 
     # Heading
     h = doc.add_heading(f"{source.upper()} — {headline}", level=1)
 
-    # Metadata block
-    if metadata:
-        meta_p = doc.add_paragraph()
-        meta_p.paragraph_format.space_after = Pt(2)
-        first = True
-        for k, v in metadata.items():
-            if not first:
-                meta_p.add_run("   |   ")
-            first = False
-            kr = meta_p.add_run(f"{k}: ")
-            kr.bold = True
-            kr.font.size = Pt(9)
-            kr.font.color.rgb = _GREY
-            vr = meta_p.add_run(str(v))
-            vr.font.size = Pt(9)
-            vr.font.color.rgb = _GREY
+    # Metadata block — Source ID first so the LLM can find it easily.
+    full_metadata = {"Source ID": sid, **(metadata or {})}
+    meta_p = doc.add_paragraph()
+    meta_p.paragraph_format.space_after = Pt(2)
+    first = True
+    for k, v in full_metadata.items():
+        if not first:
+            meta_p.add_run("   |   ")
+        first = False
+        kr = meta_p.add_run(f"{k}: ")
+        kr.bold = True
+        kr.font.size = Pt(9)
+        kr.font.color.rgb = _GREY
+        vr = meta_p.add_run(str(v))
+        vr.font.size = Pt(9)
+        vr.font.color.rgb = _GREY
 
     # Body
     for line in body_paragraphs:
@@ -179,6 +218,7 @@ def append_section(
         "session_path": str(path.relative_to(_NN_ROOT).as_posix()),
         "absolute_path": str(path),
         "section": f"{source.upper()} — {headline}",
+        "source_id": sid,
         "appended_paragraphs": len([p for p in body_paragraphs if p.strip()]),
     }
 
