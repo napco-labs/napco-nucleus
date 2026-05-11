@@ -64,6 +64,17 @@ _DEFAULT_SESSION_PATH = session_doc.SESSION_PATH
 
 _VALID_STAGES = ["extract", "critique", "draft"]
 
+# Per-stage model selection — overridable via env. Defaults reflect
+# the cost/quality trade-off: Haiku for cheap extraction, Sonnet for
+# critique-grade reasoning, Opus for the final synthesis + tool use.
+# Set the env var to an empty string to fall back to the CLI default.
+_EXTRACT_MODEL = os.environ.get(
+    "NUCLEUS_PIPELINE_EXTRACT_MODEL", "claude-haiku-4-5-20251001")
+_CRITIQUE_MODEL = os.environ.get(
+    "NUCLEUS_PIPELINE_CRITIQUE_MODEL", "claude-sonnet-4-6")
+_DRAFT_MODEL = os.environ.get(
+    "NUCLEUS_PIPELINE_DRAFT_MODEL", "claude-opus-4-7")
+
 
 # ── Session-doc reading ───────────────────────────────────────────
 
@@ -111,16 +122,45 @@ def _strip_fences(s: str) -> str:
     return s.strip()
 
 
-async def _claude_call(system_prompt: str, user_prompt: str) -> str:
-    """Single Claude call, no MCP tools. Returns concatenated text
-    output. Used by stages 1 and 2."""
-    from claude_agent_sdk import ClaudeAgentOptions, ClaudeSDKClient
+def _build_options(system_prompt: str, *, model: str | None,
+                   mcp_servers: dict | None = None,
+                   allowed_tools: list[str] | None = None):
+    """Construct ClaudeAgentOptions defensively. If the installed SDK
+    version doesn't accept a `model` kwarg, falls back silently to the
+    CLI default and prints a one-line warning."""
+    from claude_agent_sdk import ClaudeAgentOptions  # lazy
 
     options_kwargs: dict = {"system_prompt": system_prompt}
+    if mcp_servers:
+        options_kwargs["mcp_servers"] = mcp_servers
+    if allowed_tools is not None:
+        options_kwargs["allowed_tools"] = allowed_tools
     cli_path = nucleus_config.claude_cli_path()
     if cli_path:
         options_kwargs["cli_path"] = cli_path
-    options = ClaudeAgentOptions(**options_kwargs)
+    if model:
+        options_kwargs["model"] = model
+
+    try:
+        return ClaudeAgentOptions(**options_kwargs)
+    except TypeError as e:
+        if model and "model" in str(e):
+            print(f"[warn] SDK doesn't accept model={model!r} — "
+                  f"falling back to CLI default.", file=sys.stderr)
+            options_kwargs.pop("model", None)
+            return ClaudeAgentOptions(**options_kwargs)
+        raise
+
+
+async def _claude_call(system_prompt: str, user_prompt: str, *,
+                       model: str | None = None) -> str:
+    """Single Claude call, no MCP tools. Returns concatenated text
+    output. Used by stages 1 and 2."""
+    from claude_agent_sdk import ClaudeSDKClient  # lazy
+
+    options = _build_options(system_prompt, model=model)
+    if model:
+        print(f"  (model: {model})")
 
     chunks: list[str] = []
     async with ClaudeSDKClient(options=options) as client:
@@ -132,13 +172,10 @@ async def _claude_call(system_prompt: str, user_prompt: str) -> str:
     return "".join(chunks)
 
 
-async def _claude_call_with_tools(system_prompt: str, user_prompt: str) -> str:
+async def _claude_call_with_tools(system_prompt: str, user_prompt: str, *,
+                                  model: str | None = None) -> str:
     """Single Claude call WITH MCP tools wired up — used by stage 3."""
-    from claude_agent_sdk import (
-        ClaudeAgentOptions,
-        ClaudeSDKClient,
-        create_sdk_mcp_server,
-    )
+    from claude_agent_sdk import ClaudeSDKClient, create_sdk_mcp_server  # lazy
     from tools import ALL_TOOLS, TOOL_NAMES
 
     server = create_sdk_mcp_server(
@@ -149,15 +186,13 @@ async def _claude_call_with_tools(system_prompt: str, user_prompt: str) -> str:
     allowed = [f"mcp__napco-nucleus__{n}" for n in TOOL_NAMES]
     allowed.extend(["WebSearch", "WebFetch"])
 
-    options_kwargs: dict = {
-        "system_prompt": system_prompt,
-        "mcp_servers": {"napco-nucleus": server},
-        "allowed_tools": allowed,
-    }
-    cli_path = nucleus_config.claude_cli_path()
-    if cli_path:
-        options_kwargs["cli_path"] = cli_path
-    options = ClaudeAgentOptions(**options_kwargs)
+    options = _build_options(
+        system_prompt, model=model,
+        mcp_servers={"napco-nucleus": server},
+        allowed_tools=allowed,
+    )
+    if model:
+        print(f"  (model: {model})")
 
     chunks: list[str] = []
     async with ClaudeSDKClient(options=options) as client:
@@ -184,7 +219,7 @@ async def run_extract(session_text: str) -> list[dict]:
         f"{session_text}\n\n"
         "----- END SESSION DOC -----\n"
     )
-    raw = await _claude_call(system, user)
+    raw = await _claude_call(system, user, model=_EXTRACT_MODEL or None)
     cleaned = _strip_fences(raw)
     try:
         candidates = json.loads(cleaned)
@@ -255,7 +290,7 @@ async def run_critique(candidates: list[dict]) -> list[dict]:
           f"{len(ctx['requirements_seen'])} seen-rows for dedup")
     system = _load_prompt("critique")
     user = json.dumps(ctx, ensure_ascii=False, indent=2, default=str)
-    raw = await _claude_call(system, user)
+    raw = await _claude_call(system, user, model=_CRITIQUE_MODEL or None)
     cleaned = _strip_fences(raw)
     try:
         finalists = json.loads(cleaned)
@@ -302,7 +337,8 @@ async def run_draft(finalists: list[dict], dry_run: bool) -> str:
         + json.dumps(finalists, ensure_ascii=False, indent=2, default=str)
     )
     print(f"[draft] passing {len(finalists)} requirement(s) to Claude")
-    return await _claude_call_with_tools(system, user)
+    return await _claude_call_with_tools(system, user,
+                                          model=_DRAFT_MODEL or None)
 
 
 # ── Orchestrator ─────────────────────────────────────────────────
