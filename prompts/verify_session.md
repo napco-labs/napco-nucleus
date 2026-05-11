@@ -98,6 +98,10 @@ Surface in your final reply:
 - Verification email draft path (absolute) + recipient + IMAP push status (so the user knows whether to look in Outlook Drafts or open the .eml directly)
 - If `low_confidence_count > 0`, explicitly call out the titles of those items in the reply so the reviewer knows which ones to scrutinise before sending.
 
+At the very end of the reply, suggest running the calibration loop:
+
+> Next: when you've decided which requirements to keep, edit, or reject, run `py -3 -m tools.review_session` to log your decisions. They feed the confidence-calibration curve (`py -3 -m tools.calibration_report`) so the LLM's stated confidence becomes more trustworthy over time.
+
 ---
 
 ## Output language rule

@@ -114,6 +114,29 @@ CREATE TABLE IF NOT EXISTS drive_processed (
     output_path   TEXT NOT NULL DEFAULT ''
 );
 
+-- Reviewer decisions per predicted requirement. Feeds the confidence
+-- calibration curve: are the LLM's 0.90 predictions actually 90%
+-- correct? Decisions: 'keep' (accepted as-is), 'edit' (kept after
+-- editing), 'reject' (false positive — Titu would not have sent
+-- this to the client). 'skip' is recorded too so analytics can
+-- distinguish "no decision yet" from "deliberately deferred".
+CREATE TABLE IF NOT EXISTS requirement_reviews (
+    id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+    reviewed_at           TEXT NOT NULL,
+    requirement_title     TEXT NOT NULL,
+    predicted_confidence  REAL,
+    source_refs_json      TEXT NOT NULL DEFAULT '[]',
+    decision              TEXT NOT NULL,
+    edited_title          TEXT,
+    reviewer_notes        TEXT NOT NULL DEFAULT '',
+    sidecar_path          TEXT NOT NULL DEFAULT '',
+    docx_path             TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_reviews_reviewed_at
+    ON requirement_reviews(reviewed_at DESC);
+CREATE INDEX IF NOT EXISTS idx_reviews_decision_conf
+    ON requirement_reviews(decision, predicted_confidence);
+
 -- FTS5 over requirements_seen for fuzzy recall by title / summary.
 CREATE VIRTUAL TABLE IF NOT EXISTS requirements_fts USING fts5(
     title, summary, source_ref,
@@ -437,6 +460,113 @@ def recall_test_runs(
         return []
 
 
+# ─── Writes / reads: requirement_reviews (calibration loop) ─────────
+
+_VALID_DECISIONS = {"keep", "edit", "reject", "skip"}
+
+
+def record_review(
+    *,
+    requirement_title: str,
+    decision: str,
+    predicted_confidence: float | None = None,
+    source_refs: list[str] | None = None,
+    edited_title: str | None = None,
+    reviewer_notes: str = "",
+    sidecar_path: str = "",
+    docx_path: str = "",
+) -> int | None:
+    """Persist one reviewer decision against a predicted requirement.
+    Returns the row id or None on failure."""
+    if decision not in _VALID_DECISIONS:
+        raise ValueError(
+            f"decision must be one of {sorted(_VALID_DECISIONS)}; got {decision!r}")
+    try:
+        import json as _json  # local alias to avoid import shadow issues
+        srcs_json = _json.dumps(source_refs or [], ensure_ascii=False)
+        with _conn() as c:
+            cur = c.execute(
+                "INSERT INTO requirement_reviews "
+                "(reviewed_at, requirement_title, predicted_confidence, "
+                "source_refs_json, decision, edited_title, reviewer_notes, "
+                "sidecar_path, docx_path) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    _now(), requirement_title.strip(),
+                    float(predicted_confidence)
+                        if predicted_confidence is not None else None,
+                    srcs_json, decision,
+                    (edited_title or None),
+                    reviewer_notes or "",
+                    sidecar_path or "",
+                    docx_path or "",
+                ),
+            )
+            return int(cur.lastrowid)
+    except Exception as e:
+        logger.warning("memory.record_review failed: %s", e)
+        return None
+
+
+def recent_reviews(limit: int = 50) -> list[dict]:
+    limit = max(1, min(limit, 500))
+    try:
+        with _conn() as c:
+            rows = c.execute(
+                "SELECT * FROM requirement_reviews "
+                "ORDER BY reviewed_at DESC, id DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+            return [dict(r) for r in rows]
+    except Exception as e:
+        logger.warning("memory.recent_reviews failed: %s", e)
+        return []
+
+
+def calibration_buckets(
+    buckets: list[tuple[float, float]] | None = None,
+) -> list[dict]:
+    """Bucket reviewer decisions by predicted confidence and report
+    accept rate (keep + edit) vs. reject rate per bucket. Default
+    buckets: [0.90-1.00], [0.75-0.90), [0.50-0.75), [<0.50]."""
+    if buckets is None:
+        buckets = [(0.90, 1.0001), (0.75, 0.90), (0.50, 0.75), (0.0, 0.50)]
+    out: list[dict] = []
+    try:
+        with _conn() as c:
+            for lo, hi in buckets:
+                row = c.execute(
+                    "SELECT decision, COUNT(*) AS n FROM requirement_reviews "
+                    "WHERE predicted_confidence IS NOT NULL "
+                    "AND predicted_confidence >= ? AND predicted_confidence < ? "
+                    "GROUP BY decision",
+                    (lo, hi),
+                ).fetchall()
+                counts = {r["decision"]: r["n"] for r in row}
+                kept = counts.get("keep", 0)
+                edited = counts.get("edit", 0)
+                rejected = counts.get("reject", 0)
+                skipped = counts.get("skip", 0)
+                total_decided = kept + edited + rejected  # exclude skips
+                accept_rate = (
+                    (kept + edited) / total_decided
+                    if total_decided > 0 else None
+                )
+                out.append({
+                    "lo": lo, "hi": hi,
+                    "keep": kept, "edit": edited,
+                    "reject": rejected, "skip": skipped,
+                    "decided": total_decided,
+                    "accept_rate": accept_rate,
+                })
+    except Exception as e:
+        logger.warning("memory.calibration_buckets failed: %s", e)
+    return out
+
+
+# ───────────────────────────────────────────────────────────────────
+
+
 def stats() -> dict:
     try:
         with _conn() as c:
@@ -447,6 +577,7 @@ def stats() -> dict:
                 "test_runs":          c.execute("SELECT COUNT(*) FROM test_run_history").fetchone()[0],
                 "email_checkpoints":  c.execute("SELECT COUNT(*) FROM email_checkpoints").fetchone()[0],
                 "drive_processed":    c.execute("SELECT COUNT(*) FROM drive_processed").fetchone()[0],
+                "reviews":            c.execute("SELECT COUNT(*) FROM requirement_reviews").fetchone()[0],
             }
     except Exception as e:
         logger.warning("memory.stats failed: %s", e)
