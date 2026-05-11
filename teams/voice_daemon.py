@@ -197,6 +197,33 @@ def _in_bd_window(now: dt.datetime | None = None) -> bool:
     return now.hour in (18, 19, 20, 21, 22, 23, 0)
 
 
+def _excluded_active_call() -> tuple[bool, str]:
+    """If the currently-active Teams call resolves to a conversation_id
+    in NUCLEUS_EXCLUDE_CHATS, return (True, reason). If no call is
+    resolvable yet or no exclusions are configured, return (False, ...).
+    Fail-open: if the resolver errors, we record (better to capture a
+    legit call than silently drop one)."""
+    from teams._exclude import excluded_conversation_ids
+    excluded = excluded_conversation_ids()
+    if not excluded:
+        return (False, "no exclusions configured")
+    try:
+        from teams import calls as _calls
+        import time as _time
+        info = _calls.resolve_client_for_recording(
+            int(_time.time() * 1000), window_seconds=120,
+        )
+    except Exception as e:
+        return (False, f"resolver error (recording anyway): {e}")
+    if not info.get("matched"):
+        return (False, f"no active call resolved ({info.get('reason')})")
+    cid = info.get("conversation_id") or ""
+    if cid in excluded:
+        client = info.get("client_name") or "(unknown)"
+        return (True, f"call in excluded chat {cid} (client={client})")
+    return (False, f"active call cid={cid} is not excluded")
+
+
 def _start_recording(state: dict) -> None:
     proc = state.get("proc")
     if proc and proc.poll() is None:
@@ -213,6 +240,11 @@ def _start_recording(state: dict) -> None:
                   f"Pass --allow-any-call to disable the gate.")
             return
         print(f"[voice] Teams gate OK: {reason}")
+        excluded, exc_reason = _excluded_active_call()
+        if excluded:
+            print(f"[voice] start gated: {exc_reason}. "
+                  f"(NUCLEUS_EXCLUDE_CHATS) Pass --allow-any-call to bypass.")
+            return
     try:
         STOP_FILE.unlink()
     except FileNotFoundError:

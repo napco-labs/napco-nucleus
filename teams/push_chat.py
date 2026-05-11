@@ -47,6 +47,7 @@ load_dotenv(_HERE / ".env", override=True)
 sys.path.insert(0, str(_HERE))
 
 from teams import attachment_resolver, reader, store  # noqa: E402
+from teams._exclude import excluded_conversation_ids  # noqa: E402
 
 
 LOCAL_OUT_DIR = _HERE / "data" / "teams" / "chat-pushes"
@@ -236,12 +237,33 @@ def main() -> int:
         for r in rows
     }
 
+    excluded = excluded_conversation_ids()
+    if excluded:
+        before = len(chat_lookup)
+        dropped = [
+            (cid, info) for cid, info in chat_lookup.items() if cid in excluded
+        ]
+        chat_lookup = {
+            cid: info for cid, info in chat_lookup.items() if cid not in excluded
+        }
+        if dropped:
+            print(f"[push_chat] excluding {len(dropped)} chat(s) via "
+                  f"NUCLEUS_EXCLUDE_CHATS ({before} -> {len(chat_lookup)}):")
+            for cid, info in dropped:
+                label = info.get("title") or f"chat #{info.get('chat_number')}"
+                print(f"   - {label}  ({cid})")
+
     cids = set(chat_lookup.keys())
     grouped = reader.read_messages_by_conversations(cids, since_ms=from_ms)
 
     chat_blocks: list[dict] = []
     total_msgs = 0
     for cid, msgs in grouped.items():
+        if cid in excluded:
+            # Defensive: registry-based filter above should catch this,
+            # but reader.read_messages_by_conversations may surface
+            # messages from a freshly seen group not yet in the registry.
+            continue
         windowed = [m for m in msgs
                     if from_ms <= (m.get("arrival_ms") or 0) <= to_ms
                     and (m.get("body") or "").strip()]
