@@ -179,9 +179,28 @@ def _extract_attachment_text(path: Path, kind: str) -> str:
 
 def _transcribe_call(mic: Path | None, speaker: Path | None,
                      stamp: str) -> list[str]:
-    """Return body lines for the MEETING section. Uses faster-whisper
-    large-v3, Bangla -> English translate (matches pull_meeting.py).
-    Falls back to a placeholder line if Whisper isn't available."""
+    """Return body lines for the MEETING section.
+
+    Two-pass design:
+      1. faster-whisper large-v3 transcribes each track to the SOURCE
+         language (Bangla). Whisper's transcribe head is meaningfully
+         stronger than its translate head on Bangla — translation gets
+         done downstream by Claude where context can recover meaning.
+      2. The session doc retains Bangla verbatim so a Bangla-speaking
+         reviewer can audit the transcription quality directly.
+      3. The verify_session prompt already instructs Claude to translate
+         Bangla source material to English when extracting requirements.
+
+    CPU-friendly tuning:
+      - beam_size=1                       (fast)
+      - condition_on_previous_text=True   (better continuity on 1-hr calls)
+      - vad_filter=True                   (skip silence — big speedup)
+      - vad min_silence_duration_ms=500   (don't split mid-sentence)
+      - avg_logprob < -0.7 → "(uncertain)" marker so the reviewer's eye
+        lands on the lines that need verification
+
+    Falls back to a placeholder line if Whisper isn't available.
+    """
     if not mic and not speaker:
         return ["(both tracks missing)"]
     try:
@@ -196,33 +215,62 @@ def _transcribe_call(mic: Path | None, speaker: Path | None,
     except ValueError:
         started = None
 
+    # Confidence threshold for the "(uncertain)" marker. Tuned by
+    # Whisper docs / community: avg_logprob below ~-0.7 correlates well
+    # with "this segment is dodgy and worth re-listening to."
+    UNCERTAIN_LOGPROB = -0.7
+
     all_segs: list[dict] = []
     for wav, label in [(mic, "You"), (speaker, "Other")]:
         if not wav:
             continue
         segments, info = model.transcribe(
-            str(wav), task="translate", language="bn",
-            beam_size=1, vad_filter=True,
+            str(wav),
+            task="transcribe",  # was "translate" — Claude handles translation now
+            language="bn",
+            beam_size=1,
+            vad_filter=True,
             vad_parameters={"min_silence_duration_ms": 500},
+            condition_on_previous_text=True,
         )
         for s in segments:
             text = s.text.strip()
-            if text:
-                all_segs.append({
-                    "start": s.start, "end": s.end,
-                    "text": text, "speaker": label,
-                })
+            if not text:
+                continue
+            logprob = getattr(s, "avg_logprob", None)
+            no_speech = getattr(s, "no_speech_prob", None)
+            uncertain = (
+                (logprob is not None and logprob < UNCERTAIN_LOGPROB) or
+                (no_speech is not None and no_speech > 0.6)
+            )
+            all_segs.append({
+                "start": s.start, "end": s.end,
+                "text": text, "speaker": label,
+                "uncertain": uncertain,
+            })
     all_segs.sort(key=lambda s: s["start"])
 
     lines: list[str] = []
     if not all_segs:
         return ["(no speech detected on either track)"]
+    # Header lets the LLM identifier know this section is Bangla source.
+    lines.append("Source language: Bangla (transcribed verbatim — Claude "
+                 "translates to English at identify time).")
+    lines.append("Markers: (uncertain) = low ASR confidence, double-check "
+                 "before relying on these lines.")
+    lines.append("")
+    uncertain_count = sum(1 for s in all_segs if s["uncertain"])
     for s in all_segs:
+        marker = "  (uncertain)" if s["uncertain"] else ""
         if started:
             ts = (started + dt.timedelta(seconds=s["start"])).strftime("%H:%M:%S")
-            lines.append(f"[{ts}] {s['speaker']}: {s['text']}")
+            lines.append(f"[{ts}] {s['speaker']}{marker}: {s['text']}")
         else:
-            lines.append(f"[+{int(s['start']):04d}s] {s['speaker']}: {s['text']}")
+            lines.append(f"[+{int(s['start']):04d}s] {s['speaker']}{marker}: {s['text']}")
+    if uncertain_count:
+        lines.append("")
+        lines.append(f"({uncertain_count} of {len(all_segs)} segments "
+                     f"flagged uncertain — review before trusting those lines.)")
     return lines
 
 
