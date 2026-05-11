@@ -29,7 +29,23 @@ Otherwise capture `session_path`, `sections`, and `content` for the next step.
 
 ### 1.5 Identify the client(s) in scope (mandatory before identify)
 
-Before extracting requirements, identify which client(s) the session is about by looking at: email sender domains (e.g. `akib@acme.com` → "Acme"), Teams chat conversation names, and `MEETING` section metadata (`Client:` field). One session may mention more than one client; track each separately.
+Before extracting requirements, identify which client(s) the session is about. NAPCO Nucleus serves **multiple clients** — resolve `client_name` per-message using these conventions:
+
+**Conventions:**
+
+- Senders on `@napcosecurity.com` (Michael Carrieri, Siva, Richard Goldsobel, Salman Firoz, Robert Zhu, anyone else from that domain) → `client_name = "NAPCO Security"`. All such senders collapse to one bucket.
+- Senders on `@ael-bd.com` are **also clients** (AEL-internal projects, not just dev-side forwards). Each AEL sender is their own bucket:
+  - `assad@ael-bd.com` → `"Assaduz Zaman"`
+  - `arzaman@ael-bd.com` → `"Atikur Zaman"`
+  - `arhabib@ael-bd.com` → `"Ahsan Habib"`
+  - `ihasan@ael-bd.com` → `"Isruk Hasan"`
+  - `khasan@ael-bd.com` → `"Titu"`
+  - any other `@ael-bd.com` → use the individual's full name as stated in the signature / From header.
+- Override: if an `@ael-bd.com` message *explicitly says* it is forwarding a NAPCO Security ask (e.g. "FYI from Michael at NAPCO"), credit `"NAPCO Security"` instead of the AEL sender.
+- Other domains: use the organization name from the signature or `client_name` from `MEETING` metadata.
+- Teams chats: use the chat title or, for groups with NAPCO Security participants, `"NAPCO Security"`.
+
+One session may mention more than one client; track each separately.
 
 For EACH client you identify, call `get_client_history(client_name="<client>", limit=20)`. The returned list is the requirements that client has raised in past sessions. Read it before step 2 and keep two questions in mind:
 
