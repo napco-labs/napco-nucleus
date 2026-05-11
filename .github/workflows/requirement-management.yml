@@ -1,27 +1,53 @@
 name: Requirement Management
 
-# Ingests raw client text from email (IMAP) + Google Drive meeting
-# recordings + PDFs + Teams (forwarded via Power Automate into the
-# same allowlisted email inbox). Claude splits each source into
-# ~3-hour tasks and publishes to GitLab with idempotent dedup.
+# The one and only NAPCO Nucleus pipeline workflow. Click "Run
+# workflow" in the Actions tab to do the whole job end-to-end on
+# MVPACCESS:
 #
-# Fires twice daily, 12 hours apart, every day + workflow_dispatch.
+#   1. Pull email from the configured inbox (last N minutes)
+#   2. Pull Google Drive files (last N minutes)
+#   3. Walk the central share for chat docs + attachments + call
+#      recordings every developer has pushed today
+#   4. Transcribe any new call recordings (chunked parallel Whisper)
+#   5. Build the unified pull-session .docx
+#   6. Identify distinct client requirements (LLM)
+#   7. Draft the verification email into [Gmail]/Drafts
+#
+# Audio + chat capture happens on each developer's machine (voice
+# daemon + chat-push cron). By the time you click "Run workflow"
+# here, both are already on central — this workflow only does the
+# central-side work.
+#
+# For the local "force everything from my PC right now" alternative,
+# double-click scripts\do-it-now.bat instead.
 
 on:
-  # Schedule disabled 2026-05-05 — v1 of requirement management runs
-  # locally inside Teams-Requirement-Watcher. Re-enable once that v1
-  # is proven and we migrate the pipeline back to the runner.
   workflow_dispatch:
     inputs:
+      client:
+        description: 'Client filter (substring against metadata.client_name; "all" for unfiltered)'
+        required: true
+        default: 'all'
+        type: string
+      last_minutes:
+        description: 'Time window in minutes (email + Drive + chat lookback)'
+        required: true
+        default: '2880'
+        type: string
+      day:
+        description: 'Central scan day (YYYY-MM-DD). Empty = today.'
+        required: false
+        default: ''
+        type: string
       dry_run:
-        description: 'Plan only — do not publish to GitLab'
+        description: 'Skip the local push + identify step (just collect + transcribe)'
         required: false
         default: 'false'
         type: choice
         options: ['false', 'true']
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: requirement-management
@@ -30,58 +56,30 @@ concurrency:
 jobs:
   run:
     runs-on: [self-hosted, Windows]
-    timeout-minutes: 25
+    timeout-minutes: 60
 
-    env:
-      MVP_PROJECTS_ROOT: 'E:\Projects'
-      # Claude CLI path on the runner. Must be the native .exe (not the
-      # npm .cmd shim) — Windows cmd.exe truncates command lines past
-      # ~8191 chars, which trips on NN's large system prompt and surfaces
-      # as `The command line is too long` from inside the SDK init.
-      # The native .exe at %USERPROFILE%\.local\bin\claude.exe is
-      # installed via `irm https://claude.ai/install.ps1 | iex` and
-      # spawns directly with no cmd.exe in the chain.
-      CLAUDE_CLI_PATH: 'C:\Users\samin\.local\bin\claude.exe'
-      # IMAP for requirement-email ingestion.
-      REQ_IMAP_HOST: ${{ secrets.REQ_IMAP_HOST }}
-      REQ_IMAP_USER: ${{ secrets.REQ_IMAP_USER }}
-      REQ_IMAP_PASSWORD: ${{ secrets.REQ_IMAP_PASSWORD }}
-      REQ_SENDER_ALLOWLIST: ${{ secrets.REQ_SENDER_ALLOWLIST }}
-      # OpenProject backlog destination (replaces GitLab as of 2026-04-28).
-      OPENPROJECT_URL: ${{ secrets.OPENPROJECT_URL }}
-      OPENPROJECT_PROJECT_ID: ${{ secrets.OPENPROJECT_PROJECT_ID }}
-      OPENPROJECT_API_KEY: ${{ secrets.OPENPROJECT_API_KEY }}
-      # Google Drive + Groq Whisper.
-      GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
-      GDRIVE_AUDIO_FOLDER_ID: ${{ secrets.GDRIVE_AUDIO_FOLDER_ID }}
-      GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
-      # Teams digest target (optional).
-      TEAMS_WEBHOOK_URL: ${{ secrets.TEAMS_WEBHOOK_URL }}
+    defaults:
+      run:
+        shell: pwsh
+        working-directory: 'C:\napco-nucleus'
 
     steps:
-      - uses: actions/checkout@v5
+      - name: Pull latest code
+        run: git pull origin main
 
-      - name: Install Python dependencies
-        run: py -3 -m pip install -r requirements.txt
-
-      - name: Run Requirement Management
-        shell: pwsh
-        run: py -3 agent.py --task requirement-management ${{ github.event.inputs.dry_run == 'true' && '--dry-run' || '' }}
-
-      - name: Commit state changes
-        if: always()
-        shell: pwsh
+      - name: Run pipeline
         run: |
-          git config --global --add safe.directory "$env:GITHUB_WORKSPACE"
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add nucleus_memory.db data/requirements/ 2>$null
-          git diff --staged --quiet
-          if ($LASTEXITCODE -ne 0) {
-            git commit -m "requirement-management: $(Get-Date -Format 'yyyy-MM-dd HH:mm') UTC"
-            git pull --rebase origin main
-            git push
-          } else {
-            Write-Host "no state changes"
-            $global:LASTEXITCODE = 0
-          }
+          $args = @('--client', '${{ inputs.client }}', '--last-minutes', '${{ inputs.last_minutes }}')
+          if ('${{ inputs.day }}' -ne '') { $args += @('--day', '${{ inputs.day }}') }
+          if ('${{ inputs.dry_run }}' -eq 'true') { $args += '--no-identify' }
+          Write-Host "Running: py -3 collect_central.py $args"
+          py -3 collect_central.py @args
+
+      - name: Upload session doc on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: session-doc-on-failure
+          path: 'C:\napco-nucleus\data\requirements\sessions\current.docx'
+          if-no-files-found: ignore
+          retention-days: 7
