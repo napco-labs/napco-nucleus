@@ -1,4 +1,8 @@
 claude-agent-sdk>=0.1.0
+# Direct import from agent.py, pipeline.py, evals/score.py,
+# tools/poll_replies.py. Installed transitively by claude-agent-sdk
+# but listed explicitly so a future SDK refactor doesn't break us.
+anyio>=4.0
 python-dotenv>=1.0.0
 requests>=2.31.0
 google-api-python-client>=2.100.0
