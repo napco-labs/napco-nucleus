@@ -38,6 +38,12 @@ for _stream in (sys.stdout, sys.stderr):
 _HERE = Path(__file__).parent.parent
 sys.path.insert(0, str(_HERE))
 
+# Load .env so NUCLEUS_PIPELINE_*_MODEL overrides come through when
+# running this tool directly. Without it the estimator would project
+# Opus-Draft costs even after the user pinned Sonnet via .env.
+from dotenv import load_dotenv  # noqa: E402
+load_dotenv(_HERE / ".env", override=False)
+
 from tools._cost import estimate_cost  # noqa: E402
 from tools._session_filter import filter_doc, parse_session_doc  # noqa: E402
 

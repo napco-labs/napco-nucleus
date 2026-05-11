@@ -54,6 +54,12 @@ for _stream in (sys.stdout, sys.stderr):
 _HERE = Path(__file__).parent
 sys.path.insert(0, str(_HERE))
 
+# Load .env BEFORE reading model / timeout env vars below — running
+# pipeline.py directly (vs via do_it_now wrapper) won't pick them up
+# otherwise.
+from dotenv import load_dotenv  # noqa: E402
+load_dotenv(_HERE / ".env", override=False)
+
 import memory  # noqa: E402
 import napco_config as nucleus_config  # noqa: E402
 from tools import _session_doc as session_doc  # noqa: E402
