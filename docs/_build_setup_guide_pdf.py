@@ -261,7 +261,7 @@ def build():
         "<b>MS Teams desktop</b>, signed in, with the client chats already opened at least once.",
         "<b>Git for Windows.</b>",
         "<b>Network access to the central share.</b> You should be able to open "
-        "<font face=\"Courier\">\\\\MVPACCESS\\nucleus</font> in File Explorer. "
+        "<font face=\"Courier\">\\\\172.16.205.209\\nucleus-central</font> in File Explorer. "
         "If not, ping Titu for credentials.",
     ], bullet_s))
 
@@ -295,7 +295,7 @@ def build():
     flow.append(Paragraph(
         "In Notepad, just confirm <font face=\"Courier\">NUCLEUS_CENTRAL_PATH</font> "
         "matches the team's share (ships pre-set to "
-        "<font face=\"Courier\">\\\\MVPACCESS\\nucleus</font>). Optionally set "
+        "<font face=\"Courier\">\\\\172.16.205.209\\nucleus-central</font>). Optionally set "
         "<font face=\"Courier\">NUCLEUS_DEV_NAME</font> to a friendlier label "
         "than your Windows username. Save and close.", body))
     flow.append(Paragraph(
@@ -339,7 +339,7 @@ def build():
         "Start-ScheduledTask -TaskName 'NAPCO Nucleus - Chat Push'", code))
     flow.append(Paragraph(
         "Then look at "
-        "<font face=\"Courier\">\\\\MVPACCESS\\nucleus\\&lt;your name&gt;\\"
+        "<font face=\"Courier\">\\\\172.16.205.209\\nucleus-central\\&lt;your name&gt;\\"
         "&lt;today's date&gt;\\chat\\</font> — you should see a "
         "<font face=\"Courier\">chat_&lt;HHMM&gt;-&lt;HHMM&gt;.docx</font> appear "
         "within ~30 seconds. If you don't, see Troubleshooting.", body))
@@ -423,7 +423,7 @@ def build():
         "winget needs a fresh shell.",
         "<b>Scheduled task ran but no file on central</b> — check the SMB "
         "share is reachable: "
-        "<font face=\"Courier\">Test-Path \\\\MVPACCESS\\nucleus</font>. "
+        "<font face=\"Courier\">Test-Path \\\\172.16.205.209\\nucleus-central</font>. "
         "If it returns False, get an account on MVPACCESS from Titu.",
         "<b>Voice daemon prints &ldquo;no Teams session in Active state&rdquo;</b> "
         "when you say a phrase — that's the Teams-only gate working as designed. "

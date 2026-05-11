@@ -18,7 +18,7 @@ That's it. Titu triggers the heavy work (LLM identify + client email draft) from
 - **Windows 10 or 11** (Teams chat ingest is Windows-only — it reads Teams' local IndexedDB)
 - **MS Teams desktop**, signed in, with the client chats already opened at least once
 - **Git for Windows** installed
-- **Network access** to the central share (you should be able to open `\\MVPACCESS\nucleus` in File Explorer). If not, ping Titu for credentials.
+- **Network access** to the central share (you should be able to open `\\172.16.205.209\nucleus-central` in File Explorer). If not, ping Titu for credentials.
 
 ### 2. Clone the repo
 
@@ -36,7 +36,7 @@ It will:
 
 > **No Gmail App Password, no API key, nothing private.** The agent host (MVPACCESS) owns every credential — pulling email, posting drafts, hitting the LLM all happen there. Your machine only writes Teams chat/calls into a network folder using your normal Windows login.
 
-In Notepad, just confirm `NUCLEUS_CENTRAL_PATH` matches the team's share (it ships pre-set to `\\MVPACCESS\nucleus`). Optionally set `NUCLEUS_DEV_NAME` to a friendlier label than your Windows username. Save and close.
+In Notepad, just confirm `NUCLEUS_CENTRAL_PATH` matches the team's share (it ships pre-set to `\\172.16.205.209\nucleus-central`). Optionally set `NUCLEUS_DEV_NAME` to a friendlier label than your Windows username. Save and close.
 
 You're done when you see "Setup complete."
 
@@ -58,7 +58,7 @@ Double-click `scripts\start-daemon.bat`. Leave the terminal window running. (To 
 
 ## You're set. Verify it's working.
 
-Run `Start-ScheduledTask -TaskName 'NAPCO Nucleus - Chat Push'` in PowerShell to fire one push immediately. Then look at `\\MVPACCESS\nucleus\<your name>\<today's date>\chat\` — you should see a `chat_<HHMM>-<HHMM>.docx` appear within ~30 seconds. If you don't, see Troubleshooting.
+Run `Start-ScheduledTask -TaskName 'NAPCO Nucleus - Chat Push'` in PowerShell to fire one push immediately. Then look at `\\172.16.205.209\nucleus-central\<your name>\<today's date>\chat\` — you should see a `chat_<HHMM>-<HHMM>.docx` appear within ~30 seconds. If you don't, see Troubleshooting.
 
 ## Day-to-day
 
@@ -84,7 +84,7 @@ The system pushes Teams chat files **only if you've downloaded them locally**. I
 ## Troubleshooting
 
 - **"Python not found"** after running setup.bat: open a brand-new PowerShell and re-run setup. The PATH change from winget needs a fresh shell.
-- **Scheduled task ran but no file on central**: check the SMB share is reachable from your machine (`Test-Path \\MVPACCESS\nucleus`). If not, get an account on MVPACCESS from Titu.
+- **Scheduled task ran but no file on central**: check the SMB share is reachable from your machine (`Test-Path \\172.16.205.209\nucleus-central`). If not, get an account on MVPACCESS from Titu.
 - **Voice daemon prints "no Teams session in Active state"**: that's the Teams-only gate working as designed. Pass `--allow-any-call` to disable: `python -m teams.voice_daemon --allow-any-call`.
 - **Recording captured your voice but nothing else**: Teams → Settings → Devices → set Speaker = "Same as system / Default". Teams's separate Communications Device default makes the WASAPI loopback miss the other party.
 - **"pip install failed"** in setup.bat: usually a corporate proxy issue. Run setup.bat again from inside your VPN.

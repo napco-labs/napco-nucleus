@@ -152,7 +152,7 @@ if (-not (Test-Path $envFile)) {
     Write-Host ""
     Write-Host "    >>> Opening .env in Notepad." -ForegroundColor Yellow
     Write-Host "    >>> No secrets needed -- just confirm NUCLEUS_CENTRAL_PATH points to" -ForegroundColor Yellow
-    Write-Host "    >>> your team's central share (e.g. \\MVPACCESS\nucleus)." -ForegroundColor Yellow
+    Write-Host "    >>> your team's central share (e.g. \\172.16.205.209\nucleus-central)." -ForegroundColor Yellow
     Write-Host "    >>> Save and close Notepad to continue." -ForegroundColor Yellow
     Write-Host ""
     Start-Process notepad.exe -ArgumentList $envFile -Wait
