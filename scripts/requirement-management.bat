@@ -1,14 +1,16 @@
 @echo off
-REM Double-clickable trigger: push my chat, transcribe any pending
-REM calls, identify requirements, draft the verification email.
-REM Wraps `py -3 do_it_now.py` with a sensible default window.
+REM NAPCO Nucleus — Requirement Management. Double-clickable trigger
+REM for the full pipeline: pushes your chat NOW (force-flushing the
+REM 15-min cron), then runs the central pipeline on MVPACCESS
+REM (collect chat + calls + email + Drive, transcribe, identify,
+REM draft verification email to [Gmail]/Drafts).
 REM
 REM Defaults:
 REM   --client all           (process everything; narrow later if needed)
 REM   --last-minutes 2880    (48 hours — covers yesterday's emails/drive)
 REM
 REM Override either by passing on the command line:
-REM   do-it-now.bat NAPCO 120
+REM   requirement-management.bat NAPCO 120
 REM     -> client="NAPCO", last_minutes=120
 
 cd /d "%~dp0\.."
@@ -27,7 +29,7 @@ set "WINDOW=%~2"
 if "%WINDOW%"=="" set "WINDOW=2880"
 
 echo.
-echo === NAPCO Nucleus: Do It Now ===
+echo === NAPCO Nucleus: Requirement Management ===
 echo Client:        %CLIENT%
 echo Window:        last %WINDOW% minutes
 echo.
