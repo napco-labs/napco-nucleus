@@ -157,11 +157,20 @@ Run **once**, also in PowerShell:
 .\scripts\register-chat-push-task.ps1
 ```
 
-This installs a Windows Task Scheduler entry "NAPCO Nucleus - Chat Push"
-that runs `scripts\push-chat.bat` every 15 minutes. Verify with:
+This installs two Windows Task Scheduler entries:
+
+- **"NAPCO Nucleus - Chat Push"** runs `scripts\push-chat.bat` every 15
+  minutes, active only during BD 18:00–01:00.
+- **"NAPCO Nucleus - Chat Push (Backfill)"** runs
+  `scripts\push-chat-backfill.bat` once per day at 18:00 with
+  `--last-minutes 1080` (18 hours), so anything that arrived during the
+  daytime gap is captured at window open.
+
+Verify with:
 
 ```powershell
 Get-ScheduledTask -TaskName "NAPCO Nucleus - Chat Push"
+Get-ScheduledTask -TaskName "NAPCO Nucleus - Chat Push (Backfill)"
 Start-ScheduledTask -TaskName "NAPCO Nucleus - Chat Push"  # run now to test
 ```
 
@@ -173,7 +182,8 @@ Start-ScheduledTask -TaskName "NAPCO Nucleus - Chat Push"  # run now to test
   Recording starts/stops; WAVs + metadata.json land locally; the
   recorder copies them to `\\172.16.205.209\nucleus-central\<dev>\<date>\calls\`
   on stop.
-- Chat is pushed automatically every 15 min by the scheduled task.
+- Chat is pushed automatically every 15 min by the scheduled task
+  during BD 18:00–01:00; an 18:00 backfill catches the daytime gap.
 - That's it. No manual upload step.
 
 ---

@@ -48,7 +48,7 @@ In an **admin PowerShell** (Start → "PowerShell" → right-click → Run as ad
 .\scripts\register-chat-push-task.ps1
 ```
 
-This creates a "NAPCO Nucleus - Chat Push" entry in Task Scheduler that runs every 15 min, even when you're not logged in. To verify: Task Scheduler → Task Scheduler Library → look for the entry.
+This creates two Task Scheduler entries: **"NAPCO Nucleus - Chat Push"** (every 15 min, active only during BD 18:00–01:00) and **"NAPCO Nucleus - Chat Push (Backfill)"** (once per day at 18:00, `--last-minutes 1080`, sweeps the daytime gap so nothing is lost). Both run even when you're not logged in. To verify: Task Scheduler → Task Scheduler Library → look for both entries.
 
 To remove later: `.\scripts\register-chat-push-task.ps1 -Unregister`
 
@@ -64,7 +64,7 @@ Run `Start-ScheduledTask -TaskName 'NAPCO Nucleus - Chat Push'` in PowerShell to
 
 | What you want | What you do |
 |---|---|
-| Get your activity into the central pipeline | **Nothing** — the cron handles it every 15 min |
+| Get your activity into the central pipeline | **Nothing** — the cron handles it every 15 min during BD 18:00–01:00, plus an 18:00 backfill for the daytime gap |
 | Record a Teams call | Say a start phrase ("Start", "Start recording", or "Assalamualaikum") when the call begins; a stop phrase ("Stop", "End call", or "Allah Hafez") when it ends. Full list below. The daemon only records during real Teams calls. |
 | Include a file someone shared in Teams chat | Click **Download** on the chat attachment. Files in your `~/Downloads` matching the chat's filename + size get auto-pushed to central on the next cron tick. |
 | Pull updates after a `git pull` notice | Double-click `scripts\update.bat` |

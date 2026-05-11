@@ -283,23 +283,23 @@ def slide_solution(prs):
 
 def slide_channels(prs):
     s = base_slide(prs, "The four input channels",
-                   "What we collect, where it comes from.")
+                   "All four stage to central automatically. No operator action.")
     channels = [
         ("Teams chat",
          "Read from each dev's local Teams cache. No API, no token.",
-         "Group chats, DMs -- any conversation that is open in Teams.",
+         "Every 15 min during BD 18:00-01:00 + 18:00 backfill (1080 min).",
          CORAL),
         ("Teams calls",
          "Voice daemon records mic + speaker as separate tracks.",
-         "Transcribed centrally with Whisper large-v3 (Bangla -> English).",
+         "On \"stop\" / \"Allah Hafez\". Gated to BD 18:00-01:00.",
          TEAL),
         ("Email",
-         "IMAP pull from khasan@ael-bd.com. Body + attachments.",
-         "PDF, DOCX, DOC, XLSX, XLS, TXT -- all extracted to text.",
+         "IMAP poll of khasan@ael-bd.com on the agent host.",
+         "Auto-staged to central every 15 min, 24x7. UID-checkpointed.",
          GOLD),
         ("Google Drive",
          "Service-account read of one shared folder.",
-         "Same attachment types as email, plus audio (Groq Whisper).",
+         "Auto-staged to central every 15 min, 24x7, +5 min offset.",
          PURPLE),
     ]
     w = Inches(5.8)
@@ -314,10 +314,15 @@ def slide_channels(prs):
         add_box(s, x, y, w, h, title, [l1, "", l2], accent=color)
 
     set_speaker_notes(s, (
-        "Two channels live on each dev machine (chat + calls). Two run "
-        "centrally on the agent host (email + Drive). Important: dev "
-        "machines never need any Gmail or Drive credentials. Those live "
-        "on the agent host, owned by me."
+        "All four channels stage to central in the background -- nothing "
+        "to remember. Chat + calls on each dev's PC are gated to the BD "
+        "evening window (18:00-01:00); a once-daily 18:00 backfill "
+        "sweeps any daytime chat so nothing is lost. Email + Drive run "
+        "24x7 from the agent host (offset by 5 min to avoid API "
+        "contention). Dev machines never hold Gmail or Drive "
+        "credentials -- those live on the agent host. The Requirement "
+        "Management workflow reads from the central store when I'm "
+        "ready to draft."
     ))
 
 
@@ -405,17 +410,17 @@ def slide_titu_command(prs):
              fill_color=NAVY)
     tf = add_textbox(s, Inches(0.8), Inches(1.85), Inches(11.7), Inches(0.8),
                      anchor=MSO_ANCHOR.MIDDLE)
-    set_text(tf, "py -3 do_it_now.py --client \"Acme\" "
-                 "--last-minutes 60",
-             size=22, bold=True, color=WHITE, font="Consolas")
+    set_text(tf, "GHA: Run workflow \"Requirement Management\"   "
+                 "or   scripts\\requirement-management.bat",
+             size=18, bold=True, color=WHITE, font="Consolas")
 
     steps = [
-        ("1", "Push my local Teams chat to central"),
-        ("2", "SSH to the agent host (MVPACCESS)"),
-        ("3", "Pull email + Drive fresh on the agent host"),
-        ("4", "Walk central, transcribe all calls, aggregate chats"),
-        ("5", "Run Claude -> extract requirements -> draft email"),
-        ("6", "Push the draft into [Gmail]/Drafts for me to review"),
+        ("1", "Push my local Teams chat to central (force-flush)"),
+        ("2", "Walk central: chat + calls + already-staged email + Drive"),
+        ("3", "Transcribe every new call (Whisper chunked, parallel)"),
+        ("4", "Bangla -> English happens inline at identify time"),
+        ("5", "Claude extracts requirements -> drafts verification email"),
+        ("6", "Draft lands in [Gmail]/Drafts for me to review and send"),
     ]
     y = Inches(3.05)
     for num, body in steps:
@@ -427,11 +432,13 @@ def slide_titu_command(prs):
         y = y + Inches(0.6)
 
     set_speaker_notes(s, (
-        "One command. The window can be 30 min for a quick check, or "
-        "2880 min (48 hours) to sweep up everything since yesterday. "
-        "The pipeline takes a couple of minutes if there are no calls; "
-        "longer with Whisper transcription. The output is a draft email "
-        "in my Gmail. I read it, edit it, send it -- or don't send it."
+        "One workflow. Two triggers, same code path: the GitHub Actions "
+        "\"Requirement Management\" workflow on the self-hosted runner, "
+        "or scripts\\requirement-management.bat on my own machine. "
+        "Email + Drive are already on central (auto-staged every 15 min), "
+        "so the workflow just walks what's there, transcribes new calls, "
+        "and asks Claude to identify + draft. Output is one verification "
+        "email in [Gmail]/Drafts -- I read it, edit it, send it, or skip it."
     ))
 
 
@@ -560,11 +567,14 @@ def slide_roadmap(prs):
     s = base_slide(prs, "Roadmap",
                    "Human-in-the-loop today. Slower-and-correct first.")
     rows = [
-        ("Now", "Each \"do_it_now\" run produces a draft I review",
-         "Manual, predictable, auditable.",
+        ("Now",
+         "Each Requirement Management run produces a draft I review. "
+         "Calibration loop, conflict detection, per-run cost telemetry are in.",
+         "Manual, predictable, auditable. Cost ~$0.06/run.",
          NAVY),
-        ("Next", "Tighter dedup across re-runs + Teams attachment "
-                 "auto-resolve from the in-Teams preview cache",
+        ("Next",
+         "Tighter dedup across re-runs + Teams attachment auto-resolve "
+         "from the in-Teams preview cache",
          "Less manual cleanup before sending.",
          TEAL),
         ("Later", "Auto-publish to OpenProject -- only after >=80% "

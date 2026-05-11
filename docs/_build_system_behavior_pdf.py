@@ -258,7 +258,8 @@ def build():
              Paragraph("Reads each dev's local Teams cache (no API, no "
                        "token). Bundles recent messages + attachments "
                        "the dev has downloaded.", td),
-             Paragraph("Every 15 min, per dev's PC", td),
+             Paragraph("Every 15 min, per dev's PC, BD 18:00&ndash;01:00 only "
+                       "(once-daily 18:00 backfill catches the daytime gap)", td),
              Paragraph("<font face='Courier'>&lt;central&gt;/&lt;dev&gt;/"
                        "&lt;date&gt;/chat/</font>", td)],
             [Paragraph("<b>Teams calls</b>", td),
@@ -266,7 +267,8 @@ def build():
                        "/ &ldquo;Allah Hafez&rdquo; phrases during a Teams "
                        "call. Records mic + speaker as separate tracks. "
                        "Auto-uploads on stop.", td),
-             Paragraph("On call start/stop, per dev's PC", td),
+             Paragraph("On call start/stop, per dev's PC, BD 18:00&ndash;01:00 "
+                       "only (gate matches the chat-push window)", td),
              Paragraph("<font face='Courier'>&lt;central&gt;/&lt;dev&gt;/"
                        "&lt;date&gt;/calls/</font>", td)],
             [Paragraph("<b>Email</b>", td),
@@ -295,6 +297,20 @@ def build():
         "for calls) so re-runs never duplicate the same content. "
         "Failures on one channel never block another &mdash; if Drive is "
         "unreachable, email + chat + calls still flow.",
+        body))
+
+    flow.append(_callout(
+        "<b>Dev-machine capture is on a BD evening clock.</b> The chat "
+        "push (15-min cron) and the voice daemon recorder only fire "
+        "during BD 18:00&ndash;01:00 &mdash; that's the active work "
+        "window. A one-shot 18:00 chat backfill (<font face='Courier'>"
+        "--last-minutes 1080</font>) catches any daytime messages on "
+        "the next window open, so nothing is lost. Email + Drive "
+        "stagers on the agent host run 24&times;7 and are not "
+        "subject to this gate. Manual triggers "
+        "(<font face='Courier'>scripts\\requirement-management.bat</font>, "
+        "<font face='Courier'>--allow-any-call</font> on the voice "
+        "daemon) bypass the window for ad-hoc / demo use.",
         body))
 
     # ── Section 2: Trigger ───────────────────────────────────────
@@ -484,7 +500,8 @@ def build():
             [Paragraph("Keep Teams desktop signed in", td),
              Paragraph("Continuously (background only)", td)],
             [Paragraph("Voice daemon running on laptop", td),
-             Paragraph("Continuously; auto-starts on login if configured", td)],
+             Paragraph("Continuously; active recording only fires "
+                       "during BD 18:00&ndash;01:00", td)],
             [Paragraph("Say a phrase like &ldquo;start recording&rdquo; "
                        "/ &ldquo;Allah Hafez&rdquo; on Teams calls", td),
              Paragraph("Per client call (a few seconds of effort)", td)],

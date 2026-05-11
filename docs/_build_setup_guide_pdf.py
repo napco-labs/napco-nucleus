@@ -311,10 +311,14 @@ def build():
         body))
     flow.append(_code(".\\scripts\\register-chat-push-task.ps1", code))
     flow.append(Paragraph(
-        "Creates a &ldquo;NAPCO Nucleus - Chat Push&rdquo; entry in Task "
-        "Scheduler that runs every 15 min, even when you're not logged in. "
+        "Creates two entries in Task Scheduler: "
+        "<b>&ldquo;NAPCO Nucleus - Chat Push&rdquo;</b> (every 15 min, "
+        "active only during BD 18:00&ndash;01:00) and "
+        "<b>&ldquo;NAPCO Nucleus - Chat Push (Backfill)&rdquo;</b> (once "
+        "per day at 18:00, sweeps the prior 18 hours so nothing from the "
+        "daytime is lost). Both run even when you're not logged in. "
         "To verify: <i>Task Scheduler → Task Scheduler Library</i> — look "
-        "for the entry.", body))
+        "for both entries.", body))
     flow.append(Paragraph("To remove later:", body))
     flow.append(_code(
         ".\\scripts\\register-chat-push-task.ps1 -Unregister", code))
@@ -351,7 +355,9 @@ def build():
     rows = [
         [Paragraph("What you want", th), Paragraph("What you do", th)],
         [Paragraph("Get your activity into the central pipeline", td),
-         Paragraph("<b>Nothing</b> — the cron handles it every 15 min.", td)],
+         Paragraph("<b>Nothing</b> — the cron handles it every 15 min "
+                   "during BD 18:00&ndash;01:00, plus an 18:00 backfill "
+                   "for the daytime gap.", td)],
         [Paragraph("Record a Teams call", td),
          Paragraph(
              "Say a start phrase (e.g. <b>&ldquo;Start&rdquo;</b>, "
