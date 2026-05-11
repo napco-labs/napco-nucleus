@@ -67,6 +67,7 @@ STOP_VERBS = {"stop", "end", "close", "finish", "done"}
 
 DEFAULT_PHRASES = {
     "start": [
+        # Bangla / Bengali greetings
         "assalamualaikum",
         "assalamu alaikum",
         "assalam alaikum",
@@ -75,14 +76,36 @@ DEFAULT_PHRASES = {
         "as salamu alaikum",
         "salaam alaikum",
         "salam alaikum",
+        # English triggers
+        "nucleus start",
+        "start record",
+        "start recording",
+        "start call",
+        "record start",
+        "call start",
+        "record",
+        "start",
     ],
     "stop": [
+        # Bangla / Bengali farewells
         "allah hafez",
         "allah hafiz",
         "khoda hafez",
         "khoda hafiz",
         "khuda hafez",
         "khuda hafiz",
+        # English triggers
+        "nucleus stop",
+        "stop record",
+        "stop recording",
+        "end record",
+        "end recording",
+        "end call",
+        "record end",
+        "call end",
+        "stop call",
+        "end",
+        "stop",
     ],
 }
 

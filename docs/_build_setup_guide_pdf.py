@@ -354,11 +354,13 @@ def build():
          Paragraph("<b>Nothing</b> — the cron handles it every 15 min.", td)],
         [Paragraph("Record a Teams call", td),
          Paragraph(
-             "Say <b>&ldquo;Assalamualaikum&rdquo;</b> or "
-             "<b>&ldquo;Nucleus start&rdquo;</b> when the call begins; "
-             "<b>&ldquo;Allah Hafez&rdquo;</b> or "
-             "<b>&ldquo;Nucleus stop&rdquo;</b> when it ends. The daemon "
-             "only records during real Teams calls.", td)],
+             "Say a start phrase (e.g. <b>&ldquo;Start&rdquo;</b>, "
+             "<b>&ldquo;Start recording&rdquo;</b>, or "
+             "<b>&ldquo;Assalamualaikum&rdquo;</b>) when the call begins; "
+             "a stop phrase (e.g. <b>&ldquo;Stop&rdquo;</b>, "
+             "<b>&ldquo;End call&rdquo;</b>, or "
+             "<b>&ldquo;Allah Hafez&rdquo;</b>) when it ends. Full list "
+             "below. The daemon only records during real Teams calls.", td)],
         [Paragraph("Include a file someone shared in Teams chat", td),
          Paragraph(
              "Click <b>Download</b> on the chat attachment. Files in your "
@@ -392,15 +394,24 @@ def build():
 
     # Voice phrases + attachments
     flow.append(_sub_heading("Voice phrases"))
+    flow.append(Paragraph(
+        "The daemon listens for any of these (case-insensitive):", body))
     flow.append(_bullets([
-        "<b>Start recording:</b> &ldquo;Assalamualaikum&rdquo; / "
-        "&ldquo;Salaam alaikum&rdquo; / &ldquo;Nucleus start&rdquo;",
-        "<b>Stop recording:</b> &ldquo;Allah Hafez&rdquo; / "
-        "&ldquo;Khoda Hafiz&rdquo; / &ldquo;Nucleus stop&rdquo;",
+        "<b>Start recording</b> — &ldquo;Assalamualaikum&rdquo;, "
+        "&ldquo;Salaam alaikum&rdquo;, &ldquo;Nucleus start&rdquo;, "
+        "&ldquo;Start recording&rdquo;, &ldquo;Start record&rdquo;, "
+        "&ldquo;Start call&rdquo;, &ldquo;Record start&rdquo;, "
+        "&ldquo;Call start&rdquo;, &ldquo;Start&rdquo;, &ldquo;Record&rdquo;",
+        "<b>Stop recording</b> — &ldquo;Allah Hafez&rdquo;, "
+        "&ldquo;Khoda Hafiz&rdquo;, &ldquo;Nucleus stop&rdquo;, "
+        "&ldquo;Stop recording&rdquo;, &ldquo;Stop record&rdquo;, "
+        "&ldquo;End recording&rdquo;, &ldquo;End record&rdquo;, "
+        "&ldquo;End call&rdquo;, &ldquo;Record end&rdquo;, "
+        "&ldquo;Call end&rdquo;, &ldquo;End&rdquo;, &ldquo;Stop&rdquo;",
     ], bullet_s))
     flow.append(Paragraph(
         "Recording only fires when MS Teams has an active call. Saying "
-        "the phrase with Teams idle does nothing — by design. To edit "
+        "any phrase with Teams idle does nothing — by design. To edit "
         "phrases, open <font face=\"Courier\">data\\teams\\voice_phrases.json</font> "
         "and restart the daemon.", body))
 

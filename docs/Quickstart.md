@@ -65,17 +65,19 @@ Run `Start-ScheduledTask -TaskName 'NAPCO Nucleus - Chat Push'` in PowerShell to
 | What you want | What you do |
 |---|---|
 | Get your activity into the central pipeline | **Nothing** — the cron handles it every 15 min |
-| Record a Teams call | Say "Assalamualaikum" / "Nucleus start" when the call begins; "Allah Hafez" / "Nucleus stop" when it ends. The daemon only records during real Teams calls. |
+| Record a Teams call | Say a start phrase ("Start", "Start recording", or "Assalamualaikum") when the call begins; a stop phrase ("Stop", "End call", or "Allah Hafez") when it ends. Full list below. The daemon only records during real Teams calls. |
 | Include a file someone shared in Teams chat | Click **Download** on the chat attachment. Files in your `~/Downloads` matching the chat's filename + size get auto-pushed to central on the next cron tick. |
 | Pull updates after a `git pull` notice | Double-click `scripts\update.bat` |
 | Run an ad-hoc local pull (your own session, not the team's) | Double-click `scripts\pull-now.bat` |
 
 ### Voice phrases
 
-- **Start recording**: "Assalamualaikum" / "Salaam alaikum" / "Nucleus start"
-- **Stop recording**: "Allah Hafez" / "Khoda Hafiz" / "Nucleus stop"
+The daemon listens for any of these (case-insensitive):
 
-Recording only fires when MS Teams has an active call (ringing or in-progress). Saying the phrase with Teams idle does nothing — by design. To edit phrases, open `data\teams\voice_phrases.json` and restart the daemon.
+- **Start recording** — "Assalamualaikum", "Salaam alaikum", "Nucleus start", "Start recording", "Start record", "Start call", "Record start", "Call start", "Start", "Record"
+- **Stop recording** — "Allah Hafez", "Khoda Hafiz", "Nucleus stop", "Stop recording", "Stop record", "End recording", "End record", "End call", "Record end", "Call end", "End", "Stop"
+
+Recording only fires when MS Teams has an active call (ringing or in-progress). Saying any phrase with Teams idle does nothing — by design. To edit phrases, open `data\teams\voice_phrases.json` and restart the daemon.
 
 ### About chat attachments (important!)
 
