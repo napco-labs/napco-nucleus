@@ -41,7 +41,10 @@ Return EXACTLY a JSON array of final requirement dicts, no prose, no markdown fe
     "kind": "new" | "recurring" | "follow_up" | "missing_recurring",
     "priority": "P0" | "P1" | "P2" | "P3",
     "severity": "S1" | "S2" | "S3",
-    "conflicts_with": ["<Source ID or open-item id this requirement contradicts>", ...]
+    "conflicts_with": ["<Source ID or open-item id this requirement contradicts>", ...],
+    "time_ranges": [
+      {"source_id": "<MEETING Source ID>", "start": "HH:MM:SS", "end": "HH:MM:SS"}
+    ]
   },
   ...
 ]

@@ -146,7 +146,11 @@ async def write_aggregation_docx_tool(args):
     "severity (optional 'S1'|'S2'|'S3' - blast radius tag), "
     "conflicts_with (optional list of Source IDs or open-item ids the "
     "requirement appears to contradict — rendered as an amber WARNING "
-    "line so the reviewer notices). "
+    "line so the reviewer notices), "
+    "time_ranges (optional list of {source_id, start, end} dicts where "
+    "start/end are 'HH:MM:SS' clock times within a MEETING source. "
+    "Lets the reviewer pull a short audio snippet via "
+    "tools/audio_snippet.py to spot-check call-derived requirements). "
     "Output filename format is 'Requirements Verification <YYYY-MM-DD>.docx' "
     "in data/requirements/. Returns {path, requirement_count}.",
     {"requirements": list, "output_path": str},
@@ -211,6 +215,9 @@ async def write_verification_docx_tool(args):
         conflicts = r.get("conflicts_with") or []
         if not isinstance(conflicts, list):
             conflicts = []
+        time_ranges = r.get("time_ranges") or []
+        if not isinstance(time_ranges, list):
+            time_ranges = []
 
         # Flat numbered line: "1. " + [P1/S2] + bold(title) + " - " + summary
         p = doc.add_paragraph()
@@ -242,6 +249,25 @@ async def write_verification_docx_tool(args):
             warn_run.italic = True
             warn_run.font.size = Pt(9)
             warn_run.font.color.rgb = _AMBER
+
+        # Audio time-range hints for MEETING-derived requirements.
+        # Reviewer pulls a snippet via tools/audio_snippet.py.
+        if time_ranges:
+            tr_p = doc.add_paragraph()
+            valid = []
+            for tr in time_ranges:
+                if not isinstance(tr, dict):
+                    continue
+                sid = (tr.get("source_id") or "").strip()
+                st = (tr.get("start") or "").strip()
+                en = (tr.get("end") or "").strip()
+                if sid and st and en:
+                    valid.append(f"{sid} @ {st}-{en}")
+            if valid:
+                tr_run = tr_p.add_run("🎧 Audio: " + " | ".join(valid))
+                tr_run.italic = True
+                tr_run.font.size = Pt(9)
+                tr_run.font.color.rgb = _GREY
 
         # Citation + confidence + rationale on one grey 9pt line (or
         # split across lines if it gets long).
@@ -302,6 +328,13 @@ async def write_verification_docx_tool(args):
                     "priority": (r.get("priority") or "").strip().upper() or None,
                     "severity": (r.get("severity") or "").strip().upper() or None,
                     "conflicts_with": r.get("conflicts_with") or [],
+                    "time_ranges": [
+                        {"source_id": (tr.get("source_id") or "").strip(),
+                         "start": (tr.get("start") or "").strip(),
+                         "end": (tr.get("end") or "").strip()}
+                        for tr in (r.get("time_ranges") or [])
+                        if isinstance(tr, dict)
+                    ],
                 }
                 for r in reqs if isinstance(r, dict)
             ],
