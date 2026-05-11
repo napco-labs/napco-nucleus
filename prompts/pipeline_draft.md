@@ -46,18 +46,22 @@ You will receive in the user message the final requirements JSON (the Critic's o
 
    Pass `client_name` — without it the client-aware memory loop breaks. Same spelling as the Critic used.
 
-5. **Final reply** in plain text. Surface:
+5. **Final reply — KEEP IT SHORT.** 3-5 lines maximum, in plain text. The tool calls themselves wrote the artifacts; the reviewer can read them directly. Don't restate things the tools already returned.
 
-   - Verification doc path
-   - Email draft path + recipient + IMAP push status
-   - Mean confidence + low-confidence count
-   - Per-client breakdown: how many requirements per `client_name`
-   - Kind breakdown: counts of `new` / `recurring` / `follow_up` / `missing_recurring`
-   - If `low_confidence_count > 0`, list the low-confidence titles explicitly
+   Format:
+   ```
+   <N> requirement(s) drafted for <client_name(s)>. Mean conf <X.XX>.
+   Doc: <verification_doc_path>
+   Draft: <email_path> -> [Gmail]/Drafts (or "[IMAP push failed]")
+   <Only if low_confidence_count > 0:> Low-confidence (review before sending): <comma-separated titles>
+   <Only if kind=="missing_recurring" item exists:> Verify-with-client items added: <comma-separated titles>
+   ```
 
-At the end, suggest:
+   Do NOT list every requirement title. Do NOT include per-client breakdown unless multiple clients. Do NOT include kind breakdown unless missing_recurring items were added. Do NOT restate the tool return JSON. The reviewer opens the docx if they want detail.
 
-> Next: `py -3 -m tools.review_session` to mark which items you accept / edit / reject. Decisions feed the confidence-calibration curve (`py -3 -m tools.calibration_report`).
+At the very end (one line, only if anything got drafted):
+
+> Next: `py -3 -m tools.review_session` to log keep/edit/reject decisions.
 
 ## What NOT to do
 

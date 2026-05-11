@@ -89,6 +89,28 @@ _TIMEOUT_CRITIQUE = int(os.environ.get("NUCLEUS_TIMEOUT_CRITIQUE_S", "300"))
 _TIMEOUT_DRAFT = int(os.environ.get("NUCLEUS_TIMEOUT_DRAFT_S", "600"))
 
 
+def _budget_for(stage: str) -> float | None:
+    """Per-stage hard cost ceiling in USD. The SDK aborts the call
+    if it would exceed this. Defaults are calibrated for normal
+    session sizes; runaway calls (e.g. an enormous session doc with
+    Opus output) hit the cap and stop cleanly instead of burning
+    money silently.
+
+    Override via env: NUCLEUS_BUDGET_<STAGE>_USD. Set to empty
+    string ("") to disable the cap on that stage."""
+    defaults = {"extract": 0.10, "critique": 0.30, "draft": 0.30}
+    raw = os.environ.get(f"NUCLEUS_BUDGET_{stage.upper()}_USD")
+    if raw is None:
+        return defaults.get(stage)
+    raw = raw.strip()
+    if raw == "":
+        return None  # explicitly disabled
+    try:
+        return float(raw)
+    except ValueError:
+        return defaults.get(stage)
+
+
 # ── Session-doc reading ───────────────────────────────────────────
 
 def _read_session_text(session_path: Path) -> str:
@@ -163,10 +185,11 @@ def _strip_fences(s: str) -> str:
 
 def _build_options(system_prompt: str, *, model: str | None,
                    mcp_servers: dict | None = None,
-                   allowed_tools: list[str] | None = None):
+                   allowed_tools: list[str] | None = None,
+                   max_budget_usd: float | None = None):
     """Construct ClaudeAgentOptions defensively. If the installed SDK
-    version doesn't accept a `model` kwarg, falls back silently to the
-    CLI default and prints a one-line warning."""
+    version doesn't accept a particular kwarg, falls back silently to
+    the CLI default and prints a one-line warning."""
     from claude_agent_sdk import ClaudeAgentOptions  # lazy
 
     options_kwargs: dict = {"system_prompt": system_prompt}
@@ -179,16 +202,22 @@ def _build_options(system_prompt: str, *, model: str | None,
         options_kwargs["cli_path"] = cli_path
     if model:
         options_kwargs["model"] = model
+    if max_budget_usd is not None:
+        options_kwargs["max_budget_usd"] = max_budget_usd
 
     try:
         return ClaudeAgentOptions(**options_kwargs)
     except TypeError as e:
-        if model and "model" in str(e):
-            print(f"[warn] SDK doesn't accept model={model!r} — "
-                  f"falling back to CLI default.", file=sys.stderr)
-            options_kwargs.pop("model", None)
+        # Drop known-optional kwargs the SDK doesn't recognise.
+        for k in ("model", "max_budget_usd"):
+            if k in str(e) and k in options_kwargs:
+                print(f"[warn] SDK doesn't accept {k}={options_kwargs[k]!r} "
+                      f"— falling back without it.", file=sys.stderr)
+                options_kwargs.pop(k, None)
+        try:
             return ClaudeAgentOptions(**options_kwargs)
-        raise
+        except TypeError:
+            raise
 
 
 async def _claude_call(system_prompt: str, user_prompt: str, *,
@@ -201,7 +230,8 @@ async def _claude_call(system_prompt: str, user_prompt: str, *,
     from claude_agent_sdk import ClaudeSDKClient  # lazy
     from tools._cost import CallTelemetry  # lazy
 
-    options = _build_options(system_prompt, model=model)
+    options = _build_options(system_prompt, model=model,
+                              max_budget_usd=_budget_for(stage))
     if model:
         print(f"  (model: {model})")
 
@@ -262,6 +292,7 @@ async def _claude_call_with_tools(system_prompt: str, user_prompt: str, *,
         system_prompt, model=model,
         mcp_servers={"napco-nucleus": server},
         allowed_tools=allowed,
+        max_budget_usd=_budget_for(stage),
     )
     if model:
         print(f"  (model: {model})")

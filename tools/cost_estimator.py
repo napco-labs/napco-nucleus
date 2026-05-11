@@ -55,10 +55,12 @@ _CHARS_PER_TOKEN = 4
 
 # Per-stage typical OUTPUT token sizes (calibrated from observed
 # runs). Overridable via env if your sessions trend differently.
+# Draft was lowered from 2000 -> 500 after the prompt was tightened
+# to a 3-5 line summary instead of a structured recap.
 _TYP_OUTPUT_TOKENS = {
     "extract": int(os.environ.get("NUCLEUS_TYP_OUTPUT_EXTRACT", "1500")),
     "critique": int(os.environ.get("NUCLEUS_TYP_OUTPUT_CRITIQUE", "1500")),
-    "draft": int(os.environ.get("NUCLEUS_TYP_OUTPUT_DRAFT", "2000")),
+    "draft": int(os.environ.get("NUCLEUS_TYP_OUTPUT_DRAFT", "500")),
 }
 
 
