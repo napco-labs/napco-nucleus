@@ -36,4 +36,13 @@ data/requirements/inbox-archive/
 data/requirements/_drive_tmp/
 data/requirements/_meeting_tmp/
 data/requirements/Requirements Verification *.docx
+data/requirements/Requirements Verification *.json
+data/requirements/aggregation_*.docx
+data/requirements/inbox/
+data/requirements/drive-processed.json
+data/requirements/state.json
+
+# Eval harness output — per-run JSON files in evals/results/.
+# Keep the dir via .gitkeep; don't commit individual runs.
+evals/results/*.json
 nucleus_memory.db
