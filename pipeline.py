@@ -98,6 +98,21 @@ def _read_session_text(session_path: Path) -> str:
     return "\n".join(out)
 
 
+def _read_session_text_filtered(session_path: Path) -> tuple[str, dict]:
+    """Pre-filter noise sections before the Extractor sees them.
+    Set NUCLEUS_DISABLE_NOISE_FILTER=1 to opt out (the LLM gets the
+    raw doc, pays full token cost — useful when debugging why
+    something legitimate got dropped)."""
+    if (os.environ.get("NUCLEUS_DISABLE_NOISE_FILTER") or "").strip() in {
+            "1", "true", "yes"}:
+        text = _read_session_text(session_path)
+        return text, {"filtered": False,
+                      "note": "NUCLEUS_DISABLE_NOISE_FILTER=1",
+                      "kept_chars": len(text)}
+    from tools._session_filter import filter_doc  # lazy
+    return filter_doc(session_path)
+
+
 # ── Prompt loaders ────────────────────────────────────────────────
 
 def _load_prompt(name: str) -> str:
@@ -455,12 +470,27 @@ async def run_pipeline(
         save_dir.mkdir(parents=True, exist_ok=True)
         print(f"Save dir:    {save_dir}")
 
-    session_text = _read_session_text(session_path)
-    print(f"Session length: {len(session_text)} chars\n")
+    session_text, filter_stats = _read_session_text_filtered(session_path)
+    if filter_stats.get("filtered", True):
+        total = filter_stats.get("total_sections", 0)
+        kept = filter_stats.get("kept_sections", 0)
+        dropped = filter_stats.get("dropped_sections", 0)
+        print(f"Session length: {filter_stats.get('kept_chars', len(session_text))} chars "
+              f"(kept {kept}/{total} sections; dropped {dropped} as noise)")
+        for d in filter_stats.get("drops", []):
+            print(f"  - drop: [{d['source']}] {d['headline'][:60]}  "
+                  f"({d['reason']})")
+        print()
+        state_filter_stats = filter_stats
+    else:
+        print(f"Session length: {len(session_text)} chars  "
+              f"(noise filter disabled)\n")
+        state_filter_stats = filter_stats
 
     state: dict = {"session_path": str(session_path),
                    "started_at": started.isoformat(timespec="seconds"),
-                   "stages_run": []}
+                   "stages_run": [],
+                   "filter_stats": state_filter_stats}
 
     with trace_run("pipeline-multi-agent") as run:
         state["run_id"] = run.run_id
