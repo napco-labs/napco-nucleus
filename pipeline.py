@@ -172,9 +172,11 @@ def _build_options(system_prompt: str, *, model: str | None,
 
 async def _claude_call(system_prompt: str, user_prompt: str, *,
                        model: str | None = None,
-                       stage: str = "pipeline") -> str:
+                       stage: str = "pipeline",
+                       run=None) -> str:
     """Single Claude call, no MCP tools. Returns concatenated text
-    output. Used by stages 1 and 2."""
+    output. Used by stages 1 and 2. `run` is a tools._trace.Run if
+    tracing is active."""
     from claude_agent_sdk import ClaudeSDKClient  # lazy
     from tools._cost import CallTelemetry  # lazy
 
@@ -184,13 +186,25 @@ async def _claude_call(system_prompt: str, user_prompt: str, *,
 
     telem = CallTelemetry()
     chunks: list[str] = []
-    async with ClaudeSDKClient(options=options) as client:
-        await client.query(user_prompt)
-        async for msg in client.receive_response():
-            telem.observe(msg)
-            t = _extract_text(msg)
-            if t:
-                chunks.append(t)
+    # Open a trace span if we have a run; otherwise the no-op stand-in
+    if run is not None:
+        trace_cm = run.trace_call(stage=stage, model=model,
+                                   system_prompt=system_prompt,
+                                   user_prompt=user_prompt)
+    else:
+        from contextlib import nullcontext
+        trace_cm = nullcontext(_NoOpTrace())
+
+    with trace_cm as trace:
+        async with ClaudeSDKClient(options=options) as client:
+            await client.query(user_prompt)
+            async for msg in client.receive_response():
+                telem.observe(msg)
+                trace.observe_message(msg)
+                t = _extract_text(msg)
+                if t:
+                    chunks.append(t)
+                    trace.add_response_chunk(t)
     telem.log(stage=stage, model=(model or "default"))
     cost = telem.cost(model or "default")
     totals = telem.totals()
@@ -200,9 +214,16 @@ async def _claude_call(system_prompt: str, user_prompt: str, *,
     return "".join(chunks)
 
 
+class _NoOpTrace:
+    def observe_message(self, *_a, **_k): pass
+    def add_response_chunk(self, *_a, **_k): pass
+    def set_error(self, *_a, **_k): pass
+
+
 async def _claude_call_with_tools(system_prompt: str, user_prompt: str, *,
                                   model: str | None = None,
-                                  stage: str = "pipeline") -> str:
+                                  stage: str = "pipeline",
+                                  run=None) -> str:
     """Single Claude call WITH MCP tools wired up — used by stage 3."""
     from claude_agent_sdk import ClaudeSDKClient, create_sdk_mcp_server  # lazy
     from tools import ALL_TOOLS, TOOL_NAMES
@@ -226,14 +247,25 @@ async def _claude_call_with_tools(system_prompt: str, user_prompt: str, *,
 
     telem = CallTelemetry()
     chunks: list[str] = []
-    async with ClaudeSDKClient(options=options) as client:
-        await client.query(user_prompt)
-        async for msg in client.receive_response():
-            telem.observe(msg)
-            t = _extract_text(msg)
-            if t:
-                chunks.append(t)
-                print(t, end="", flush=True)  # also live-stream to stdout
+    if run is not None:
+        trace_cm = run.trace_call(stage=stage, model=model,
+                                   system_prompt=system_prompt,
+                                   user_prompt=user_prompt)
+    else:
+        from contextlib import nullcontext
+        trace_cm = nullcontext(_NoOpTrace())
+
+    with trace_cm as trace:
+        async with ClaudeSDKClient(options=options) as client:
+            await client.query(user_prompt)
+            async for msg in client.receive_response():
+                telem.observe(msg)
+                trace.observe_message(msg)
+                t = _extract_text(msg)
+                if t:
+                    chunks.append(t)
+                    trace.add_response_chunk(t)
+                    print(t, end="", flush=True)
     telem.log(stage=stage, model=(model or "default"))
     cost = telem.cost(model or "default")
     totals = telem.totals()
@@ -245,7 +277,7 @@ async def _claude_call_with_tools(system_prompt: str, user_prompt: str, *,
 
 # ── Stage 1: Extract ──────────────────────────────────────────────
 
-async def run_extract(session_text: str) -> list[dict]:
+async def run_extract(session_text: str, *, run=None) -> list[dict]:
     print("\n" + "=" * 60)
     print("  STAGE 1 / EXTRACT")
     print("=" * 60)
@@ -260,7 +292,8 @@ async def run_extract(session_text: str) -> list[dict]:
     with anyio.fail_after(_TIMEOUT_EXTRACT):
         raw = await _claude_call(system, user,
                                   model=_EXTRACT_MODEL or None,
-                                  stage="extract")
+                                  stage="extract",
+                                  run=run)
     cleaned = _strip_fences(raw)
     try:
         candidates = json.loads(cleaned)
@@ -324,7 +357,7 @@ def _gather_critic_context(candidates: list[dict]) -> dict:
     }
 
 
-async def run_critique(candidates: list[dict]) -> list[dict]:
+async def run_critique(candidates: list[dict], *, run=None) -> list[dict]:
     print("\n" + "=" * 60)
     print("  STAGE 2 / CRITIQUE")
     print("=" * 60)
@@ -345,7 +378,8 @@ async def run_critique(candidates: list[dict]) -> list[dict]:
     with anyio.fail_after(_TIMEOUT_CRITIQUE):
         raw = await _claude_call(system, user,
                                   model=_CRITIQUE_MODEL or None,
-                                  stage="critique")
+                                  stage="critique",
+                                  run=run)
     cleaned = _strip_fences(raw)
     try:
         finalists = json.loads(cleaned)
@@ -369,7 +403,7 @@ async def run_critique(candidates: list[dict]) -> list[dict]:
 
 # ── Stage 3: Draft ────────────────────────────────────────────────
 
-async def run_draft(finalists: list[dict], dry_run: bool) -> str:
+async def run_draft(finalists: list[dict], dry_run: bool, *, run=None) -> str:
     print("\n" + "=" * 60)
     print("  STAGE 3 / DRAFT")
     print("=" * 60)
@@ -395,7 +429,8 @@ async def run_draft(finalists: list[dict], dry_run: bool) -> str:
     with anyio.fail_after(_TIMEOUT_DRAFT):
         return await _claude_call_with_tools(system, user,
                                               model=_DRAFT_MODEL or None,
-                                              stage="draft")
+                                              stage="draft",
+                                              run=run)
 
 
 # ── Orchestrator ─────────────────────────────────────────────────
@@ -409,6 +444,8 @@ async def run_pipeline(
     started = datetime.now()
     if not session_path.exists():
         raise RuntimeError(f"session doc not found: {session_path}")
+
+    from tools._trace import trace_run  # lazy
 
     print(f"\nSession doc: {session_path}")
     print(f"Stages:      {', '.join(stages)}")
@@ -425,36 +462,43 @@ async def run_pipeline(
                    "started_at": started.isoformat(timespec="seconds"),
                    "stages_run": []}
 
-    candidates: list[dict] = []
-    if "extract" in stages:
-        candidates = await run_extract(session_text)
-        state["candidates"] = candidates
-        state["stages_run"].append("extract")
-        if save_dir:
-            (save_dir / "1_candidates.json").write_text(
-                json.dumps(candidates, indent=2, ensure_ascii=False,
-                           default=str),
-                encoding="utf-8")
+    with trace_run("pipeline-multi-agent") as run:
+        state["run_id"] = run.run_id
+        if run.trace_path:
+            print(f"Trace:       {run.trace_path}")
+            state["trace_path"] = str(run.trace_path)
 
-    finalists: list[dict] = []
-    if "critique" in stages:
-        finalists = await run_critique(candidates)
-        state["finalists"] = finalists
-        state["stages_run"].append("critique")
-        if save_dir:
-            (save_dir / "2_finalists.json").write_text(
-                json.dumps(finalists, indent=2, ensure_ascii=False,
-                           default=str),
-                encoding="utf-8")
+        candidates: list[dict] = []
+        if "extract" in stages:
+            candidates = await run_extract(session_text, run=run)
+            state["candidates"] = candidates
+            state["stages_run"].append("extract")
+            if save_dir:
+                (save_dir / "1_candidates.json").write_text(
+                    json.dumps(candidates, indent=2, ensure_ascii=False,
+                               default=str),
+                    encoding="utf-8")
 
-    draft_output = ""
-    if "draft" in stages:
-        draft_output = await run_draft(finalists, dry_run=dry_run)
-        state["draft_output_tail"] = draft_output[-2000:]
-        state["stages_run"].append("draft")
-        if save_dir:
-            (save_dir / "3_draft_output.txt").write_text(
-                draft_output, encoding="utf-8")
+        finalists: list[dict] = []
+        if "critique" in stages:
+            finalists = await run_critique(candidates, run=run)
+            state["finalists"] = finalists
+            state["stages_run"].append("critique")
+            if save_dir:
+                (save_dir / "2_finalists.json").write_text(
+                    json.dumps(finalists, indent=2, ensure_ascii=False,
+                               default=str),
+                    encoding="utf-8")
+
+        draft_output = ""
+        if "draft" in stages:
+            draft_output = await run_draft(finalists, dry_run=dry_run,
+                                            run=run)
+            state["draft_output_tail"] = draft_output[-2000:]
+            state["stages_run"].append("draft")
+            if save_dir:
+                (save_dir / "3_draft_output.txt").write_text(
+                    draft_output, encoding="utf-8")
 
     state["finished_at"] = datetime.now().isoformat(timespec="seconds")
     return state

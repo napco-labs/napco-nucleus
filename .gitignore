@@ -32,6 +32,8 @@ reports/
 data/teams/
 # Cross-process file locks (data/_locks/<name>.lock dirs)
 data/_locks/
+# Structured traces — one JSONL per pipeline run; replay via tools/replay_trace
+data/traces/
 data/requirements/sessions/
 data/requirements/drafts/
 data/requirements/inbox-archive/
