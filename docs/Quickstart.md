@@ -9,7 +9,7 @@ Your machine runs two tiny background jobs:
 1. A **15-minute scheduled task** that pushes your recent Teams chat (+ any attachments you've downloaded) to a shared folder on MVPACCESS.
 2. A **voice daemon** that records your Teams calls when it hears the start/stop phrases.
 
-That's it. Mohammad triggers the heavy work (LLM identify + client email draft) from the agent host. You just keep these two running.
+That's it. Titu triggers the heavy work (LLM identify + client email draft) from the agent host. You just keep these two running.
 
 ## First-time setup (~10 minutes)
 
@@ -18,7 +18,7 @@ That's it. Mohammad triggers the heavy work (LLM identify + client email draft) 
 - **Windows 10 or 11** (Teams chat ingest is Windows-only — it reads Teams' local IndexedDB)
 - **MS Teams desktop**, signed in, with the client chats already opened at least once
 - **Git for Windows** installed
-- **Network access** to the central share (you should be able to open `\\MVPACCESS\nucleus` in File Explorer). If not, ping Mohammad for credentials.
+- **Network access** to the central share (you should be able to open `\\MVPACCESS\nucleus` in File Explorer). If not, ping Titu for credentials.
 
 ### 2. Clone the repo
 
@@ -84,9 +84,9 @@ The system pushes Teams chat files **only if you've downloaded them locally**. I
 ## Troubleshooting
 
 - **"Python not found"** after running setup.bat: open a brand-new PowerShell and re-run setup. The PATH change from winget needs a fresh shell.
-- **Scheduled task ran but no file on central**: check the SMB share is reachable from your machine (`Test-Path \\MVPACCESS\nucleus`). If not, get an account on MVPACCESS from Mohammad.
+- **Scheduled task ran but no file on central**: check the SMB share is reachable from your machine (`Test-Path \\MVPACCESS\nucleus`). If not, get an account on MVPACCESS from Titu.
 - **Voice daemon prints "no Teams session in Active state"**: that's the Teams-only gate working as designed. Pass `--allow-any-call` to disable: `python -m teams.voice_daemon --allow-any-call`.
 - **Recording captured your voice but nothing else**: Teams → Settings → Devices → set Speaker = "Same as system / Default". Teams's separate Communications Device default makes the WASAPI loopback miss the other party.
 - **"pip install failed"** in setup.bat: usually a corporate proxy issue. Run setup.bat again from inside your VPN.
 
-For anything else, ping Mohammad.
+For anything else, ping Titu.

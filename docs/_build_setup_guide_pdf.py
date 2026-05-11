@@ -127,7 +127,7 @@ def build():
             "it hears the start/stop phrases.", bullet_s), leftIndent=14),
     ], bulletType="bullet", leftIndent=10))
     flow.append(Paragraph(
-        "That's it. Mohammad triggers the heavy work (LLM identify + "
+        "That's it. Titu triggers the heavy work (LLM identify + "
         "client email draft) from the agent host. You just keep these "
         "two running.", body))
 
@@ -137,7 +137,7 @@ def build():
         "<b>Windows 10 or 11.</b> Teams chat ingest reads Teams' local IndexedDB cache, which is Windows-only.",
         "<b>MS Teams desktop</b>, signed in, with the client chats already opened at least once.",
         "<b>Git for Windows.</b>",
-        "<b>Network access to the central share.</b> You should be able to open <font face=\"Courier\">\\\\MVPACCESS\\nucleus</font> in File Explorer. If not, ping Mohammad for credentials.",
+        "<b>Network access to the central share.</b> You should be able to open <font face=\"Courier\">\\\\MVPACCESS\\nucleus</font> in File Explorer. If not, ping Titu for credentials.",
     ]
     flow.append(ListFlowable(
         [ListItem(Paragraph(t, bullet_s), leftIndent=14, value="circle") for t in items],
@@ -279,7 +279,7 @@ def build():
     flow.append(ListFlowable(
         [ListItem(Paragraph(t, bullet_s), leftIndent=14, value="circle") for t in [
             "<b>\"Python not found\"</b> after running setup.bat: open a brand-new PowerShell and re-run setup. The PATH change from winget needs a fresh shell.",
-            "<b>Scheduled task ran but no file on central:</b> check the SMB share is reachable (<font face=\"Courier\">Test-Path \\\\MVPACCESS\\nucleus</font>). If not, get an account on MVPACCESS from Mohammad.",
+            "<b>Scheduled task ran but no file on central:</b> check the SMB share is reachable (<font face=\"Courier\">Test-Path \\\\MVPACCESS\\nucleus</font>). If not, get an account on MVPACCESS from Titu.",
             "<b>Voice daemon prints \"no Teams session in Active state\"</b> when you say a phrase: that's the Teams-only gate working as designed. Pass <font face=\"Courier\">--allow-any-call</font> to disable: <font face=\"Courier\">python -m teams.voice_daemon --allow-any-call</font>.",
             "<b>Recording captured your voice but nothing else:</b> Teams → Settings → Devices → set Speaker = \"Same as system / Default\". Teams's separate Communications Device default makes the WASAPI loopback miss the other party.",
             "<b>\"pip install failed\"</b> in setup.bat: usually a corporate proxy issue. Run setup.bat again from inside your VPN.",
@@ -287,7 +287,7 @@ def build():
         bulletType="bullet", leftIndent=10,
     ))
     flow.append(Paragraph(
-        "For anything else, ping Mohammad.", body))
+        "For anything else, ping Titu.", body))
 
     return flow
 
