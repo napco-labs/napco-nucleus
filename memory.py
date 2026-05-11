@@ -79,7 +79,15 @@ CREATE TABLE IF NOT EXISTS requirements_seen (
     -- Client-aware memory (added 2026-05-11): which client raised this?
     -- Inferred by the agent from the source (email sender domain, chat
     -- conversation, call client_name metadata). NULL for legacy rows.
-    client_name       TEXT
+    client_name       TEXT,
+    -- Reply tracking (added 2026-05-11). Closed-loop verification:
+    -- once a client replies to our verification email, the agent
+    -- updates these fields per requirement. Lets you tell apart
+    -- drafted-but-not-confirmed from confirmed.
+    confirmation_status TEXT NOT NULL DEFAULT 'pending',  -- pending|confirmed|needs_change|rejected|unclear
+    confirmation_at TEXT,
+    confirmation_notes TEXT NOT NULL DEFAULT '',
+    confirmation_email_uid TEXT
 );
 CREATE UNIQUE INDEX IF NOT EXISTS ux_requirements_norm_source
     ON requirements_seen(title_norm, source);
@@ -206,11 +214,30 @@ def _migrate_requirements_seen(conn: sqlite3.Connection) -> None:
     if "client_name" not in cols:
         conn.execute(
             "ALTER TABLE requirements_seen ADD COLUMN client_name TEXT")
+    if "confirmation_status" not in cols:
+        # pending | confirmed | needs_change | rejected | unclear
+        conn.execute(
+            "ALTER TABLE requirements_seen ADD COLUMN "
+            "confirmation_status TEXT NOT NULL DEFAULT 'pending'")
+    if "confirmation_at" not in cols:
+        conn.execute(
+            "ALTER TABLE requirements_seen ADD COLUMN confirmation_at TEXT")
+    if "confirmation_notes" not in cols:
+        conn.execute(
+            "ALTER TABLE requirements_seen ADD COLUMN "
+            "confirmation_notes TEXT NOT NULL DEFAULT ''")
+    if "confirmation_email_uid" not in cols:
+        conn.execute(
+            "ALTER TABLE requirements_seen ADD COLUMN "
+            "confirmation_email_uid TEXT")
     # Idempotent — runs on fresh installs (where the column is present
     # via the CREATE TABLE in _SCHEMA) and on migrated installs alike.
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_requirements_client_last "
         "ON requirements_seen(client_name, last_seen DESC)")
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_requirements_confirmation "
+        "ON requirements_seen(confirmation_status, client_name)")
 
 
 @contextmanager
@@ -334,6 +361,98 @@ def remember_requirement(
     except Exception as e:
         logger.warning("memory.remember_requirement failed: %s", e)
         return False
+
+
+_VALID_CONFIRMATION = {"pending", "confirmed", "needs_change",
+                       "rejected", "unclear"}
+
+
+def update_confirmation(
+    *,
+    title: str | None = None,
+    requirement_id: int | None = None,
+    status: str,
+    notes: str = "",
+    email_uid: str | None = None,
+    confirmed_at: str | None = None,
+) -> bool:
+    """Mark a requirement's confirmation_status. Match by id (preferred)
+    or by case-insensitive title. status must be one of:
+    pending | confirmed | needs_change | rejected | unclear."""
+    if status not in _VALID_CONFIRMATION:
+        raise ValueError(
+            f"status must be one of {sorted(_VALID_CONFIRMATION)}; "
+            f"got {status!r}")
+    ts = confirmed_at or _now()
+    try:
+        with _conn() as c:
+            if requirement_id is not None:
+                cur = c.execute(
+                    "UPDATE requirements_seen SET "
+                    "  confirmation_status = ?, "
+                    "  confirmation_at = ?, "
+                    "  confirmation_notes = ?, "
+                    "  confirmation_email_uid = COALESCE(?, confirmation_email_uid) "
+                    "WHERE id = ?",
+                    (status, ts, notes or "", email_uid, int(requirement_id)),
+                )
+            elif title:
+                norm = _norm_title(title)
+                cur = c.execute(
+                    "UPDATE requirements_seen SET "
+                    "  confirmation_status = ?, "
+                    "  confirmation_at = ?, "
+                    "  confirmation_notes = ?, "
+                    "  confirmation_email_uid = COALESCE(?, confirmation_email_uid) "
+                    "WHERE title_norm = ?",
+                    (status, ts, notes or "", email_uid, norm),
+                )
+            else:
+                return False
+            return cur.rowcount > 0
+    except Exception as e:
+        logger.warning("memory.update_confirmation failed: %s", e)
+        return False
+
+
+def confirmation_counts() -> dict[str, int]:
+    """Counts per confirmation_status across requirements_seen.
+    Used by the calibration report to show the closed-loop signal."""
+    try:
+        with _conn() as c:
+            rows = c.execute(
+                "SELECT confirmation_status, COUNT(*) AS n "
+                "FROM requirements_seen GROUP BY confirmation_status"
+            ).fetchall()
+            return {r["confirmation_status"]: r["n"] for r in rows}
+    except Exception as e:
+        logger.warning("memory.confirmation_counts failed: %s", e)
+        return {}
+
+
+def pending_requirements(client_name: str | None = None,
+                         limit: int = 100) -> list[dict]:
+    """Requirements drafted but not yet confirmed by the client.
+    Optionally filter by client_name. Used by the reply poller as the
+    candidate pool to match against incoming replies."""
+    limit = max(1, min(limit, 500))
+    try:
+        with _conn() as c:
+            sql = ("SELECT id, title, summary, source, source_ref, "
+                   "       client_name, first_seen, last_seen "
+                   "FROM requirements_seen "
+                   "WHERE confirmation_status = 'pending'")
+            args: list = []
+            if client_name:
+                sql += " AND LOWER(client_name) = LOWER(?)"
+                args.append(client_name.strip())
+            sql += " ORDER BY last_seen DESC LIMIT ?"
+            args.append(limit)
+            rows = c.execute(sql, args).fetchall()
+            return [dict(r) for r in rows]
+    except Exception as e:
+        logger.warning("memory.pending_requirements failed: %s", e)
+        return []
 
 
 def get_client_history(

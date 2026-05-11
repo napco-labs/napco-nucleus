@@ -138,18 +138,58 @@ def print_recent(n: int) -> None:
             print(_dim(f"      edited -> {r['edited_title']}"))
 
 
+def print_confirmation_state() -> None:
+    """Closed-loop confirmation signal from clients. Complements the
+    review curve (which is internal reviewer judgement) with the
+    external client verdict."""
+    counts = memory.confirmation_counts()
+    if not counts:
+        print(_dim("\nNo confirmation data yet "
+                   "— run `py -3 -m tools.poll_replies` after the "
+                   "client has replied to a verification email."))
+        return
+    print()
+    print(_bold("Client confirmation state (across requirements_seen)"))
+    print()
+    total = sum(counts.values())
+    order = ["confirmed", "needs_change", "rejected", "unclear", "pending"]
+    color_map = {
+        "confirmed": _green,
+        "needs_change": _amber,
+        "rejected": _red,
+        "unclear": _dim,
+        "pending": _dim,
+    }
+    for k in order:
+        n = counts.get(k, 0)
+        if n == 0:
+            continue
+        pct = (n / total) if total else 0
+        bar = _bar(pct)
+        line = f"  {k:14s} {n:4d}  ({pct:.0%})  {bar}"
+        print(color_map.get(k, _dim)(line))
+    if total:
+        print()
+        print(_dim(f"  total tracked: {total}"))
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--recent", type=int, default=0,
                     help="Show the last N review rows instead of the curve.")
+    ap.add_argument("--no-confirmation", action="store_true",
+                    help="Skip the client-confirmation state section "
+                         "(useful for terse output).")
     args = ap.parse_args()
 
     if args.recent and args.recent > 0:
         print_recent(args.recent)
     else:
         print_curve()
+        if not args.no_confirmation:
+            print_confirmation_state()
     return 0
 
 
