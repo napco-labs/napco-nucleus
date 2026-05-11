@@ -141,7 +141,12 @@ async def write_aggregation_docx_tool(args):
     "pull-session metadata, e.g. 'chat/123/...', 'email/.../...'), "
     "confidence (optional float 0.0-1.0 - the LLM's certainty this is a "
     "real client requirement), rationale (optional str - one short "
-    "sentence on why this counts as a requirement, not noise). "
+    "sentence on why this counts as a requirement, not noise), "
+    "priority (optional 'P0'|'P1'|'P2'|'P3' - urgency tag), "
+    "severity (optional 'S1'|'S2'|'S3' - blast radius tag), "
+    "conflicts_with (optional list of Source IDs or open-item ids the "
+    "requirement appears to contradict — rendered as an amber WARNING "
+    "line so the reviewer notices). "
     "Output filename format is 'Requirements Verification <YYYY-MM-DD>.docx' "
     "in data/requirements/. Returns {path, requirement_count}.",
     {"requirements": list, "output_path": str},
@@ -182,6 +187,9 @@ async def write_verification_docx_tool(args):
         # eyeballs them more carefully before the email goes out.
         return _AMBER if c < 0.75 else _GREY
 
+    _PRIORITY_VALID = {"P0", "P1", "P2", "P3"}
+    _SEVERITY_VALID = {"S1", "S2", "S3"}
+
     for i, r in enumerate(reqs, 1):
         if not isinstance(r, dict):
             continue
@@ -194,10 +202,26 @@ async def write_verification_docx_tool(args):
             conf_val = float(confidence) if confidence is not None else None
         except (TypeError, ValueError):
             conf_val = None
+        priority = (r.get("priority") or "").strip().upper()
+        if priority not in _PRIORITY_VALID:
+            priority = ""
+        severity = (r.get("severity") or "").strip().upper()
+        if severity not in _SEVERITY_VALID:
+            severity = ""
+        conflicts = r.get("conflicts_with") or []
+        if not isinstance(conflicts, list):
+            conflicts = []
 
-        # Flat numbered line: "1. " + bold(title) + " - " + summary
+        # Flat numbered line: "1. " + [P1/S2] + bold(title) + " - " + summary
         p = doc.add_paragraph()
         p.add_run(f"{i}. ").bold = True
+        if priority or severity:
+            tag = "/".join(t for t in (priority, severity) if t)
+            tag_run = p.add_run(f"[{tag}] ")
+            tag_run.bold = True
+            # P0/P1 + S1 get red accent; others stay grey
+            if priority in {"P0", "P1"} or severity == "S1":
+                tag_run.font.color.rgb = _AMBER
         p.add_run(title).bold = True
         if summary:
             collapsed = " ".join(line.strip() for line in summary.splitlines() if line.strip())
@@ -205,6 +229,19 @@ async def write_verification_docx_tool(args):
         else:
             p.add_run(" - ")
             p.add_run("(no summary supplied)").italic = True
+
+        # Conflict warning line — separate paragraph in bold amber so
+        # the reviewer can't miss it.
+        if conflicts:
+            warn_p = doc.add_paragraph()
+            warn_run = warn_p.add_run(
+                "⚠ Possible conflict with: " +
+                ", ".join(str(c) for c in conflicts)
+            )
+            warn_run.bold = True
+            warn_run.italic = True
+            warn_run.font.size = Pt(9)
+            warn_run.font.color.rgb = _AMBER
 
         # Citation + confidence + rationale on one grey 9pt line (or
         # split across lines if it gets long).
@@ -262,6 +299,9 @@ async def write_verification_docx_tool(args):
                     "source_refs": r.get("source_refs") or [],
                     "confidence": r.get("confidence"),
                     "rationale": r.get("rationale"),
+                    "priority": (r.get("priority") or "").strip().upper() or None,
+                    "severity": (r.get("severity") or "").strip().upper() or None,
+                    "conflicts_with": r.get("conflicts_with") or [],
                 }
                 for r in reqs if isinstance(r, dict)
             ],

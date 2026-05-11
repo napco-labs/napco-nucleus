@@ -74,6 +74,9 @@ For each requirement produce a dict with:
 - `source_refs`: list of `Source ID` values (exact strings from the metadata blocks) where this requirement appeared. A requirement raised in Teams and restated in email gets BOTH Source IDs. If you saw the requirement in only one section, that's one ID — but it must be the precise Source ID, not a paraphrase.
 - `confidence`: float between 0.0 and 1.0. How certain are you this is a real client requirement and not noise? Use the rubric: ≥0.90 the client stated it explicitly in plain words; 0.75-0.89 implied but unambiguous in context; 0.50-0.74 inferred from indirect signals (the reviewer should sanity-check before sending); below 0.50 you should probably drop the item entirely.
 - `rationale`: ONE short sentence (<160 chars) on what makes this a requirement rather than chatter. The reviewer reads this when the confidence is low.
+- `priority`: one of `P0` / `P1` / `P2` / `P3`. P0 = blocking with a stated deadline within 2 weeks; P1 = client signalled urgency without a date; P2 = standard (the default — use when no urgency signal); P3 = "nice to have", explicitly low priority. Default to `P2` when uncertain.
+- `severity`: one of `S1` / `S2` / `S3`. S1 = production / security / compliance / revenue impact; S2 = material workflow impact with workaround available; S3 = cosmetic / minor / DX polish. Default to `S2` when uncertain.
+- `conflicts_with`: list of Source IDs or open-item ids this requirement contradicts (from step 1.5 open_items and history). Empty list when no conflict. Be conservative — only flag actual contradictions (e.g. "retain audit logs 30 days" vs "retain audit logs 90 days"), not minor wording differences.
 
 If you cannot identify any requirements (e.g. the session was all process chatter), STOP and report "No requirements identified in this session — nothing drafted." Do not produce an empty verification doc, do not draft an email.
 

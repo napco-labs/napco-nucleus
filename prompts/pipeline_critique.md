@@ -38,11 +38,33 @@ Return EXACTLY a JSON array of final requirement dicts, no prose, no markdown fe
     "client_name": "<canonical client name>",
     "confidence": <float 0.0-1.0>,
     "rationale": "<ONE short sentence (<160 chars) on why this is a real requirement>",
-    "kind": "new" | "recurring" | "follow_up" | "missing_recurring"
+    "kind": "new" | "recurring" | "follow_up" | "missing_recurring",
+    "priority": "P0" | "P1" | "P2" | "P3",
+    "severity": "S1" | "S2" | "S3",
+    "conflicts_with": ["<Source ID or open-item id this requirement contradicts>", ...]
   },
   ...
 ]
 ```
+
+**Priority rubric** (urgency — when does the client want it):
+- `P0` — blocking; client explicitly said "we need this before X date" and that date is within 2 weeks
+- `P1` — soon; client signalled urgency without naming a deadline ("ASAP", "high priority")
+- `P2` — standard; the default for normal feature work — use this when no urgency signal is present
+- `P3` — nice-to-have; client said "would be nice", "if you have time", "low priority"
+
+**Severity rubric** (blast radius — what breaks if we don't do it):
+- `S1` — production blocker, security, compliance, or revenue impact
+- `S2` — material customer or workflow impact, but a workaround exists
+- `S3` — minor inconvenience, cosmetic, or developer-experience polish
+
+When uncertain, default to `P2`/`S2`. Do not invent urgency or severity signals the client did not give.
+
+**Conflicts** — set `conflicts_with` when this requirement directly contradicts an item in `open_items` or `requirements_seen`. Examples:
+- Client previously asked for 30-day retention; today they ask for 90-day → cite the prior open item id and let Titu reconcile.
+- Two candidates in this same batch are mutually exclusive (e.g. "auto-send everything" vs "always require manual review") → cite by index/title in your reasoning.
+
+Empty list means no conflict detected — that's the common case. Be conservative; don't flag minor wording differences as conflicts.
 
 If after critique no real requirements remain, return `[]`.
 

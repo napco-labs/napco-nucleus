@@ -171,30 +171,42 @@ def _build_options(system_prompt: str, *, model: str | None,
 
 
 async def _claude_call(system_prompt: str, user_prompt: str, *,
-                       model: str | None = None) -> str:
+                       model: str | None = None,
+                       stage: str = "pipeline") -> str:
     """Single Claude call, no MCP tools. Returns concatenated text
     output. Used by stages 1 and 2."""
     from claude_agent_sdk import ClaudeSDKClient  # lazy
+    from tools._cost import CallTelemetry  # lazy
 
     options = _build_options(system_prompt, model=model)
     if model:
         print(f"  (model: {model})")
 
+    telem = CallTelemetry()
     chunks: list[str] = []
     async with ClaudeSDKClient(options=options) as client:
         await client.query(user_prompt)
         async for msg in client.receive_response():
+            telem.observe(msg)
             t = _extract_text(msg)
             if t:
                 chunks.append(t)
+    telem.log(stage=stage, model=(model or "default"))
+    cost = telem.cost(model or "default")
+    totals = telem.totals()
+    if totals["input_tokens"] or totals["output_tokens"]:
+        print(f"  [{stage}] tokens in={totals['input_tokens']} "
+              f"out={totals['output_tokens']}  est cost ${cost:.4f}")
     return "".join(chunks)
 
 
 async def _claude_call_with_tools(system_prompt: str, user_prompt: str, *,
-                                  model: str | None = None) -> str:
+                                  model: str | None = None,
+                                  stage: str = "pipeline") -> str:
     """Single Claude call WITH MCP tools wired up — used by stage 3."""
     from claude_agent_sdk import ClaudeSDKClient, create_sdk_mcp_server  # lazy
     from tools import ALL_TOOLS, TOOL_NAMES
+    from tools._cost import CallTelemetry  # lazy
 
     server = create_sdk_mcp_server(
         name="napco-nucleus",
@@ -212,14 +224,22 @@ async def _claude_call_with_tools(system_prompt: str, user_prompt: str, *,
     if model:
         print(f"  (model: {model})")
 
+    telem = CallTelemetry()
     chunks: list[str] = []
     async with ClaudeSDKClient(options=options) as client:
         await client.query(user_prompt)
         async for msg in client.receive_response():
+            telem.observe(msg)
             t = _extract_text(msg)
             if t:
                 chunks.append(t)
                 print(t, end="", flush=True)  # also live-stream to stdout
+    telem.log(stage=stage, model=(model or "default"))
+    cost = telem.cost(model or "default")
+    totals = telem.totals()
+    if totals["input_tokens"] or totals["output_tokens"]:
+        print(f"\n  [{stage}] tokens in={totals['input_tokens']} "
+              f"out={totals['output_tokens']}  est cost ${cost:.4f}")
     return "".join(chunks)
 
 
@@ -238,7 +258,9 @@ async def run_extract(session_text: str) -> list[dict]:
         "----- END SESSION DOC -----\n"
     )
     with anyio.fail_after(_TIMEOUT_EXTRACT):
-        raw = await _claude_call(system, user, model=_EXTRACT_MODEL or None)
+        raw = await _claude_call(system, user,
+                                  model=_EXTRACT_MODEL or None,
+                                  stage="extract")
     cleaned = _strip_fences(raw)
     try:
         candidates = json.loads(cleaned)
@@ -321,7 +343,9 @@ async def run_critique(candidates: list[dict]) -> list[dict]:
     system = _load_prompt("critique")
     user = json.dumps(ctx, ensure_ascii=False, indent=2, default=str)
     with anyio.fail_after(_TIMEOUT_CRITIQUE):
-        raw = await _claude_call(system, user, model=_CRITIQUE_MODEL or None)
+        raw = await _claude_call(system, user,
+                                  model=_CRITIQUE_MODEL or None,
+                                  stage="critique")
     cleaned = _strip_fences(raw)
     try:
         finalists = json.loads(cleaned)
@@ -370,7 +394,8 @@ async def run_draft(finalists: list[dict], dry_run: bool) -> str:
     print(f"[draft] passing {len(finalists)} requirement(s) to Claude")
     with anyio.fail_after(_TIMEOUT_DRAFT):
         return await _claude_call_with_tools(system, user,
-                                              model=_DRAFT_MODEL or None)
+                                              model=_DRAFT_MODEL or None,
+                                              stage="draft")
 
 
 # ── Orchestrator ─────────────────────────────────────────────────
