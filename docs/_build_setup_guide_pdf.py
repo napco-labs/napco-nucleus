@@ -452,6 +452,82 @@ def build():
     flow.append(Paragraph(
         "For anything else, ping <b>Titu</b>.", body))
 
+    # ── Notes ─────────────────────────────────────────────────────
+    flow.append(_space(0.25))
+    flow.append(_step_heading("Notes", "Three things to keep in mind"))
+
+    note_num_style = ParagraphStyle(
+        "NoteNum", fontName="Helvetica-Bold", fontSize=11,
+        textColor=colors.white, leading=14, alignment=1,
+    )
+    note_title_style = ParagraphStyle(
+        "NoteTitle", fontName="Helvetica-Bold", fontSize=12,
+        textColor=NAVY, leading=15, spaceAfter=3,
+    )
+    note_body_style = ParagraphStyle(
+        "NoteBody", parent=body, fontSize=10.5, leading=14.5,
+        spaceAfter=0,
+    )
+
+    def _note(num, title, body_html):
+        badge = Table([[Paragraph(num, note_num_style)]],
+                      colWidths=[0.36 * inch], rowHeights=[0.36 * inch])
+        badge.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, -1), ACCENT),
+            ("LEFTPADDING", (0, 0), (-1, -1), 0),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+            ("TOPPADDING", (0, 0), (-1, -1), 0),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ]))
+        content = [Paragraph(title, note_title_style),
+                   Paragraph(body_html, note_body_style)]
+        row = Table([[badge, content]],
+                    colWidths=[0.5 * inch, CONTENT_W - 0.5 * inch])
+        row.setStyle(TableStyle([
+            ("VALIGN", (0, 0), (0, 0), "TOP"),
+            ("VALIGN", (1, 0), (1, 0), "TOP"),
+            ("LEFTPADDING", (0, 0), (-1, -1), 0),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+            ("TOPPADDING", (0, 0), (0, 0), 1),
+            ("TOPPADDING", (1, 0), (1, 0), 0),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
+            ("LEFTPADDING", (1, 0), (1, 0), 12),
+        ]))
+        return KeepTogether([row, Spacer(1, 0.18 * inch)])
+
+    flow.append(_note(
+        "1",
+        "Drive folder for requirement files",
+        "Drop any client-supplied PDF, Word doc, audio recording, or "
+        "plain text into this Google Drive folder. The agent host "
+        "pulls everything in this folder during each run and extracts "
+        "the text for requirement identification.<br/>"
+        '<font face="Courier" color="#1F3A5F">'
+        "https://drive.google.com/drive/u/0/folders/"
+        "1u7Y2I17VKRnyoBRTY97_W81Lt7Hp5PK3</font>"
+    ))
+    flow.append(_note(
+        "2",
+        "Email destination for requirements",
+        "Any email forwarded to or addressed to "
+        '<b><font face="Courier" color="#1F3A5F">'
+        "khasan@ael-bd.com</font></b> "
+        "is automatically picked up by the system. Body text plus "
+        "any PDF / Word / Excel / text attachments get extracted and "
+        "fed into the requirement identifier."
+    ))
+    flow.append(_note(
+        "3",
+        "Teams chat, attachments, and calls are auto-shipped",
+        "Once setup is complete, your MS Teams chats, the files you "
+        "download from chat, and any calls you record (with the "
+        "voice phrases) are <b>automatically sent to central</b> "
+        "where requirement management runs. You don't have to manually "
+        "export, copy, or forward anything — just keep Teams open and "
+        "the voice daemon running."
+    ))
+
     return flow
 
 
