@@ -27,9 +27,22 @@ If `section_count == 0` → STOP and report "Session is empty — no pulls have 
 
 Otherwise capture `session_path`, `sections`, and `content` for the next step.
 
+### 1.5 Identify the client(s) in scope (mandatory before identify)
+
+Before extracting requirements, identify which client(s) the session is about by looking at: email sender domains (e.g. `akib@acme.com` → "Acme"), Teams chat conversation names, and `MEETING` section metadata (`Client:` field). One session may mention more than one client; track each separately.
+
+For EACH client you identify, call `get_client_history(client_name="<client>", limit=20)`. The returned list is the requirements that client has raised in past sessions. Read it before step 2 and keep two questions in mind:
+
+- **Recurring asks**: does this client *always* ask for X (e.g. audit logging, mobile parity, RBAC)? If they've raised the same thing 3+ times in history, treat its absence in today's session as a likely oversight worth flagging — not as confirmation that they're satisfied.
+- **Follow-ups vs new asks**: if today's chat says "what about the operator search we discussed?", history tells you whether that's a fresh ask (no prior entry) or a follow-up on a still-open item.
+
+If `get_client_history` returns 0 rows, this is a new client to NN's memory. Proceed without context — that's fine. Don't fabricate history.
+
 ### 2. Identify distinct requirements
 
 Read the `content` returned from step 1 and extract every distinct **client requirement**. A requirement is a user-visible capability, change, bug fix, or deliverable the client asked for — NOT process chatter, greetings, scheduling, "thanks", calendar invites, daily test reports, or system-generated notifications.
+
+Use the client history from step 1.5 as context: when a client's recurring ask is missing from today's session, you may surface it as a "verify with client" item in the verification doc rather than dropping it silently. Mark such items with a confidence ≤ 0.65 and an explicit rationale ("client has raised this in 3 prior sessions — confirming if still expected").
 
 Every section in the session doc begins with a metadata block that includes a `Source ID:` value like `email/Acme-2026-05-10/abc12345`, `chat/123/1330-1345/def67890`, or `call/Titu-20260511-101500/ghi24680`. These IDs are the **machine-readable citation tokens** you cite per requirement. Use them, not free-text section titles.
 
@@ -77,7 +90,9 @@ Honors `NAPCO_NUCLEUS_DRY_RUN=1` for safe testing — returns `{drafted: false, 
 
 For EACH requirement that went into the verification doc (i.e. those that survived step 2.5), call:
 
-`remember_requirement(title="<title>", source="<lowercase channel: email | meetings | chat | documents>", source_ref="<the rel_path of the strongest source for this requirement>", summary="<the same summary used in the doc, truncated to <= 240 chars>")`
+`remember_requirement(title="<title>", source="<lowercase channel: email | meetings | chat | documents>", source_ref="<the rel_path / Source ID of the strongest source for this requirement>", summary="<the same summary used in the doc, truncated to <= 240 chars>", client_name="<client identified in step 1.5>")`
+
+`client_name` is REQUIRED when you identified the client in step 1.5 (which you should have for almost every session). Without it, this requirement won't appear in `get_client_history` next time — defeating the client-aware memory loop. Use the same spelling consistently across runs (e.g. always "Acme", not "Acme Corp" one time and "Acme" another).
 
 This writes the requirement into `requirements_seen` so the NEXT collect_all run will dedup it in step 2.5. Do not skip this — without it, the same requirement gets re-drafted on the next run.
 

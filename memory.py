@@ -75,10 +75,18 @@ CREATE TABLE IF NOT EXISTS requirements_seen (
     wp_url            TEXT,
     first_seen        TEXT NOT NULL,
     last_seen         TEXT NOT NULL,
-    touch_count       INTEGER NOT NULL DEFAULT 1
+    touch_count       INTEGER NOT NULL DEFAULT 1,
+    -- Client-aware memory (added 2026-05-11): which client raised this?
+    -- Inferred by the agent from the source (email sender domain, chat
+    -- conversation, call client_name metadata). NULL for legacy rows.
+    client_name       TEXT
 );
 CREATE UNIQUE INDEX IF NOT EXISTS ux_requirements_norm_source
     ON requirements_seen(title_norm, source);
+-- idx_requirements_client_last is created inside _migrate_requirements_seen
+-- so it runs AFTER the ALTER TABLE that adds the client_name column on
+-- legacy DBs. On fresh installs the column is present in the CREATE
+-- TABLE above, so the migration is a no-op except for the index.
 
 -- One row per suite-run.
 CREATE TABLE IF NOT EXISTS test_run_history (
@@ -177,9 +185,32 @@ def init_db(path: str | None = None) -> str:
             return p
         with sqlite3.connect(p) as conn:
             conn.executescript(_SCHEMA)
+            _migrate_requirements_seen(conn)
             conn.commit()
         _INITIALIZED.add(p)
     return p
+
+
+def _migrate_requirements_seen(conn: sqlite3.Connection) -> None:
+    """Idempotent column-additions for tables that pre-date a feature.
+    Only runs when the column is missing — safe to call on every init.
+
+    Schema changes applied here:
+      - 2026-05-11: requirements_seen.client_name (client-aware memory)
+    """
+    try:
+        cols = {r[1] for r in conn.execute(
+            "PRAGMA table_info(requirements_seen)").fetchall()}
+    except sqlite3.OperationalError:
+        return  # table doesn't exist yet; CREATE TABLE in _SCHEMA handles it
+    if "client_name" not in cols:
+        conn.execute(
+            "ALTER TABLE requirements_seen ADD COLUMN client_name TEXT")
+    # Idempotent — runs on fresh installs (where the column is present
+    # via the CREATE TABLE in _SCHEMA) and on migrated installs alike.
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_requirements_client_last "
+        "ON requirements_seen(client_name, last_seen DESC)")
 
 
 @contextmanager
@@ -248,6 +279,7 @@ def remember_requirement(
     summary: str = "",
     wp_id: int | None = None,
     wp_url: str | None = None,
+    client_name: str | None = None,
 ) -> bool:
     """Upsert into requirements_seen. Dedup key is (title_norm, source).
     Merges summary + Work Package link on repeat; increments touch_count.
@@ -255,17 +287,23 @@ def remember_requirement(
     `wp_id` / `wp_url` point at the OpenProject Work Package this
     requirement was published as (renamed from `gitlab_issue_iid` /
     `gitlab_issue_url` on 2026-04-28 when the backlog backend swapped
-    from GitLab to OpenProject)."""
+    from GitLab to OpenProject).
+
+    `client_name` (added 2026-05-11): the client this requirement
+    belongs to — inferred from the source channel (email sender domain,
+    chat conversation, call metadata). Enables get_client_history()
+    for context-aware identification on subsequent sessions."""
     if not title:
         return False
     norm = _norm_title(title)
     if not norm:
         return False
     ts = _now()
+    client = (client_name or "").strip() or None
     try:
         with _conn() as c:
             existing = c.execute(
-                "SELECT id, summary, wp_id, wp_url "
+                "SELECT id, summary, wp_id, wp_url, client_name "
                 "FROM requirements_seen WHERE title_norm = ? AND source = ?",
                 (norm, source),
             ).fetchone()
@@ -276,24 +314,63 @@ def remember_requirement(
                     "  touch_count = touch_count + 1, "
                     "  summary = CASE WHEN ? = '' THEN summary ELSE ? END, "
                     "  wp_id = COALESCE(?, wp_id), "
-                    "  wp_url = COALESCE(?, wp_url) "
+                    "  wp_url = COALESCE(?, wp_url), "
+                    "  client_name = COALESCE(?, client_name) "
                     "WHERE id = ?",
-                    (ts, summary, summary, wp_id, wp_url, existing["id"]),
+                    (ts, summary, summary, wp_id, wp_url, client,
+                     existing["id"]),
                 )
             else:
                 c.execute(
                     "INSERT INTO requirements_seen "
                     "(title, title_norm, source, source_ref, summary, "
-                    " wp_id, wp_url, "
+                    " wp_id, wp_url, client_name, "
                     " first_seen, last_seen, touch_count) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)",
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)",
                     (title.strip(), norm, source, source_ref, summary,
-                     wp_id, wp_url, ts, ts),
+                     wp_id, wp_url, client, ts, ts),
                 )
         return True
     except Exception as e:
         logger.warning("memory.remember_requirement failed: %s", e)
         return False
+
+
+def get_client_history(
+    client_name: str,
+    limit: int = 20,
+    since: str | None = None,
+) -> list[dict]:
+    """Recent requirements seen for one client. Used as CONTEXT during
+    identification — not for dedup (that's search_requirements). The
+    agent reads this list to spot recurring asks ('client always wants
+    audit logging — flag if missing') and follow-ups vs new asks.
+
+    Match is exact + case-insensitive on client_name. Pass `since` as
+    an ISO timestamp to limit to recent activity."""
+    if not (client_name or "").strip():
+        return []
+    limit = max(1, min(limit, 200))
+    try:
+        with _conn() as c:
+            sql = (
+                "SELECT id, title, summary, source, source_ref, "
+                "       client_name, wp_id, wp_url, "
+                "       first_seen, last_seen, touch_count "
+                "FROM requirements_seen "
+                "WHERE LOWER(client_name) = LOWER(?)"
+            )
+            args: list[Any] = [client_name.strip()]
+            if since:
+                sql += " AND last_seen >= ?"
+                args.append(since)
+            sql += " ORDER BY last_seen DESC, id DESC LIMIT ?"
+            args.append(limit)
+            rows = c.execute(sql, args).fetchall()
+            return [dict(r) for r in rows]
+    except Exception as e:
+        logger.warning("memory.get_client_history failed: %s", e)
+        return []
 
 
 # ─── Writes: test_run_history ───────────────────────────────────────

@@ -86,8 +86,13 @@ async def recall_test_runs_tool(args):
     "NOT published to GitLab (e.g., out of scope, needs clarification, "
     "scheduled for later). The title is normalized so near-duplicates "
     "collapse. source is 'email', 'meetings', 'chat', or 'documents'. "
-    "source_ref is the rel_path of the source file.",
-    {"title": str, "source": str, "source_ref": str, "summary": str},
+    "source_ref is the rel_path of the source file. client_name "
+    "(optional) is the client this requirement belongs to — inferred "
+    "from the source channel (email sender domain, chat group, call "
+    "metadata). When set, the requirement contributes to "
+    "get_client_history for context-aware identification next time.",
+    {"title": str, "source": str, "source_ref": str, "summary": str,
+     "client_name": str},
 )
 async def remember_requirement_tool(args):
     if _eval_mode():
@@ -102,8 +107,34 @@ async def remember_requirement_tool(args):
         source=args.get("source", ""),
         source_ref=args.get("source_ref", ""),
         summary=args.get("summary", ""),
+        client_name=args.get("client_name") or None,
     )
     return _text({"remembered": ok})
+
+
+@tool(
+    "get_client_history",
+    "Recent requirements previously identified for one client. Use "
+    "this as CONTEXT during step 2 (identify) — not for dedup. Lets "
+    "you spot recurring asks the client always raises (e.g. 'they "
+    "always want audit logging — flag if missing this session') and "
+    "tell follow-ups apart from net-new asks. Match is "
+    "case-insensitive on client_name. Returns up to `limit` rows "
+    "(default 20), most recent first.",
+    {"client_name": str, "limit": int},
+)
+async def get_client_history_tool(args):
+    raw_limit = args.get("limit") or 20
+    try:
+        limit = int(raw_limit)
+    except (TypeError, ValueError):
+        limit = 20
+    rows = memory.get_client_history(
+        client_name=args.get("client_name") or "",
+        limit=limit,
+    )
+    return _text({"client_name": args.get("client_name") or "",
+                  "count": len(rows), "requirements": rows})
 
 
 @tool(
@@ -121,6 +152,7 @@ TOOLS = [
     search_requirements_tool,
     recall_test_runs_tool,
     remember_requirement_tool,
+    get_client_history_tool,
     memory_stats_tool,
 ]
 
@@ -129,5 +161,6 @@ TOOL_NAMES = [
     "search_requirements",
     "recall_test_runs",
     "remember_requirement",
+    "get_client_history",
     "memory_stats",
 ]
