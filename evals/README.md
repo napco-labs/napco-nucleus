@@ -69,43 +69,82 @@ py -3 -m evals.run --no-replay
 
 ## Output
 
-Each run appends one row to `evals/results/<timestamp>.json`:
+Each run writes one file to `evals/results/<run_id>.json`. Actual shape produced by `evals/run.py`:
 
 ```json
 {
-  "timestamp": "2026-05-11T15:45:00",
+  "run_id": "20260511T161041",
+  "timestamp": "2026-05-11T16:10:41",
   "git_commit": "<short-sha>",
+  "options": {
+    "case_filter": null,
+    "no_replay": false,
+    "skip_llm_judge": false
+  },
   "cases": [
     {
       "case_name": "example_operator_management",
-      "predicted_count": 1,
-      "expected_count": 1,
-      "matches": [
-        {
-          "expected_title": "Operator Management...",
-          "predicted_title": "Operator Management with CRUD...",
-          "kind": "exact_match",
-          "predicted_confidence": 0.95
-        }
-      ],
-      "missed_recall": [],
-      "extras": [],
-      "precision": 1.0,
-      "recall": 1.0,
-      "f1": 1.0,
-      "citation_correctness": 1.0,
-      "mean_predicted_confidence": 0.95
+      "case_dir": "evals/cases/example_operator_management",
+      "expected_path": "...",
+      "session_fixture_path": "...",
+      "agent": {
+        "returncode": 0,
+        "stdout_tail": "...",
+        "stderr_tail": "",
+        "timed_out": false
+      },
+      "predicted_doc": {
+        "requirement_count": 4,
+        "requirements": [
+          {"title": "...", "summary": "...", "source_refs": ["..."],
+           "confidence": 0.95, "rationale": "..."}
+        ]
+      },
+      "score": {
+        "predicted_count": 4,
+        "expected_count": 1,
+        "exact_match_count": 1,
+        "partial_match_count": 0,
+        "extra_count": 3,
+        "missed_recall_count": 0,
+        "precision": 0.25,
+        "recall": 1.0,
+        "f1": 0.40,
+        "citation_correctness": 1.0,
+        "summary_keyword_coverage": 0.83,
+        "mean_predicted_confidence": 0.95,
+        "confidence_floor_violations": [],
+        "classifications": [
+          {"predicted_index": 0, "kind": "exact_match",
+           "matched_expected_index": 0, "reasoning": "..."}
+        ],
+        "missed_expected_indexes": []
+      }
     }
   ],
   "summary": {
     "case_count": 1,
-    "mean_precision": 1.0,
+    "scored_count": 1,
+    "errored_count": 0,
+    "mean_precision": 0.25,
     "mean_recall": 1.0,
-    "mean_f1": 1.0,
-    "mean_confidence": 0.95
+    "mean_f1": 0.40,
+    "mean_citation_correctness": 1.0,
+    "mean_predicted_confidence": 0.95,
+    "total_extras": 3,
+    "total_missed_recall": 0,
+    "total_floor_violations": 0
   }
 }
 ```
+
+Key fields:
+
+- `score.classifications` — per-predicted item, one of `exact_match` / `partial_match` / `extra`, with the matched expected index and the judge's one-sentence reasoning.
+- `score.missed_expected_indexes` — expected items the predictor didn't find.
+- `score.citation_correctness` — for each matched item, did the predicted Source IDs satisfy `expected_source_id_pattern`? Ratio across all checks.
+- `score.summary_keyword_coverage` — proportion of `expected.summary_keywords` that appeared (case-insensitive) in predicted summaries.
+- `score.confidence_floor_violations` — items where the predicted confidence fell below the expected floor.
 
 ## Adding a new case
 
