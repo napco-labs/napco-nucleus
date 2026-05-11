@@ -1,0 +1,40 @@
+name: NN - Cost Report
+
+# Roll up Claude API token usage + dollar cost from activity_logs
+# (populated by tools/_cost.py during pipeline.py runs). Group by
+# stage (default) or stage,model,day. Read-only — never writes.
+
+on:
+  workflow_dispatch:
+    inputs:
+      since:
+        description: 'Window — e.g. 24h, 7d, 30d'
+        required: false
+        default: '7d'
+        type: string
+      group_by:
+        description: 'Group keys: stage / model / day / stage,model'
+        required: false
+        default: 'stage'
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  run:
+    runs-on: [self-hosted, Windows]
+    timeout-minutes: 5
+
+    defaults:
+      run:
+        shell: pwsh
+        working-directory: 'C:\napco-nucleus'
+
+    steps:
+      - name: Pull latest code
+        run: git pull origin main
+
+      - name: Cost report
+        run: |
+          py -3 -m tools.cost_report --since '${{ inputs.since || '7d' }}' --by '${{ inputs.group_by || 'stage' }}'

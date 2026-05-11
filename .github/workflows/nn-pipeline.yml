@@ -1,0 +1,79 @@
+name: NN - Multi-agent Pipeline
+
+# Three-stage pipeline (Extract → Critique → Draft) via pipeline.py.
+# Same downstream effect as Do It Now but with the multi-agent
+# decomposition + per-stage model tiering + trace capture.
+#
+# Expects the session.docx to already exist on the runner (from a
+# prior collect_central run that ran with --no-identify, or from a
+# manual session build). Use the "Do It Now" workflow if you need
+# fresh ingestion.
+
+on:
+  workflow_dispatch:
+    inputs:
+      session_path:
+        description: 'Path to session.docx (default = the live one)'
+        required: false
+        default: 'data\requirements\sessions\current.docx'
+        type: string
+      stages:
+        description: 'Stages to run'
+        required: false
+        default: 'extract,critique,draft'
+        type: choice
+        options:
+          - 'extract,critique,draft'
+          - 'extract,critique'
+          - 'extract'
+      dry_run:
+        description: 'Skip the email IMAP push + memory writes'
+        required: false
+        default: 'false'
+        type: choice
+        options: ['false', 'true']
+      save_intermediates:
+        description: 'Save per-stage JSONs as artifacts'
+        required: false
+        default: 'true'
+        type: choice
+        options: ['true', 'false']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nn-pipeline
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: [self-hosted, Windows]
+    timeout-minutes: 30
+
+    defaults:
+      run:
+        shell: pwsh
+        working-directory: 'C:\napco-nucleus'
+
+    steps:
+      - name: Pull latest code
+        run: git pull origin main
+
+      - name: Run pipeline
+        run: |
+          $args = @('--session', '${{ inputs.session_path }}', '--stage', '${{ inputs.stages }}')
+          if ('${{ inputs.dry_run }}' -eq 'true') { $args += '--dry-run' }
+          if ('${{ inputs.save_intermediates }}' -eq 'true') {
+            $args += @('--save-intermediates', "$env:GITHUB_WORKSPACE\pipeline-intermediates")
+          }
+          py -3 pipeline.py @args
+
+      - name: Upload intermediates
+        if: always() && inputs.save_intermediates == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: pipeline-intermediates
+          path: '${{ github.workspace }}/pipeline-intermediates/'
+          if-no-files-found: ignore
+          retention-days: 14

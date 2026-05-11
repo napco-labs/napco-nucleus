@@ -1,0 +1,47 @@
+name: NN - Daily Summary
+
+# Email a daily summary of NN activity (runs, requirements,
+# reviews, confirmations, cost, calibration). Manual + scheduled
+# at 23:00 BDT (17:00 UTC).
+
+on:
+  workflow_dispatch:
+    inputs:
+      since:
+        description: 'Window — e.g. 24h, 48h, 7d'
+        required: false
+        default: '24h'
+        type: string
+      send:
+        description: 'Email it (vs print to logs only)'
+        required: false
+        default: 'true'
+        type: choice
+        options: ['true', 'false']
+  schedule:
+    - cron: '0 17 * * *'  # 23:00 BDT (UTC+6)
+
+permissions:
+  contents: read
+
+jobs:
+  run:
+    runs-on: [self-hosted, Windows]
+    timeout-minutes: 10
+
+    defaults:
+      run:
+        shell: pwsh
+        working-directory: 'C:\napco-nucleus'
+
+    steps:
+      - name: Pull latest code
+        run: git pull origin main
+
+      - name: Run summary
+        run: |
+          $args = @('--since', '${{ inputs.since || '24h' }}')
+          if ('${{ inputs.send || 'true' }}' -eq 'true') {
+            $args += '--send'
+          }
+          py -3 -m tools.daily_summary @args

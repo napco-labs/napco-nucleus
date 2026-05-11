@@ -1,0 +1,40 @@
+name: NN - Calibration Report
+
+# Print the confidence-calibration curve from review_session
+# decisions, plus the closed-loop client confirmation state. Useful
+# for the weekly check-in: are the LLM's stated confidence numbers
+# actually predicting what gets kept?
+
+on:
+  workflow_dispatch:
+    inputs:
+      recent:
+        description: 'Show the last N review rows instead of the curve (0 = show curve)'
+        required: false
+        default: '0'
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  run:
+    runs-on: [self-hosted, Windows]
+    timeout-minutes: 5
+
+    defaults:
+      run:
+        shell: pwsh
+        working-directory: 'C:\napco-nucleus'
+
+    steps:
+      - name: Pull latest code
+        run: git pull origin main
+
+      - name: Calibration report
+        run: |
+          if ('${{ inputs.recent || '0' }}' -ne '0') {
+            py -3 -m tools.calibration_report --recent '${{ inputs.recent }}'
+          } else {
+            py -3 -m tools.calibration_report
+          }
