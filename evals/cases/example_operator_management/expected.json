@@ -1,0 +1,20 @@
+{
+  "case_name": "example_operator_management",
+  "description": "One explicit client requirement in an email PDF attachment, plus three Teams-chat windows of pure noise. The identifier should extract exactly one requirement and reject the rest.",
+  "expected_requirements": [
+    {
+      "title": "Operator Management with CRUD, search, RBAC, and audit logging",
+      "summary_keywords": [
+        "operator",
+        "CRUD",
+        "search",
+        "role",
+        "audit"
+      ],
+      "expected_min_confidence": 0.80,
+      "expected_source_id_pattern": "^email/akib-acme\\.com/.*"
+    }
+  ],
+  "expected_noise_count": 3,
+  "notes": "Chat #118 (food banter), #124 (WFH status), and #120 (internal process announcement) are all noise. Counting any of them as a requirement is a false positive."
+}

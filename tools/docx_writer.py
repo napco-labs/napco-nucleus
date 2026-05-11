@@ -245,6 +245,35 @@ async def write_verification_docx_tool(args):
     Path(out_path).parent.mkdir(parents=True, exist_ok=True)
     doc.save(out_path)
 
+    # JSON sidecar — the eval harness reads this to score predicted vs
+    # expected without having to parse the .docx. Same basename as the
+    # .docx, .json extension. Always written so the file is available
+    # for ad-hoc inspection too.
+    sidecar_path = str(Path(out_path).with_suffix(".json"))
+    try:
+        sidecar = {
+            "generated_at": datetime.now().isoformat(timespec="seconds"),
+            "docx_path": out_path,
+            "requirement_count": len(reqs),
+            "requirements": [
+                {
+                    "title": r.get("title"),
+                    "summary": r.get("summary"),
+                    "source_refs": r.get("source_refs") or [],
+                    "confidence": r.get("confidence"),
+                    "rationale": r.get("rationale"),
+                }
+                for r in reqs if isinstance(r, dict)
+            ],
+        }
+        Path(sidecar_path).write_text(
+            json.dumps(sidecar, indent=2, ensure_ascii=False, default=str),
+            encoding="utf-8",
+        )
+    except Exception as e:
+        logger.warning("sidecar write failed for %s: %s", sidecar_path, e)
+        sidecar_path = None
+
     # Telemetry for the eval harness (Phase 2) to read later — keeps
     # per-requirement confidence + citation count on the side.
     titles = []
@@ -284,6 +313,7 @@ async def write_verification_docx_tool(args):
 
     return _text({
         "path": out_path,
+        "sidecar_path": sidecar_path,
         "requirement_count": len(reqs),
         "mean_confidence": mean_conf,
         "low_confidence_count": low_conf,

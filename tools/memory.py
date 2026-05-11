@@ -16,10 +16,17 @@ Tools exposed:
 from __future__ import annotations
 
 import json
+import os
 
 from claude_agent_sdk import tool
 
 import memory
+
+
+def _eval_mode() -> bool:
+    """True when NAPCO_NUCLEUS_EVAL_MODE=1 — the eval harness sets this
+    so identify runs don't poison requirements_seen / activity_logs."""
+    return (os.environ.get("NAPCO_NUCLEUS_EVAL_MODE") or "").strip() == "1"
 
 
 def _text(payload) -> dict:
@@ -83,6 +90,13 @@ async def recall_test_runs_tool(args):
     {"title": str, "source": str, "source_ref": str, "summary": str},
 )
 async def remember_requirement_tool(args):
+    if _eval_mode():
+        # Eval harness: pretend success so the verify_session flow
+        # completes normally, but do NOT write to requirements_seen.
+        # Otherwise re-running the same fixture would dedup against
+        # itself on the second run.
+        return _text({"remembered": False, "eval_mode": True,
+                      "note": "skipped DB write (NAPCO_NUCLEUS_EVAL_MODE=1)"})
     ok = memory.remember_requirement(
         title=args.get("title", ""),
         source=args.get("source", ""),
