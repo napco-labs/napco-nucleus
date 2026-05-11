@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import json
 import os
 import re
 import shutil
@@ -45,7 +46,7 @@ load_dotenv(_HERE / ".env", override=True)
 
 sys.path.insert(0, str(_HERE))
 
-from teams import reader, store  # noqa: E402
+from teams import attachment_resolver, reader, store  # noqa: E402
 
 
 LOCAL_OUT_DIR = _HERE / "data" / "teams" / "chat-pushes"
@@ -65,6 +66,88 @@ def _central_chat_dir() -> Path | None:
         return None
     day = dt.date.today().strftime("%Y-%m-%d")
     return Path(raw) / _dev_name() / day / "chat"
+
+
+_UNSAFE_FNAME_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
+
+
+def _safe_filename(name: str) -> str:
+    """Strip path separators and Windows-forbidden chars from a filename."""
+    base = Path(name).name or "attachment"
+    return _UNSAFE_FNAME_CHARS.sub("_", base).strip(" .") or "attachment"
+
+
+def _push_attachments(resolved: list[dict],
+                      central_dir: Path) -> tuple[int, int]:
+    """Copy each resolved attachment to <central_dir>/attachments/.
+    Writes attachments.json manifest mapping URL -> filename.
+    Returns (copied, skipped_existing)."""
+    if not resolved:
+        return (0, 0)
+    att_dir = central_dir / "attachments"
+    att_dir.mkdir(parents=True, exist_ok=True)
+    manifest_path = att_dir / "manifest.json"
+    manifest: dict[str, dict] = {}
+    if manifest_path.exists():
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except Exception:
+            manifest = {}
+
+    copied = 0
+    skipped = 0
+    for att in resolved:
+        local: Path = att["local_path"]
+        safe_name = _safe_filename(att.get("name") or local.name)
+        dst = att_dir / safe_name
+        # Skip if already at central with matching size (the same file
+        # may appear in multiple chat pushes during the same day).
+        if dst.exists():
+            try:
+                if dst.stat().st_size == local.stat().st_size:
+                    skipped += 1
+                    manifest[att["url"]] = {
+                        "name": att.get("name"),
+                        "kind": att.get("kind"),
+                        "size_bytes": att.get("size_bytes"),
+                        "stored_as": safe_name,
+                        "source_path": str(local),
+                    }
+                    continue
+            except OSError:
+                pass
+            # name collision with different size — disambiguate
+            stem, dot, ext = safe_name.rpartition(".")
+            i = 1
+            while dst.exists():
+                cand = f"{stem} ({i}).{ext}" if dot else f"{safe_name} ({i})"
+                dst = att_dir / cand
+                i += 1
+            safe_name = dst.name
+        try:
+            shutil.copy2(str(local), str(dst))
+            copied += 1
+            print(f"[push_chat]   attach: {safe_name} "
+                  f"({local.stat().st_size / 1024:.1f} KB) <- {local}")
+            manifest[att["url"]] = {
+                "name": att.get("name"),
+                "kind": att.get("kind"),
+                "size_bytes": att.get("size_bytes"),
+                "stored_as": safe_name,
+                "source_path": str(local),
+            }
+        except Exception as e:
+            print(f"[push_chat]   attach FAILED for {safe_name}: {e}",
+                  file=sys.stderr)
+
+    try:
+        manifest_path.write_text(
+            json.dumps(manifest, indent=2, ensure_ascii=False),
+            encoding="utf-8")
+    except Exception as e:
+        print(f"[push_chat]   manifest write FAILED: {e}", file=sys.stderr)
+
+    return copied, skipped
 
 
 def _build_docx(out_path: Path,
@@ -118,6 +201,10 @@ def main() -> int:
         formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--last-minutes", type=int, default=15,
                     help="Window size. Default: 15.")
+    ap.add_argument("--no-attachments", dest="push_attachments",
+                    action="store_false",
+                    help="Skip resolving + pushing chat-attached files.")
+    ap.set_defaults(push_attachments=True)
     ap.add_argument("--dry-run", action="store_true",
                     help="Read + summarize but write nothing.")
     args = ap.parse_args()
@@ -186,6 +273,26 @@ def main() -> int:
         f"{start_dt:%H%M}-{end_dt:%H%M}.docx"
     )
 
+    # Resolve Teams chat attachments to local files. We only ship the
+    # ones the dev has actually downloaded; the rest stay as URL-only
+    # references inside the .docx body.
+    resolved: list[dict] = []
+    if args.push_attachments:
+        all_atts = attachment_resolver.resolve_all(chat_blocks)
+        resolved = [a for a in all_atts if a["resolved"]]
+        n_total = len(all_atts)
+        n_found = len(resolved)
+        if n_total:
+            print(f"[push_chat] attachments seen: {n_total}, "
+                  f"locally resolved: {n_found}")
+            for a in all_atts:
+                if a["resolved"]:
+                    print(f"   + {a['name']}  ({a['kind']}, "
+                          f"{a.get('size_bytes', 0)} B)  <- {a['local_path']}")
+                else:
+                    print(f"   - {a['name']}  ({a['kind']})  "
+                          f"skipped: {a['reason']}")
+
     if args.dry_run:
         print(f"[push_chat] dry-run: would write {name}")
         for blk in chat_blocks:
@@ -212,6 +319,16 @@ def main() -> int:
         print(f"[push_chat] central upload FAILED: {e}", file=sys.stderr)
         print(f"[push_chat] local copy preserved at {local_path}",
               file=sys.stderr)
+        return 0
+
+    if resolved:
+        try:
+            copied, skipped = _push_attachments(resolved, central_dir)
+            print(f"[push_chat] attachments -> central: "
+                  f"{copied} copied, {skipped} already present")
+        except Exception as e:
+            print(f"[push_chat] attachment push FAILED: {e}",
+                  file=sys.stderr)
     return 0
 
 
