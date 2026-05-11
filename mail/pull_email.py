@@ -56,6 +56,7 @@ load_dotenv(_HERE / ".env", override=True)
 from mail import requirements_inbox as ri  # noqa: E402
 from tools import _session_doc as session_doc  # noqa: E402
 from tools._session_doc import _slugify  # noqa: E402
+from tools._retry import retry as _retry_deco  # noqa: E402
 
 
 def _parse_time(s: str) -> dt.time:
@@ -88,12 +89,15 @@ def _build_search_criteria(*, sender: str | None, subject: str | None,
     return crit
 
 
+@_retry_deco(attempts=3, base_delay=1.0)
 def fetch_emails_in_window(*, sender: str | None, subject: str | None,
                            start_dt: dt.datetime,
                            end_dt: dt.datetime) -> list[dict]:
     """Connect to IMAP, narrow by date, filter to the absolute datetime
     window client-side. Returns parsed message dicts with body +
-    attachments already extracted."""
+    attachments already extracted.
+
+    Retried up to 3 times on transient network / IMAP errors."""
     host = (os.getenv("REQ_IMAP_HOST") or "imap.gmail.com").strip()
     port = int(os.getenv("REQ_IMAP_PORT", "993"))
     user = (os.getenv("REQ_IMAP_USER") or "").strip()

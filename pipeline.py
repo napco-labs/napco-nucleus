@@ -75,6 +75,13 @@ _CRITIQUE_MODEL = os.environ.get(
 _DRAFT_MODEL = os.environ.get(
     "NUCLEUS_PIPELINE_DRAFT_MODEL", "claude-opus-4-7")
 
+# Per-stage timeouts (seconds). Prevent a hung Whisper / SDK / IMAP
+# from blocking the whole pipeline forever. Defaults are generous —
+# tune via env if your sessions are unusually long.
+_TIMEOUT_EXTRACT = int(os.environ.get("NUCLEUS_TIMEOUT_EXTRACT_S", "300"))
+_TIMEOUT_CRITIQUE = int(os.environ.get("NUCLEUS_TIMEOUT_CRITIQUE_S", "300"))
+_TIMEOUT_DRAFT = int(os.environ.get("NUCLEUS_TIMEOUT_DRAFT_S", "600"))
+
 
 # ── Session-doc reading ───────────────────────────────────────────
 
@@ -219,7 +226,8 @@ async def run_extract(session_text: str) -> list[dict]:
         f"{session_text}\n\n"
         "----- END SESSION DOC -----\n"
     )
-    raw = await _claude_call(system, user, model=_EXTRACT_MODEL or None)
+    with anyio.fail_after(_TIMEOUT_EXTRACT):
+        raw = await _claude_call(system, user, model=_EXTRACT_MODEL or None)
     cleaned = _strip_fences(raw)
     try:
         candidates = json.loads(cleaned)
@@ -290,7 +298,8 @@ async def run_critique(candidates: list[dict]) -> list[dict]:
           f"{len(ctx['requirements_seen'])} seen-rows for dedup")
     system = _load_prompt("critique")
     user = json.dumps(ctx, ensure_ascii=False, indent=2, default=str)
-    raw = await _claude_call(system, user, model=_CRITIQUE_MODEL or None)
+    with anyio.fail_after(_TIMEOUT_CRITIQUE):
+        raw = await _claude_call(system, user, model=_CRITIQUE_MODEL or None)
     cleaned = _strip_fences(raw)
     try:
         finalists = json.loads(cleaned)
@@ -337,8 +346,9 @@ async def run_draft(finalists: list[dict], dry_run: bool) -> str:
         + json.dumps(finalists, ensure_ascii=False, indent=2, default=str)
     )
     print(f"[draft] passing {len(finalists)} requirement(s) to Claude")
-    return await _claude_call_with_tools(system, user,
-                                          model=_DRAFT_MODEL or None)
+    with anyio.fail_after(_TIMEOUT_DRAFT):
+        return await _claude_call_with_tools(system, user,
+                                              model=_DRAFT_MODEL or None)
 
 
 # ── Orchestrator ─────────────────────────────────────────────────
@@ -468,5 +478,23 @@ def main() -> int:
     return 0
 
 
+def _main_with_lock() -> int:
+    """Wrap main() in the same cross-process lock collect_central uses.
+    Two pipeline.py invocations (or pipeline + collect_central) can't
+    write to current.docx and verification artifacts simultaneously."""
+    from tools._lock import file_lock  # lazy
+    try:
+        with file_lock("collect_central", block=False) as got:
+            if not got:
+                print("\n[lock] another collect_central / pipeline run is "
+                      "in flight — aborting to avoid duplicate writes.",
+                      file=sys.stderr)
+                return 75  # EX_TEMPFAIL
+            return main()
+    except RuntimeError as e:
+        print(f"\n[lock] {e}", file=sys.stderr)
+        return 75
+
+
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(_main_with_lock())

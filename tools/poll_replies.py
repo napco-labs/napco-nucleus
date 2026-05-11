@@ -55,6 +55,7 @@ import anyio  # noqa: E402
 
 import memory  # noqa: E402
 import napco_config as nucleus_config  # noqa: E402
+from tools._retry import retry as _retry_deco  # noqa: E402
 
 
 # ── IMAP helpers ─────────────────────────────────────────────────
@@ -150,9 +151,10 @@ def _sender_to_client(sender: str) -> str | None:
     return None
 
 
+@_retry_deco(attempts=3, base_delay=1.0)
 def fetch_replies(days: int) -> list[dict]:
     """Return raw reply dicts: {uid, from, subject, received, body,
-    in_reply_to, references}."""
+    in_reply_to, references}. Retried on transient IMAP errors."""
     end_dt = dt.datetime.now()
     start_dt = end_dt - dt.timedelta(days=days)
 

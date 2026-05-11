@@ -559,5 +559,23 @@ def main() -> int:
     return rc
 
 
+def _main_with_lock() -> int:
+    """Wrap main() in a cross-process file lock so the chat-push cron
+    and an on-demand do_it_now invocation can't run collect_central
+    simultaneously and corrupt session.docx / verification artifacts."""
+    from tools._lock import file_lock  # lazy
+    try:
+        with file_lock("collect_central", block=False) as got:
+            if not got:
+                print("\n[lock] another collect_central run is in flight — "
+                      "aborting to avoid duplicate writes.",
+                      file=sys.stderr)
+                return 75  # EX_TEMPFAIL
+            return main()
+    except RuntimeError as e:
+        print(f"\n[lock] {e}", file=sys.stderr)
+        return 75
+
+
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(_main_with_lock())
