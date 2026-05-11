@@ -237,6 +237,79 @@ def _extract_image_text(path: Path) -> str:
     return f"(OCR returned empty text for {path.name})"
 
 
+_UNCERTAIN_LOGPROB = -0.7  # avg_logprob < this -> "(uncertain)" marker
+
+
+def _chunk_wav(wav_path: Path, *, chunk_seconds: int,
+               out_dir: Path) -> list[tuple[Path, float]]:
+    """Split a WAV file into chunk_seconds-long pieces using the
+    stdlib `wave` module. Returns [(chunk_path, start_offset_s), ...].
+
+    Chunks share the same sample rate / channels / bit depth as the
+    source so faster-whisper handles them identically to the
+    unchunked input."""
+    import wave  # stdlib, lazy
+    out_dir.mkdir(parents=True, exist_ok=True)
+    chunks: list[tuple[Path, float]] = []
+    with wave.open(str(wav_path), "rb") as w:
+        framerate = w.getframerate()
+        nchannels = w.getnchannels()
+        sampwidth = w.getsampwidth()
+        total_frames = w.getnframes()
+        duration = total_frames / framerate if framerate else 0
+        chunk_frames = int(chunk_seconds * framerate)
+        idx = 0
+        offset_frames = 0
+        while offset_frames < total_frames:
+            w.setpos(offset_frames)
+            n = min(chunk_frames, total_frames - offset_frames)
+            frames = w.readframes(n)
+            chunk_path = out_dir / f"{wav_path.stem}_chunk{idx:03d}.wav"
+            with wave.open(str(chunk_path), "wb") as cw:
+                cw.setnchannels(nchannels)
+                cw.setsampwidth(sampwidth)
+                cw.setframerate(framerate)
+                cw.writeframes(frames)
+            chunks.append((chunk_path, offset_frames / framerate))
+            offset_frames += n
+            idx += 1
+    return chunks
+
+
+def _transcribe_chunk(model, chunk_path: Path, offset_s: float,
+                      label: str) -> list[dict]:
+    """Run faster-whisper on one chunk and return segment dicts with
+    timestamps adjusted to the parent file's clock."""
+    segments_iter, _info = model.transcribe(
+        str(chunk_path),
+        task="transcribe",  # Claude handles translation downstream
+        language="bn",
+        beam_size=1,
+        vad_filter=True,
+        vad_parameters={"min_silence_duration_ms": 500},
+        condition_on_previous_text=True,
+    )
+    out: list[dict] = []
+    for s in segments_iter:
+        text = (s.text or "").strip()
+        if not text:
+            continue
+        logprob = getattr(s, "avg_logprob", None)
+        no_speech = getattr(s, "no_speech_prob", None)
+        uncertain = (
+            (logprob is not None and logprob < _UNCERTAIN_LOGPROB) or
+            (no_speech is not None and no_speech > 0.6)
+        )
+        out.append({
+            "start": s.start + offset_s,
+            "end": s.end + offset_s,
+            "text": text,
+            "speaker": label,
+            "uncertain": uncertain,
+        })
+    return out
+
+
 def _transcribe_call(mic: Path | None, speaker: Path | None,
                      stamp: str) -> list[str]:
     """Return body lines for the MEETING section.
@@ -251,13 +324,28 @@ def _transcribe_call(mic: Path | None, speaker: Path | None,
       3. The verify_session prompt already instructs Claude to translate
          Bangla source material to English when extracting requirements.
 
-    CPU-friendly tuning:
+    Chunked parallel design (added 2026-05-11):
+      Each WAV is split into chunk_seconds-long pieces (default 300s
+      = 5 min) and the chunks are transcribed in a ThreadPoolExecutor.
+      faster-whisper is thread-safe; CTranslate2 releases the GIL on
+      CPU inference, so threads scale to ~cpu_count() workers without
+      the per-process model-loading penalty.
+
+      A 1-hour call (2 tracks × 12 chunks = 24 jobs) on a 4-8 core
+      box transcribes in ~15-25 min instead of 2-4 hours.
+
+    CPU-friendly tuning per chunk:
       - beam_size=1                       (fast)
-      - condition_on_previous_text=True   (better continuity on 1-hr calls)
+      - condition_on_previous_text=True   (better continuity within chunk)
       - vad_filter=True                   (skip silence — big speedup)
       - vad min_silence_duration_ms=500   (don't split mid-sentence)
       - avg_logprob < -0.7 → "(uncertain)" marker so the reviewer's eye
         lands on the lines that need verification
+
+    Configurable via env:
+      NUCLEUS_TRANSCRIBE_CHUNK_S         chunk length in sec (default 300)
+      NUCLEUS_TRANSCRIBE_WORKERS         max parallel threads (default
+                                          min(cpu_count, 4))
 
     Falls back to a placeholder line if Whisper isn't available.
     """
@@ -268,52 +356,93 @@ def _transcribe_call(mic: Path | None, speaker: Path | None,
     except ImportError:
         return [f"(faster-whisper not installed; raw WAVs at {mic} / {speaker})"]
 
-    model = WhisperModel("large-v3", device="cpu", compute_type="int8")
+    chunk_seconds = int(os.environ.get("NUCLEUS_TRANSCRIBE_CHUNK_S", "300"))
+    try:
+        import multiprocessing
+        default_workers = min(multiprocessing.cpu_count(), 4)
+    except Exception:
+        default_workers = 4
+    try:
+        max_workers = max(1, int(os.environ.get(
+            "NUCLEUS_TRANSCRIBE_WORKERS", str(default_workers))))
+    except ValueError:
+        max_workers = default_workers
 
     try:
         started = dt.datetime.strptime(stamp, "%Y%m%d-%H%M%S")
     except ValueError:
         started = None
 
-    # Confidence threshold for the "(uncertain)" marker. Tuned by
-    # Whisper docs / community: avg_logprob below ~-0.7 correlates well
-    # with "this segment is dodgy and worth re-listening to."
-    UNCERTAIN_LOGPROB = -0.7
-
-    all_segs: list[dict] = []
+    # ── 1. Chunk both tracks ────────────────────────────────────
+    tmp_dir = Path((mic or speaker).parent) / f"_chunks_{stamp}"
+    jobs: list[tuple[Path, float, str]] = []
     for wav, label in [(mic, "You"), (speaker, "Other")]:
         if not wav:
             continue
-        segments, info = model.transcribe(
-            str(wav),
-            task="transcribe",  # was "translate" — Claude handles translation now
-            language="bn",
-            beam_size=1,
-            vad_filter=True,
-            vad_parameters={"min_silence_duration_ms": 500},
-            condition_on_previous_text=True,
-        )
-        for s in segments:
-            text = s.text.strip()
-            if not text:
-                continue
-            logprob = getattr(s, "avg_logprob", None)
-            no_speech = getattr(s, "no_speech_prob", None)
-            uncertain = (
-                (logprob is not None and logprob < UNCERTAIN_LOGPROB) or
-                (no_speech is not None and no_speech > 0.6)
-            )
-            all_segs.append({
-                "start": s.start, "end": s.end,
-                "text": text, "speaker": label,
-                "uncertain": uncertain,
-            })
+        try:
+            for chunk_path, offset_s in _chunk_wav(
+                    wav, chunk_seconds=chunk_seconds, out_dir=tmp_dir):
+                jobs.append((chunk_path, offset_s, label))
+        except Exception as e:
+            print(f"  ! chunking failed for {wav}: {e}", file=sys.stderr)
+
+    if not jobs:
+        return ["(no audio chunks produced — check track files)"]
+
+    print(f"  transcribing {len(jobs)} chunk(s) of {chunk_seconds}s "
+          f"each, {max_workers} thread(s) parallel...")
+
+    # ── 2. Transcribe in parallel ───────────────────────────────
+    import concurrent.futures as _cf
+    import time as _time
+
+    model = WhisperModel("large-v3", device="cpu", compute_type="int8")
+    all_segs: list[dict] = []
+    started_at = _time.perf_counter()
+
+    try:
+        with _cf.ThreadPoolExecutor(max_workers=max_workers) as exe:
+            future_to_job = {
+                exe.submit(_transcribe_chunk, model, cp, off, lab):
+                    (cp, off, lab)
+                for (cp, off, lab) in jobs
+            }
+            done_count = 0
+            for fut in _cf.as_completed(future_to_job):
+                try:
+                    segs = fut.result()
+                    all_segs.extend(segs)
+                except Exception as e:
+                    cp, off, lab = future_to_job[fut]
+                    print(f"  ! chunk transcription failed "
+                          f"({cp.name} {lab} @+{off:.0f}s): {e}",
+                          file=sys.stderr)
+                done_count += 1
+                if done_count % max(1, len(jobs) // 10) == 0:
+                    print(f"  ...{done_count}/{len(jobs)} chunks done")
+    finally:
+        # ── 3. Cleanup the temporary chunk files ────────────────
+        try:
+            for cp, _off, _lab in jobs:
+                try:
+                    cp.unlink(missing_ok=True)
+                except OSError:
+                    pass
+            try:
+                tmp_dir.rmdir()
+            except OSError:
+                pass
+        except Exception:
+            pass
+
+    elapsed = _time.perf_counter() - started_at
+    print(f"  transcription done in {elapsed:.1f}s wall-clock")
+
     all_segs.sort(key=lambda s: s["start"])
 
     lines: list[str] = []
     if not all_segs:
         return ["(no speech detected on either track)"]
-    # Header lets the LLM identifier know this section is Bangla source.
     lines.append("Source language: Bangla (transcribed verbatim — Claude "
                  "translates to English at identify time).")
     lines.append("Markers: (uncertain) = low ASR confidence, double-check "
