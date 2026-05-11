@@ -40,6 +40,7 @@ import argparse
 import datetime as dt
 import email
 import email.utils
+import hashlib
 import imaplib
 import os
 import re
@@ -54,6 +55,7 @@ load_dotenv(_HERE / ".env", override=True)
 # Reuse requirements_inbox's parsing helpers + the session-doc helper.
 from mail import requirements_inbox as ri  # noqa: E402
 from tools import _session_doc as session_doc  # noqa: E402
+from tools._session_doc import _slugify  # noqa: E402
 
 
 def _parse_time(s: str) -> dt.time:
@@ -157,28 +159,58 @@ def fetch_emails_in_window(*, sender: str | None, subject: str | None,
     return out
 
 
-def _build_section_paragraphs(emails: list[dict]) -> list[str]:
+def _build_email_paragraphs(e: dict) -> list[str]:
+    """Body paragraphs for a single email's session-doc section."""
     lines: list[str] = []
-    for i, e in enumerate(emails, 1):
+    lines.append(f"From: {e['from']}")
+    lines.append(f"Subject: {e['subject']}")
+    lines.append(f"Received: {e['received']}")
+    lines.append("")
+    lines.append("Body:")
+    body = (e['body'] or "(empty)").strip()
+    for ln in body.splitlines() or [body]:
+        lines.append(ln)
+    atts = e["attachments"]
+    if atts:
         lines.append("")
-        lines.append(f"--- Email {i} of {len(emails)} ---")
-        lines.append(f"From: {e['from']}")
-        lines.append(f"Subject: {e['subject']}")
-        lines.append(f"Received: {e['received']}")
-        lines.append("")
-        lines.append("Body:")
-        body = (e['body'] or "(empty)").strip()
-        for ln in body.splitlines() or [body]:
-            lines.append(ln)
-        atts = e["attachments"]
-        if atts:
-            lines.append("")
-            lines.append(f"Attachments ({len(atts)}):")
-            for fname, text in atts:
-                lines.append(f"  --- attachment: {fname} ---")
-                for ln in (text or "(empty)").splitlines():
-                    lines.append(f"  {ln}")
+        lines.append(f"Attachments ({len(atts)}):")
+        for fname, text in atts:
+            lines.append(f"  --- attachment: {fname} ---")
+            for ln in (text or "(empty)").splitlines():
+                lines.append(f"  {ln}")
     return lines
+
+
+def _email_source_id(e: dict) -> str:
+    """Granular per-email Source ID.
+
+    Format: email/<sender-slug>/<YYYY-MM-DDTHHMM>/<8-char-sha1>
+
+    The hash component disambiguates two emails from the same sender at
+    the same minute and stays stable across runs (deterministic over
+    sender + subject + received).
+    """
+    sender = (e.get("from") or "unknown").strip() or "unknown"
+    received = (e.get("received") or "").strip()
+    # received looks like "YYYY-MM-DD HH:MM" — collapse to a clean token
+    if received and received != "(no date)":
+        received_token = received.replace(" ", "T").replace(":", "")
+    else:
+        received_token = "no-date"
+    sender_slug = _slugify(sender, max_len=40).lower()
+    digest = hashlib.sha1(
+        f"{sender}|{e.get('subject') or ''}|{received}".encode("utf-8")
+    ).hexdigest()[:8]
+    return f"email/{sender_slug}/{received_token}/{digest}"
+
+
+def _email_headline(e: dict, max_subject: int = 80) -> str:
+    """Human-readable section heading for one email."""
+    sender = (e.get("from") or "(unknown sender)").strip() or "(unknown sender)"
+    subject = (e.get("subject") or "(no subject)").strip() or "(no subject)"
+    if len(subject) > max_subject:
+        subject = subject[: max_subject - 1] + "…"
+    return f"from {sender} — {subject}"
 
 
 def main() -> int:
@@ -243,30 +275,32 @@ def main() -> int:
     if not emails:
         return 0
 
-    headline_parts = []
-    if args.from_sender:
-        headline_parts.append(f"from {args.from_sender}")
-    if args.subject:
-        headline_parts.append(f"subject '{args.subject}'")
-    if args.last_minutes is not None:
-        headline_parts.append(f"last {args.last_minutes} min")
-    headline = "  ".join(headline_parts) or "(time window)"
+    # One session-doc section per email so each gets its own Source ID
+    # the LLM can cite precisely (instead of "all emails in this 48h
+    # window" lumped under one ID).
+    total_lines = 0
+    session_path: str | None = None
+    for e in emails:
+        result = session_doc.append_section(
+            source="EMAIL",
+            headline=_email_headline(e),
+            metadata={
+                "From": e["from"],
+                "Subject": (e["subject"] or "(no subject)")[:120],
+                "Received": e["received"],
+                "Attachments": str(len(e["attachments"])),
+            },
+            body_paragraphs=_build_email_paragraphs(e),
+            source_id=_email_source_id(e),
+        )
+        total_lines += result["appended_paragraphs"]
+        session_path = result["absolute_path"]
+        print(f"  + {result['source_id']}  ({result['appended_paragraphs']} lines)")
 
-    body = _build_section_paragraphs(emails)
-    result = session_doc.append_section(
-        source="EMAIL",
-        headline=headline,
-        metadata={
-            "Window": f"{start_dt.strftime('%Y-%m-%d %H:%M:%S')}"
-                      f" -> {end_dt.strftime('%H:%M:%S')}",
-            "Matched": str(len(emails)),
-            "Attachments parsed": str(sum(len(e["attachments"]) for e in emails)),
-        },
-        body_paragraphs=body,
-    )
-    print(f"\nAppended to session doc: {result['absolute_path']}")
-    print(f"Section: {result['section']}")
-    print(f"Lines added: {result['appended_paragraphs']}")
+    print(f"\nAppended {len(emails)} email section(s) to session doc.")
+    if session_path:
+        print(f"Session doc: {session_path}")
+    print(f"Total lines added: {total_lines}")
     return 0
 
 
