@@ -8,6 +8,9 @@ sidecar:
     (e)dit      — keep but reword the title; you provide the new one
     (r)eject    — false positive, do not send
     (s)kip      — defer this one for later
+    (p)lay      — extract + play the call audio snippet(s) for this
+                  requirement (uses the time_ranges from the sidecar).
+                  Only shown when the requirement has MEETING sources.
     (q)uit      — stop here, any unreviewed items stay unreviewed
 
 Decisions persist to memory.requirement_reviews. Over time those
@@ -20,6 +23,9 @@ Usage:
     py -3 -m tools.review_session --docx <path>         # auto-resolve
                                                         # sidecar from
                                                         # docx path
+    py -3 -m tools.review_session --no-audio            # disable [p]lay
+                                                        # (headless / CI)
+    py -3 -m tools.review_session --track both          # play mic+speaker
 
 Aliases also accepted: 'a' for keep (accept), 'n' for reject (no), '1'
 for keep, '0' for reject. Empty input defaults to 'k'.
@@ -44,6 +50,7 @@ _HERE = Path(__file__).parent.parent
 sys.path.insert(0, str(_HERE))
 
 import memory  # noqa: E402
+from tools import audio_snippet  # noqa: E402
 
 
 _REQ_DIR = _HERE / "data" / "requirements"
@@ -90,8 +97,61 @@ _DECISION_ALIASES = {
     "e": "edit", "edit": "edit",
     "r": "reject", "reject": "reject", "0": "reject", "n": "reject", "no": "reject",
     "s": "skip", "skip": "skip",
+    "p": "play", "play": "play",
     "q": "quit", "quit": "quit", "exit": "quit",
 }
+
+
+def _meeting_ranges(req: dict) -> list[dict]:
+    """Return the subset of req['time_ranges'] that point at MEETING
+    Source IDs (i.e. real call recordings). Other entries are ignored."""
+    out: list[dict] = []
+    for tr in req.get("time_ranges") or []:
+        if not isinstance(tr, dict):
+            continue
+        sid = (tr.get("source_id") or "").strip()
+        start = (tr.get("start") or "").strip()
+        end = (tr.get("end") or "").strip()
+        if not sid or not start or not end:
+            continue
+        if not sid.startswith("call/"):
+            continue
+        out.append({"source_id": sid, "start": start, "end": end})
+    return out
+
+
+def _play_snippets(req: dict, track: str, padding: float) -> None:
+    """Extract + play the audio snippets for a requirement. Prints a
+    note and returns silently if nothing is playable."""
+    ranges = _meeting_ranges(req)
+    if not ranges:
+        print(_amber("   no MEETING time_ranges on this requirement — "
+                     "nothing to play."))
+        return
+    for i, tr in enumerate(ranges, 1):
+        try:
+            paths = audio_snippet.extract_snippet(
+                source_id=tr["source_id"],
+                start=tr["start"],
+                end=tr["end"],
+                track=track,
+                padding_s=padding,
+            )
+        except Exception as e:
+            print(_amber(f"   ! range {i}/{len(ranges)} "
+                         f"({tr['start']}-{tr['end']}): {e}"))
+            continue
+        if not paths:
+            print(_amber(f"   ! range {i}/{len(ranges)}: no snippet produced "
+                         f"(missing track on central?)"))
+            continue
+        for p in paths:
+            size_kb = p.stat().st_size / 1024
+            print(f"   {_dim('->')} {p.name}  ({size_kb:.1f} KB)")
+        ok = audio_snippet.play_audio(paths[0])
+        if not ok:
+            print(_amber(f"   ! couldn't auto-open {paths[0].name}; "
+                         f"open it manually from {paths[0].parent}"))
 
 
 def _confidence_color(c: float | None) -> str:
@@ -104,7 +164,10 @@ def _confidence_color(c: float | None) -> str:
     return _amber(f"{c:.2f} (review)")
 
 
-def _prompt_decision(i: int, total: int, req: dict) -> tuple[str, str | None, str]:
+def _prompt_decision(i: int, total: int, req: dict, *,
+                     audio_enabled: bool, audio_track: str,
+                     audio_padding: float
+                     ) -> tuple[str, str | None, str]:
     """Show one requirement, prompt for a decision. Returns
     (decision, edited_title_or_None, notes)."""
     title = (req.get("title") or "").strip() or "(no title)"
@@ -112,6 +175,7 @@ def _prompt_decision(i: int, total: int, req: dict) -> tuple[str, str | None, st
     rationale = (req.get("rationale") or "").strip()
     confidence = req.get("confidence")
     sources = req.get("source_refs") or []
+    ranges = _meeting_ranges(req) if audio_enabled else []
     try:
         conf_val = float(confidence) if confidence is not None else None
     except (TypeError, ValueError):
@@ -128,15 +192,29 @@ def _prompt_decision(i: int, total: int, req: dict) -> tuple[str, str | None, st
         print(_dim(f"   Sources: {', '.join(str(s) for s in sources[:3])}"
                    + ("…" if len(sources) > 3 else "")))
     print(f"   Confidence: {_confidence_color(conf_val)}")
-    print(_dim("   [k]eep  [e]dit  [r]eject  [s]kip  [q]uit"))
+    if ranges:
+        preview = ", ".join(f"{r['start']}-{r['end']}" for r in ranges[:2])
+        if len(ranges) > 2:
+            preview += f", +{len(ranges) - 2} more"
+        print(_dim(f"   Audio:   {len(ranges)} range(s) ({preview})"))
+        print(_dim("   [k]eep  [e]dit  [r]eject  [s]kip  "
+                   "[p]lay audio  [q]uit"))
+    else:
+        print(_dim("   [k]eep  [e]dit  [r]eject  [s]kip  [q]uit"))
 
     while True:
         raw = input("   > ").strip().lower()
         d = _DECISION_ALIASES.get(raw)
         if d is None:
             print(_amber(
-                "   ? Type k/e/r/s/q (or accept/edit/reject/skip/quit)"))
+                "   ? Type k/e/r/s/p/q (or accept/edit/reject/skip/play/quit)"))
             continue
+        if d == "play":
+            if not audio_enabled:
+                print(_amber("   audio disabled (--no-audio)."))
+                continue
+            _play_snippets(req, track=audio_track, padding=audio_padding)
+            continue  # stay on this requirement
         if d == "edit":
             new = input("   new title (empty = cancel edit): ").strip()
             if not new:
@@ -163,7 +241,10 @@ def _wrap(text: str, width: int) -> list[str]:
     return out
 
 
-def review(sidecar_path: Path) -> int:
+def review(sidecar_path: Path, *,
+           audio_enabled: bool = True,
+           audio_track: str = "speaker",
+           audio_padding: float = 2.0) -> int:
     if not sidecar_path.exists():
         print(_red(f"sidecar not found: {sidecar_path}"), file=sys.stderr)
         return 2
@@ -183,13 +264,25 @@ def review(sidecar_path: Path) -> int:
     print(_dim(f"  sidecar: {sidecar_path}"))
     if docx_path:
         print(_dim(f"  docx:    {docx_path}"))
+    if audio_enabled:
+        n_with_audio = sum(1 for r in reqs
+                           if isinstance(r, dict) and _meeting_ranges(r))
+        print(_dim(f"  audio:   on, track={audio_track}, "
+                   f"{n_with_audio}/{len(reqs)} item(s) have call ranges"))
+    else:
+        print(_dim("  audio:   off (--no-audio)"))
 
     decisions = {"keep": 0, "edit": 0, "reject": 0, "skip": 0}
     quit_early = False
     for idx, req in enumerate(reqs, 1):
         if not isinstance(req, dict):
             continue
-        d, edited, notes = _prompt_decision(idx, len(reqs), req)
+        d, edited, notes = _prompt_decision(
+            idx, len(reqs), req,
+            audio_enabled=audio_enabled,
+            audio_track=audio_track,
+            audio_padding=audio_padding,
+        )
         if d == "quit":
             quit_early = True
             print(_dim("\nquit — remaining items left unreviewed."))
@@ -232,6 +325,18 @@ def main() -> int:
     ap.add_argument("--docx", default=None,
                     help="Alternative: path to the .docx; the sidecar "
                          "is derived by swapping the suffix.")
+    ap.add_argument("--no-audio", dest="audio_enabled",
+                    action="store_false",
+                    help="Disable the [p]lay action (headless / CI use).")
+    ap.set_defaults(audio_enabled=True)
+    ap.add_argument("--track", default="speaker",
+                    choices=("mic", "speaker", "both"),
+                    help="Which track to extract on [p]lay. Default "
+                         "'speaker' (the client; most useful for "
+                         "review).")
+    ap.add_argument("--padding", type=float, default=2.0,
+                    help="Seconds padded on each side of a snippet. "
+                         "Default 2.0.")
     args = ap.parse_args()
 
     sidecar = _resolve_sidecar(args)
@@ -239,7 +344,10 @@ def main() -> int:
         print(_red("No sidecar found. Run a verify_session first, or "
                    "pass --sidecar <path>."), file=sys.stderr)
         return 2
-    return review(sidecar)
+    return review(sidecar,
+                  audio_enabled=args.audio_enabled,
+                  audio_track=args.track,
+                  audio_padding=args.padding)
 
 
 if __name__ == "__main__":
