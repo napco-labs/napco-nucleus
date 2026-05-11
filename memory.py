@@ -34,7 +34,7 @@ import re
 import sqlite3
 import threading
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Iterable
 
 logger = logging.getLogger(__name__)
@@ -428,6 +428,53 @@ def confirmation_counts() -> dict[str, int]:
     except Exception as e:
         logger.warning("memory.confirmation_counts failed: %s", e)
         return {}
+
+
+def open_items(client_name: str | None = None,
+               max_age_days: int = 30,
+               limit: int = 50) -> list[dict]:
+    """Cross-session-continuity context: requirements drafted to a
+    client recently but NOT yet confirmed.
+
+    Used by the identify step (verify_session step 1.5 + pipeline_
+    critique.md) so today's run sees what's still unresolved from
+    prior sessions. Distinct from `pending_requirements` in two ways:
+
+      - Filters to a recency window (default 30 days) — items older
+        than that are stale, not in-flight.
+      - Includes both 'pending' and 'unclear' statuses (latter
+        means a reply landed but didn't actually confirm the item).
+
+    Returns rows with title/summary/client_name/confirmation_status/
+    first_seen/last_seen so the LLM can decide whether today's input
+    is a follow-up to one of these.
+    """
+    max_age_days = max(1, int(max_age_days))
+    limit = max(1, min(limit, 200))
+    cutoff = (datetime.now(timezone.utc)
+              - timedelta(days=max_age_days)
+              ).isoformat(timespec="seconds")
+    try:
+        with _conn() as c:
+            sql = (
+                "SELECT id, title, summary, source, source_ref, "
+                "       client_name, confirmation_status, "
+                "       first_seen, last_seen, touch_count "
+                "FROM requirements_seen "
+                "WHERE confirmation_status IN ('pending', 'unclear') "
+                "AND last_seen >= ?"
+            )
+            args: list = [cutoff]
+            if client_name:
+                sql += " AND LOWER(client_name) = LOWER(?)"
+                args.append(client_name.strip())
+            sql += " ORDER BY last_seen DESC, id DESC LIMIT ?"
+            args.append(limit)
+            rows = c.execute(sql, args).fetchall()
+            return [dict(r) for r in rows]
+    except Exception as e:
+        logger.warning("memory.open_items failed: %s", e)
+        return []
 
 
 def pending_requirements(client_name: str | None = None,

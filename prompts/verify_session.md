@@ -47,12 +47,18 @@ Before extracting requirements, identify which client(s) the session is about. N
 
 One session may mention more than one client; track each separately.
 
-For EACH client you identify, call `get_client_history(client_name="<client>", limit=20)`. The returned list is the requirements that client has raised in past sessions. Read it before step 2 and keep two questions in mind:
+For EACH client you identify, call **two** memory tools in this order:
+
+1. `get_client_history(client_name="<client>", limit=20)` — the requirements that client has raised in past sessions (regardless of confirmation status).
+2. `get_open_items(client_name="<client>", max_age_days=30, limit=50)` — requirements drafted to that client recently but NOT yet confirmed (pending or unclear). This is the **in-flight backlog**.
+
+Read both before step 2 and keep three questions in mind:
 
 - **Recurring asks**: does this client *always* ask for X (e.g. audit logging, mobile parity, RBAC)? If they've raised the same thing 3+ times in history, treat its absence in today's session as a likely oversight worth flagging — not as confirmation that they're satisfied.
-- **Follow-ups vs new asks**: if today's chat says "what about the operator search we discussed?", history tells you whether that's a fresh ask (no prior entry) or a follow-up on a still-open item.
+- **Follow-ups to open items**: if today's content references something in `get_open_items` (same topic, same scope), it's a follow-up — not a net-new ask. Don't draft it as a fresh requirement; instead, if the new content confirms the open item, surface that in your final reply so Titu knows to update the confirmation status manually (or call `remember_requirement` again with the SAME title to bump touch_count — the existing row's confirmation_status stays unless poll_replies has updated it).
+- **Stale opens**: if an open item is more than 14 days old and today's session doesn't reference it, mention it in your final reply with the rec "still pending — consider following up with the client."
 
-If `get_client_history` returns 0 rows, this is a new client to NN's memory. Proceed without context — that's fine. Don't fabricate history.
+If both tools return 0 rows, this is a new client to NN's memory. Proceed without context — that's fine. Don't fabricate history.
 
 ### 2. Identify distinct requirements
 

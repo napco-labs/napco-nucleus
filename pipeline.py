@@ -248,17 +248,23 @@ async def run_extract(session_text: str) -> list[dict]:
 # ── Stage 2: Critique ─────────────────────────────────────────────
 
 def _gather_critic_context(candidates: list[dict]) -> dict:
-    """Pull client histories + requirements_seen rows the Critic
-    needs. Best-effort — failures don't block the stage."""
+    """Pull client histories + open items + requirements_seen rows
+    the Critic needs. Best-effort — failures don't block the stage."""
     clients = {(c.get("client_name_guess") or "").strip()
                for c in candidates}
     clients.discard("")
     histories: dict = {}
+    open_items: dict = {}
     for cname in clients:
         try:
             histories[cname] = memory.get_client_history(cname, limit=15)
         except Exception as e:
             histories[cname] = {"error": str(e)}
+        try:
+            open_items[cname] = memory.open_items(
+                cname, max_age_days=30, limit=50)
+        except Exception as e:
+            open_items[cname] = {"error": str(e)}
 
     # Pull a small batch of seen requirements per candidate for dedup
     # context. Cap per-candidate hits so the prompt doesn't bloat.
@@ -280,6 +286,7 @@ def _gather_critic_context(candidates: list[dict]) -> dict:
     return {
         "candidates": candidates,
         "client_histories": histories,
+        "open_items": open_items,
         "requirements_seen": seen_rows,
     }
 
@@ -292,9 +299,13 @@ async def run_critique(candidates: list[dict]) -> list[dict]:
         print("[critique] no candidates — skipping LLM call")
         return []
     ctx = _gather_critic_context(candidates)
+    open_total = sum(
+        (len(v) if isinstance(v, list) else 0)
+        for v in (ctx.get("open_items") or {}).values())
     print(f"[critique] context: "
           f"{len(ctx['candidates'])} candidates, "
           f"{len(ctx['client_histories'])} client(s) with history, "
+          f"{open_total} open item(s) across those clients, "
           f"{len(ctx['requirements_seen'])} seen-rows for dedup")
     system = _load_prompt("critique")
     user = json.dumps(ctx, ensure_ascii=False, indent=2, default=str)

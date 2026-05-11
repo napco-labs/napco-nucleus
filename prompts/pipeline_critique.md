@@ -11,11 +11,19 @@ You will receive in the user message:
     "<client_name>": [<rows from get_client_history>],
     ...
   },
+  "open_items": {
+    "<client_name>": [<rows from get_open_items — pending/unclear
+                       requirements drafted recently but not yet
+                       confirmed by the client>],
+    ...
+  },
   "requirements_seen": [<rows from search_requirements for dedup>]
 }
 ```
 
 Some inputs may be empty (e.g. no prior client history). Handle gracefully.
+
+`open_items` is the cross-session backlog. When a candidate matches an item already in `open_items`, mark it as `kind: "follow_up"` and surface (in your `rationale`) that it's "follow-up to open item id=<X>". Don't double-draft it as a new requirement.
 
 ## Output
 

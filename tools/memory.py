@@ -138,6 +138,41 @@ async def get_client_history_tool(args):
 
 
 @tool(
+    "get_open_items",
+    "Cross-session continuity: requirements drafted to a client "
+    "recently but NOT yet confirmed (pending or unclear status). Call "
+    "during identify, AFTER get_client_history, to see what's still "
+    "in flight. If today's input references one of these items (same "
+    "topic, same scope) treat it as a follow-up, not a net-new ask — "
+    "and update the existing requirement's confirmation_status if the "
+    "client now confirmed/changed it. Filters: client_name "
+    "(case-insensitive exact match; omit for all clients), "
+    "max_age_days (default 30 — items older are stale, not "
+    "in-flight), limit (default 50).",
+    {"client_name": str, "max_age_days": int, "limit": int},
+)
+async def get_open_items_tool(args):
+    raw_age = args.get("max_age_days") or 30
+    raw_limit = args.get("limit") or 50
+    try:
+        max_age = int(raw_age)
+    except (TypeError, ValueError):
+        max_age = 30
+    try:
+        limit = int(raw_limit)
+    except (TypeError, ValueError):
+        limit = 50
+    rows = memory.open_items(
+        client_name=args.get("client_name") or None,
+        max_age_days=max_age,
+        limit=limit,
+    )
+    return _text({"client_name": args.get("client_name") or "",
+                  "max_age_days": max_age,
+                  "count": len(rows), "open_items": rows})
+
+
+@tool(
     "memory_stats",
     "Row counts per memory table. Use for health checks in the daily "
     "report and for confirming the DB is being written to.",
@@ -153,6 +188,7 @@ TOOLS = [
     recall_test_runs_tool,
     remember_requirement_tool,
     get_client_history_tool,
+    get_open_items_tool,
     memory_stats_tool,
 ]
 
@@ -162,5 +198,6 @@ TOOL_NAMES = [
     "recall_test_runs",
     "remember_requirement",
     "get_client_history",
+    "get_open_items",
     "memory_stats",
 ]
