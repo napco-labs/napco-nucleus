@@ -50,6 +50,7 @@ sys.path.insert(0, _HERE)
 TASKS = {
     "requirement-management",
     "verify_session",
+    "agent_mode",
     "daily-report-detailed",
     "daily-report-summary",
     "api-functional-test",
@@ -73,6 +74,8 @@ TASK_KICKOFF = {
         "call the auto-poll tools (poll_requirement_emails / "
         "ingest_drive_files / read_requirement_inbox), do NOT draft "
         "the records-aggregation email.",
+    "agent_mode":
+        "(operator instruction supplied via --input or AGENT_INPUT env)",
     "daily-report-detailed":
         "Build today's Detailed Daily Test Report. Follow the prompt: "
         "memory check-in, read artifacts from the 4 test projects, "
@@ -188,7 +191,16 @@ async def run_agent(task: str, dry_run: bool) -> None:
 
     options = ClaudeAgentOptions(**options_kwargs)
 
-    kickoff = TASK_KICKOFF[task]
+    if task == "agent_mode":
+        # The operator's free-form instruction is the kickoff message.
+        user_input = (os.environ.get("AGENT_INPUT") or "").strip()
+        if not user_input:
+            print("agent_mode: --input was empty and AGENT_INPUT env "
+                  "is not set. Nothing to do.", file=sys.stderr)
+            return
+        kickoff = user_input
+    else:
+        kickoff = TASK_KICKOFF[task]
     async with ClaudeSDKClient(options=options) as client:
         await client.query(kickoff)
         async for msg in client.receive_response():
@@ -207,7 +219,16 @@ def main() -> int:
     parser.add_argument("--task", required=True, choices=sorted(TASKS))
     parser.add_argument("--dry-run", action="store_true",
                         help="Run the loop but skip mutating actions.")
+    parser.add_argument("--input", default=None,
+                        help="Free-form instruction for agent_mode. "
+                             "Alternative: set AGENT_INPUT env. Ignored "
+                             "for non-agent_mode tasks.")
     args = parser.parse_args()
+
+    # For agent_mode, expose the instruction via env so run_agent can
+    # pick it up without changing its signature (which other tasks rely on).
+    if args.task == "agent_mode" and args.input:
+        os.environ["AGENT_INPUT"] = args.input
 
     print(f"=== NAPCO Nucleus: task={args.task} dry_run={args.dry_run} ===\n", flush=True)
     anyio.run(run_agent, args.task, args.dry_run)
