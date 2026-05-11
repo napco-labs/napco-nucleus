@@ -156,6 +156,17 @@ async def run_agent(task: str, dry_run: bool) -> None:
     allowed.extend(["WebSearch", "WebFetch"])
 
     system_prompt = _load_prompt(task)
+    # Calibration feedback — only injected for identify-style tasks
+    # that actually emit confidence numbers. The advice is empty until
+    # enough review decisions accumulate (default >=10 per bucket).
+    if task == "verify_session":
+        try:
+            import memory as _memory  # lazy
+            advice = _memory.calibration_advice(min_decisions=10)
+        except Exception:
+            advice = ""
+        if advice:
+            system_prompt += "\n\n---\n\n" + advice
     if dry_run:
         system_prompt += (
             "\n\n---\n\n"

@@ -102,7 +102,18 @@ def _read_session_text(session_path: Path) -> str:
 
 def _load_prompt(name: str) -> str:
     path = _PROMPT_DIR / f"pipeline_{name}.md"
-    return path.read_text(encoding="utf-8")
+    raw = path.read_text(encoding="utf-8")
+    # Calibration feedback — injected only into stages that emit
+    # confidence numbers (extract assigns tentative confidence; critic
+    # produces the final confidence). draft is mechanical; skip.
+    if name in ("extract", "critique"):
+        try:
+            advice = memory.calibration_advice(min_decisions=10)
+        except Exception:
+            advice = ""
+        if advice:
+            raw += "\n\n---\n\n" + advice
+    return raw
 
 
 # ── Claude SDK helpers ────────────────────────────────────────────

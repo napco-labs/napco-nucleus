@@ -87,7 +87,13 @@ CREATE TABLE IF NOT EXISTS requirements_seen (
     confirmation_status TEXT NOT NULL DEFAULT 'pending',  -- pending|confirmed|needs_change|rejected|unclear
     confirmation_at TEXT,
     confirmation_notes TEXT NOT NULL DEFAULT '',
-    confirmation_email_uid TEXT
+    confirmation_email_uid TEXT,
+    -- Sent-folder tracking (added 2026-05-11). When the verification
+    -- email actually leaves Drafts -> Sent, sent_at gets stamped by
+    -- tools/poll_sent.py. Distinct from confirmation_at (client's
+    -- reply). Lifecycle: drafted -> sent_at -> confirmation_at.
+    sent_at TEXT,
+    sent_email_uid TEXT
 );
 CREATE UNIQUE INDEX IF NOT EXISTS ux_requirements_norm_source
     ON requirements_seen(title_norm, source);
@@ -230,6 +236,12 @@ def _migrate_requirements_seen(conn: sqlite3.Connection) -> None:
         conn.execute(
             "ALTER TABLE requirements_seen ADD COLUMN "
             "confirmation_email_uid TEXT")
+    if "sent_at" not in cols:
+        conn.execute(
+            "ALTER TABLE requirements_seen ADD COLUMN sent_at TEXT")
+    if "sent_email_uid" not in cols:
+        conn.execute(
+            "ALTER TABLE requirements_seen ADD COLUMN sent_email_uid TEXT")
     # Idempotent — runs on fresh installs (where the column is present
     # via the CREATE TABLE in _SCHEMA) and on migrated installs alike.
     conn.execute(
@@ -413,6 +425,55 @@ def update_confirmation(
     except Exception as e:
         logger.warning("memory.update_confirmation failed: %s", e)
         return False
+
+
+def mark_sent_by_subject(subject: str, sent_at: str,
+                         sent_email_uid: str | None = None) -> int:
+    """Stamp sent_at on every requirement whose verification email had
+    the given subject. Called by tools/poll_sent.py after detecting
+    a draft-turned-sent message. Returns rows updated."""
+    if not subject:
+        return 0
+    try:
+        with _conn() as c:
+            # Match via the existing confirmation/sidecar trail:
+            # poll_sent passes the verification subject ("Requirements
+            # Verification - YYYY-MM-DD"). Requirements drafted on
+            # that day are the ones to stamp. Use sent_at IS NULL so
+            # we don't overwrite an earlier stamp.
+            cur = c.execute(
+                "UPDATE requirements_seen SET "
+                "  sent_at = ?, "
+                "  sent_email_uid = COALESCE(?, sent_email_uid) "
+                "WHERE sent_at IS NULL "
+                "AND date(first_seen) = date(?)",
+                (sent_at, sent_email_uid, sent_at),
+            )
+            return cur.rowcount
+    except Exception as e:
+        logger.warning("memory.mark_sent_by_subject failed: %s", e)
+        return 0
+
+
+def sent_counts() -> dict[str, int]:
+    """{drafted, sent, awaiting_reply}: drafted = total rows; sent =
+    rows with sent_at; awaiting_reply = sent but no confirmation_at."""
+    try:
+        with _conn() as c:
+            drafted = c.execute(
+                "SELECT COUNT(*) FROM requirements_seen").fetchone()[0]
+            sent = c.execute(
+                "SELECT COUNT(*) FROM requirements_seen "
+                "WHERE sent_at IS NOT NULL").fetchone()[0]
+            awaiting = c.execute(
+                "SELECT COUNT(*) FROM requirements_seen "
+                "WHERE sent_at IS NOT NULL "
+                "AND confirmation_status = 'pending'").fetchone()[0]
+            return {"drafted": drafted, "sent": sent,
+                    "awaiting_reply": awaiting}
+    except Exception as e:
+        logger.warning("memory.sent_counts failed: %s", e)
+        return {}
 
 
 def confirmation_counts() -> dict[str, int]:
@@ -764,6 +825,58 @@ def recent_reviews(limit: int = 50) -> list[dict]:
     except Exception as e:
         logger.warning("memory.recent_reviews failed: %s", e)
         return []
+
+
+def calibration_advice(min_decisions: int = 10) -> str:
+    """Produce a short advisory block summarizing how well the LLM's
+    stated confidence has matched reality so far. Injected into the
+    identify-stage system prompts so the model adjusts its rubric
+    over time based on real reviewer data.
+
+    Returns "" when there's not enough decided data to be useful
+    (per-bucket threshold: min_decisions, default 10). The caller
+    should treat "" as "no advisory — keep using the static rubric."
+    """
+    buckets = calibration_buckets()
+    actionable: list[str] = []
+    for b in buckets:
+        decided = b.get("decided", 0)
+        rate = b.get("accept_rate")
+        if decided < max(1, int(min_decisions)) or rate is None:
+            continue
+        lo, hi = b["lo"], min(b["hi"], 1.0)
+        midpoint = (lo + hi) / 2
+        delta = rate - midpoint
+        # Only call out buckets that are meaningfully miscalibrated
+        if abs(delta) < 0.10:
+            actionable.append(
+                f"- Predictions at {lo:.2f}-{hi:.2f}: accepted "
+                f"{rate:.0%} of the time (n={decided}). "
+                f"Well calibrated — keep this rubric."
+            )
+        elif delta < 0:
+            actionable.append(
+                f"- Predictions at {lo:.2f}-{hi:.2f}: actually accepted "
+                f"only {rate:.0%} of the time (n={decided}). "
+                f"You appear OVERCONFIDENT in this range. "
+                f"Default to lower confidence next time."
+            )
+        else:
+            actionable.append(
+                f"- Predictions at {lo:.2f}-{hi:.2f}: actually accepted "
+                f"{rate:.0%} of the time (n={decided}). "
+                f"You appear UNDERCONFIDENT in this range. "
+                f"You can rate these items higher."
+            )
+    if not actionable:
+        return ""
+    header = (
+        "## Calibration feedback from prior reviews\n\n"
+        "Earlier verification runs were reviewed by the human reviewer "
+        "(keep/edit/reject decisions). Use the data below to adjust "
+        "how confident you sound on this run:\n"
+    )
+    return header + "\n".join(actionable) + "\n"
 
 
 def calibration_buckets(

@@ -60,8 +60,13 @@ def _safe_recipient(addr: str) -> str:
 
 
 _DRAFTS_ROOT = Path(__file__).parent.parent / "data" / "requirements" / "drafts"
+_TEMPLATES_DIR = Path(__file__).parent.parent / "data" / "templates"
 
-_DEFAULT_BODY_SINGLE = (
+# Built-in fallbacks when no template files exist on disk. These match
+# the historical behaviour exactly so removing all template files
+# leaves output unchanged.
+
+_FALLBACK_BODY_SINGLE = (
     "Hi,\n\n"
     "Attached is the requirements summary I prepared from our recent "
     "discussions across email, Teams, and our last call.\n\n"
@@ -74,7 +79,7 @@ _DEFAULT_BODY_SINGLE = (
     "Thanks"
 )
 
-_DEFAULT_BODY_BOTH = (
+_FALLBACK_BODY_BOTH = (
     "Hi,\n\n"
     "Two attachments for your review:\n\n"
     "  1. Requirements Verification - the distinct items I extracted "
@@ -93,6 +98,99 @@ _DEFAULT_BODY_BOTH = (
 )
 
 
+_TEMPLATE_INTRO_SINGLE = (
+    "Attached is the requirements summary I prepared from our recent "
+    "discussions across email, Teams, and our last call."
+)
+
+_TEMPLATE_INTRO_BOTH = (
+    "Two attachments for your review:\n\n"
+    "  1. Requirements Verification - the distinct items I extracted "
+    "from our recent discussions.\n"
+    "  2. Pull Session - the raw source material those items were "
+    "drawn from (email, Teams chat, Drive files, and the call "
+    "transcript), bundled together so you can cross-check anything "
+    "that looks off."
+)
+
+
+_TEMPLATE_SLUG_RE = re.compile(r"[^a-zA-Z0-9._-]+")
+
+
+def _slugify_client(name: str) -> str:
+    s = _TEMPLATE_SLUG_RE.sub("-", (name or "").strip()).strip("-")
+    return s[:60].lower() or "default"
+
+
+def _template_path_for(client_name: str | None) -> Path | None:
+    """Resolve a per-client template, falling back to default. Returns
+    the path that exists on disk, or None if no template files are
+    present (caller uses the hard-coded fallback)."""
+    candidates: list[Path] = []
+    if client_name:
+        slug = _slugify_client(client_name)
+        candidates.append(_TEMPLATES_DIR / f"draft_{slug}.md")
+        # AEL-internal stakeholders share one informal template
+        if slug in {"assaduz-zaman", "atikur-zaman", "ahsan-habib",
+                    "isruk-hasan", "titu"}:
+            candidates.append(_TEMPLATES_DIR / "draft_internal.md")
+    candidates.append(_TEMPLATES_DIR / "draft_default.md")
+    for p in candidates:
+        if p.is_file():
+            return p
+    return None
+
+
+def _load_body(client_name: str | None, both_attachments: bool) -> str:
+    """Compose the email body. Per-client template if present; built-in
+    fallback otherwise. Supports the placeholders:
+
+      {client_name}        — canonical client name as passed
+      {greeting_name}      — short addressee (first name when known)
+      {intro_one_or_both}  — the right intro block based on attachment count
+      {greeting}           — pre-baked "Hi {greeting_name}," line
+    """
+    tpl = _template_path_for(client_name)
+    if not tpl:
+        return _FALLBACK_BODY_BOTH if both_attachments else _FALLBACK_BODY_SINGLE
+    try:
+        raw = tpl.read_text(encoding="utf-8")
+    except Exception:
+        return _FALLBACK_BODY_BOTH if both_attachments else _FALLBACK_BODY_SINGLE
+
+    greeting_name = _greeting_name(client_name)
+    intro = _TEMPLATE_INTRO_BOTH if both_attachments else _TEMPLATE_INTRO_SINGLE
+    greeting = f"Hi {greeting_name}," if greeting_name else "Hi,"
+
+    try:
+        return raw.format(
+            client_name=(client_name or ""),
+            greeting_name=greeting_name,
+            intro_one_or_both=intro,
+            greeting=greeting,
+        ).strip() + "\n"
+    except (KeyError, IndexError):
+        # Template referenced a placeholder we don't expose — fall back
+        # silently rather than mangling the output.
+        return (_FALLBACK_BODY_BOTH if both_attachments
+                else _FALLBACK_BODY_SINGLE)
+
+
+def _greeting_name(client_name: str | None) -> str:
+    """Best-effort first-name greeting. Returns '' when ambiguous."""
+    if not client_name:
+        return ""
+    name = client_name.strip()
+    # Group identifiers don't take a first name greeting
+    if name.lower() in {"napco security", "team"}:
+        return "team"
+    # Split on space; take first token if it looks like a personal name
+    parts = name.split()
+    if parts and parts[0][0:1].isupper():
+        return parts[0]
+    return ""
+
+
 # ─── draft_verification_email ───────────────────────────────────────
 
 @tool(
@@ -108,11 +206,14 @@ _DEFAULT_BODY_BOTH = (
     "— raw pull-session .docx for the second attachment), `to` "
     "(optional — defaults to VERIFICATION_TO env), `subject` (optional "
     "— defaults to 'Requirements Verification - <date>'), `body` "
-    "(optional — auto-selected based on whether one or two attachments "
-    "are passed). From: SMTP_FROM env. Returns {drafted, draft_path, "
-    "to, from, subject, attachments} or {error}.",
+    "(optional — when omitted, looks up a per-client template from "
+    "data/templates/draft_<slug>.md based on `client_name`, falling "
+    "back to draft_default.md, then a hard-coded body), `client_name` "
+    "(optional — drives template selection; pass the canonical client "
+    "name from step 1.5). From: SMTP_FROM env. Returns {drafted, "
+    "draft_path, to, from, subject, attachments, template} or {error}.",
     {"docx_path": str, "session_docx_path": str,
-     "to": str, "subject": str, "body": str},
+     "to": str, "subject": str, "body": str, "client_name": str},
 )
 async def draft_verification_email_tool(args):
     docx_path = (args.get("docx_path") or "").strip()
@@ -152,10 +253,14 @@ async def draft_verification_email_tool(args):
     if not subject:
         subject = f"Requirements Verification - {_today_stamp()}"
     body_arg = (args.get("body") or "").strip()
+    client_name = (args.get("client_name") or "").strip() or None
+    tpl_used = "explicit-body"
     if body_arg:
         body = body_arg
     else:
-        body = _DEFAULT_BODY_BOTH if session_path else _DEFAULT_BODY_SINGLE
+        body = _load_body(client_name, both_attachments=bool(session_path))
+        tpl_path = _template_path_for(client_name)
+        tpl_used = (tpl_path.name if tpl_path else "fallback-builtin")
 
     msg = EmailMessage()
     msg["From"] = sender
@@ -234,8 +339,11 @@ async def draft_verification_email_tool(args):
         result="drafted" + ("+imap" if imap_result["appended"] else ""),
         technical_details={"to": to_addr, "from": from_addr, "subject": subject,
                            "attachments": attachment_names, "draft_path": rel,
+                           "client_name": client_name,
+                           "template": tpl_used,
                            "imap_appended": imap_result["appended"],
                            "imap_folder": imap_result["folder"],
+                           "imap_replaced": imap_result.get("replaced", 0),
                            "imap_error": imap_result["error"]},
     )
 
@@ -252,11 +360,14 @@ async def draft_verification_email_tool(args):
         "absolute_path": str(draft_path),
         "imap_appended": imap_result["appended"],
         "drafts_folder": imap_result["folder"],
+        "imap_replaced": imap_result.get("replaced", 0),
         "imap_error": imap_result["error"],
         "to": to_addr,
         "from": from_addr,
         "subject": subject,
         "attachments": attachment_names,
+        "client_name": client_name,
+        "template": tpl_used,
         "next_step": next_step,
     })
 

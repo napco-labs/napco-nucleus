@@ -21,11 +21,14 @@ You will receive in the user message the final requirements JSON (the Critic's o
    ```
    draft_verification_email(
        docx_path=<path from step 2>,
-       session_docx_path="data/requirements/sessions/current.docx"
+       session_docx_path="data/requirements/sessions/current.docx",
+       client_name="<the canonical client_name shared by the input requirements>"
    )
    ```
 
    Both files go on the same email. Default recipient is `VERIFICATION_TO` from .env.
+
+   `client_name` drives template selection (`data/templates/draft_<slug>.md`). If all input requirements share the same `client_name`, pass it. If they're split across clients, pass the dominant one (or leave empty for default template) and call this tool ONCE per distinct client if separate emails are needed — note that today's implementation produces ONE email per call.
 
    Honors `NAPCO_NUCLEUS_DRY_RUN=1` automatically — returns `{drafted: false, dry_run: true, ...}` and writes nothing in dry-run mode.
 

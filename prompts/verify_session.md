@@ -93,7 +93,9 @@ Pass ALL five fields per requirement (title, summary, source_refs, confidence, r
 
 ### 4. Draft ONE client email — with TWO attachments
 
-`draft_verification_email(docx_path=<path from step 3>, session_docx_path=<session_path from step 1>)`.
+`draft_verification_email(docx_path=<path from step 3>, session_docx_path=<session_path from step 1>, client_name="<the client identified in step 1.5>")`.
+
+Pass `client_name` — the tool uses it to look up `data/templates/draft_<slug>.md` for tone (formal for NAPCO Security, informal for AEL-internal stakeholders) and to address the email correctly. Without `client_name` you get the default template.
 
 Two attachments go into ONE email:
 1. **Requirements Verification .docx** (the curated list from step 3)
