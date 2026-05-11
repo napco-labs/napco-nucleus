@@ -94,6 +94,16 @@ _ATTACHMENT_EXT_KIND = {
     ".xlsx": "xlsx",
     ".xlsm": "xlsx",
     ".xls": "xls",
+    # Image OCR — extracted to text via Tesseract if available, else
+    # a placeholder pointing the reviewer at the file.
+    ".png": "image",
+    ".jpg": "image",
+    ".jpeg": "image",
+    ".gif": "image",
+    ".webp": "image",
+    ".bmp": "image",
+    ".tiff": "image",
+    ".tif": "image",
 }
 
 
@@ -174,7 +184,57 @@ def _extract_attachment_text(path: Path, kind: str) -> str:
         return di._extract_xlsx_text(path)
     if kind == "xls":
         return di._extract_xls_text(path)
+    if kind == "image":
+        return _extract_image_text(path)
     return ""
+
+
+def _extract_image_text(path: Path) -> str:
+    """OCR an image attachment (screenshots dropped in Teams chat).
+
+    Uses Tesseract via pytesseract if available. Tesseract is a system
+    binary, not a pip package — install:
+
+      Windows:  winget install --id UB-Mannheim.TesseractOCR
+                (or download from
+                https://github.com/UB-Mannheim/tesseract/wiki)
+      Plus the Bangla language pack for Bangla-text screenshots.
+
+    If pytesseract or the binary is missing, returns a placeholder
+    pointing the reviewer at the file — the pipeline continues, the
+    LLM identifier just sees less detail for image inputs.
+    """
+    try:
+        import pytesseract  # type: ignore
+        from PIL import Image  # type: ignore
+    except ImportError:
+        return (
+            f"(image attachment {path.name} not OCR'd — install "
+            f"pytesseract + Pillow + Tesseract OCR to enable. "
+            f"Reviewer should open {path} manually if it matters.)"
+        )
+    try:
+        img = Image.open(str(path))
+    except Exception as e:
+        return f"(could not open image {path.name}: {e})"
+
+    # Try Bangla + English first (most common case for NAPCO). Fall
+    # back to English-only if the Bangla traineddata isn't installed.
+    for lang in ("ben+eng", "eng"):
+        try:
+            text = pytesseract.image_to_string(img, lang=lang)
+        except pytesseract.TesseractError as e:
+            if "Failed loading language" in str(e) and lang != "eng":
+                continue
+            return (f"(Tesseract failed on {path.name}: {e}. "
+                    f"Reviewer should open the image manually.)")
+        except Exception as e:
+            return f"(OCR error on {path.name}: {e})"
+        text = (text or "").strip()
+        if not text:
+            return f"(no readable text found in {path.name})"
+        return f"[OCR via Tesseract, lang={lang}]\n{text}"
+    return f"(OCR returned empty text for {path.name})"
 
 
 def _transcribe_call(mic: Path | None, speaker: Path | None,

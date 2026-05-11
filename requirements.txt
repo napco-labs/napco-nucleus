@@ -22,3 +22,9 @@ reportlab>=4.0
 # Excel extraction (.xlsx via openpyxl, legacy .xls via xlrd)
 openpyxl>=3.1
 xlrd>=2.0.1
+# Image OCR (chat screenshots). Requires the Tesseract binary on the
+# host PATH — winget install UB-Mannheim.TesseractOCR on Windows.
+# For Bangla screenshots also install the ben language data.
+# Pipeline falls back to a placeholder if these aren't installed.
+pytesseract>=0.3.10
+Pillow>=10.0.0
