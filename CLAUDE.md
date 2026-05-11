@@ -1,0 +1,84 @@
+# NAPCO Nucleus — Claude Code instructions
+
+This file is auto-loaded into every Claude Code session opened inside this repo. It tells you (Claude Code) how to recognize voice-command-style instructions from the developer and what to do when they're issued.
+
+## Call recording — voice commands in chat
+
+When the developer (the person typing into Claude Code) says any of these phrases — **case-insensitive, anywhere in the message** — start recording the Teams call on their machine immediately:
+
+- `call start` / `record start` / `call record start`
+- `start call` / `start record` / `start recording`
+- `record` (as a standalone command)
+- `start` (as a standalone command, when context is obviously about recording)
+- `nucleus start`
+- Bangla: `assalamualaikum`, `as-salamu alaikum`, `salaam alaikum`, `salam alaikum`
+
+**Action — start:** Run this command in the background (so the dev's terminal stays interactive):
+
+```bash
+py -3 -m teams.record_call
+```
+
+Use `run_in_background=true` on the Bash call. Confirm to the developer with one sentence: *"Recording started — call audio is being captured on both tracks."*
+
+When the developer says any of these — opposite intent:
+
+- `call end` / `record end` / `call record end`
+- `stop call` / `stop record` / `stop recording`
+- `end call` / `end record` / `end recording`
+- `stop` / `end` (as standalone commands when the recording context is active)
+- `nucleus stop`
+- Bangla: `allah hafez`, `allah hafiz`, `khoda hafez`, `khoda hafiz`
+
+**Action — stop:** Run this command (foreground, fast):
+
+```bash
+py -3 -m teams.stop_recording
+```
+
+This drops a sentinel file the recorder polls every ~0.5s. The recorder closes the WAVs cleanly and uploads them to the central share (`NUCLEUS_CENTRAL_PATH` env). Confirm with one sentence: *"Recording stopped — files are being uploaded to the central share."*
+
+### Important behavior rules
+
+- **Don't ask for confirmation.** If the developer says "call start", they want it started — they're already on the call. Asking "are you sure?" defeats the point. Just run the command and confirm what happened.
+- **Background mode for `record_call`** is non-negotiable. The recorder is a long-running process; if you run it foreground, you'll lock the developer's terminal for the whole call.
+- **One recording at a time per machine.** If a recording is already running and the dev says "start", say so plainly — don't start a second one.
+- **Don't gate on whether Teams has an active call from your side.** The voice daemon does that for audio triggers; for typed commands, trust the developer.
+
+## Other common dev commands they might ask about
+
+| Developer says | You run |
+|---|---|
+| "push my chat now" / "send chat to central" | `Start-ScheduledTask -TaskName 'NAPCO Nucleus - Chat Push'` (PowerShell) |
+| "verify install" / "check setup" | `py -3 -m tools.healthcheck` |
+| "run it right now for X" / "do it right now X" | `py -3 do_it_now.py --client "X" --last-minutes 60` (defer to wider window if X is a multi-day client) |
+| "review the draft" / "review session" | `py -3 -m tools.review_session` |
+| "calibration report" / "show curve" | `py -3 -m tools.calibration_report` |
+| "today's summary" | `py -3 -m tools.daily_summary` |
+| "what did this cost" / "cost report" | `py -3 -m tools.cost_report --since 7d` |
+| "poll replies" / "any client replies" | `py -3 -m tools.poll_replies --days 7` |
+| "show latest trace" / "what just happened" | `py -3 -m tools.replay_trace --latest` |
+
+## Project quick-orient (for new sessions)
+
+- **Goal**: turn multi-channel client communications (Teams chat, Teams audio, email + attachments, Google Drive files) into a verified requirements doc + a Gmail draft to the client.
+- **Topology**: each dev's machine captures and pushes; one **agent host** (MVPACCESS, `172.16.205.209`) aggregates and runs the LLM. The single-call entry is `agent.py --task verify_session`; the multi-agent decomposition is `pipeline.py`.
+- **Central share**: `\\172.16.205.209\nucleus-central\<dev>\<date>\` — chat .docx, attachments, call .wav + metadata.
+- **Memory DB**: `nucleus_memory.db` (SQLite) holds `requirements_seen`, `activity_logs`, `requirement_reviews`, etc.
+- **Tracing**: every `pipeline.py` run writes `data/traces/<date>/<run_id>.jsonl`. Use `tools/replay_trace.py` to inspect.
+- **Per-developer setup**: see `docs/Setup_Guide.pdf`. No secrets in dev `.env` — only `NUCLEUS_CENTRAL_PATH`.
+
+## Style conventions for code in this repo
+
+- Python 3.11+; Windows-targeted (Teams ingest reads Windows IndexedDB).
+- Lazy imports inside functions for heavy deps (faster-whisper, python-docx, etc.) so import time stays fast.
+- `_session_doc.append_section()` is the single canonical way to add content to the pull-session doc.
+- Source IDs follow `<channel>/<headline-slug>/<8-char-sha1>` — never paraphrase, always copy verbatim.
+- New tools live in `tools/`, prefixed with `_` if they're helpers not meant for direct CLI use.
+
+## What NOT to do
+
+- Don't write to `central` directly — go through `push_chat.py` or `record_call.py`.
+- Don't add `ANTHROPIC_API_KEY` as a secret. Claude calls go through the local CLI on each user's machine, or through MVPACCESS's authenticated session for the identify pipeline.
+- Don't bypass the Drafts review step. The agent never sends client emails directly — drafts only.
+- Don't change prompts in `prompts/` casually. Each change can shift calibration; run `evals/run.py` to verify after a prompt change.
