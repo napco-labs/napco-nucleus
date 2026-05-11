@@ -1,0 +1,85 @@
+{
+  "run_id": "20260511T161041",
+  "timestamp": "2026-05-11T16:10:41",
+  "git_commit": "8109ecb",
+  "options": {
+    "case_filter": "example_operator_management",
+    "no_replay": false,
+    "skip_llm_judge": true
+  },
+  "cases": [
+    {
+      "case_name": "example_operator_management",
+      "case_dir": "evals/cases/example_operator_management",
+      "expected_path": "evals/cases/example_operator_management/expected.json",
+      "session_fixture_path": "evals/cases/example_operator_management/session.docx",
+      "agent": {
+        "returncode": 0,
+        "stdout_tail": "e the DB writes were skipped anyway. Proceeding to the final summary.\n\n---\n\n## Verify Pull Session, Complete (DRY-RUN)\n\n| Item | Value |\n|---|---|\n| **Session doc** | `data/requirements/sessions/current.docx` |\n| **Started at** | 2026-05-11 16:08:56 |\n| **Label** | `eval-example_operator_management-20260511T160856` |\n| **Sections (4)** | 1. EMAIL, from akib@acme.com, Operator Management feature spec |\n| | 2. TEAMS CHAT, ContiHosting (chat #118), 2026-05-09 13:36 |\n| | 3. TEAMS CHAT, Engineering (chat #124), 2026-05-09 09:05 |\n| | 4. TEAMS CHAT, Engineering (chat #120), 2026-05-09 15:23 |\n\n### Requirements identified: 4 (all from the email section)\n\n| # | Title | Confidence |\n|---|---|---|\n| 1 | Implement full CRUD for operator entity | 0.95 |\n| 2 | Add server-side operator search with pagination | 0.95 |\n| 3 | Enforce role-based access control on operator management | 0.95 |\n| 4 | Record audit log for all operator CRUD actions with 90-day retention | 0.95 |\n\n**Mean confidence: 0.95** | **Low-confidence items: 0** (none below 0.75)\n\nAll 3 Teams Chat sections were correctly filtered as noise (Bangla food chat, WFH status, internal team process message).\n\n### Artifacts\n\n| Artifact | Path / Status |\n|---|---|\n| **Verification doc** | `data/requirements/Requirements Verification 2026-05-11.docx` (written) |\n| **Verification email** | DRY-RUN: not written, not pushed to IMAP |\n| **Email recipient** | `akib@acme.com` (from: `khasan@ael-bd.com`) |\n| **Attachments** | `Requirements Verification 2026-05-11.docx` + `Pull Session 2026-05-11.docx` |\n| **IMAP push** | Skipped (dry run) |\n| **remember_requirement** | 4 calls made, all skipped (eval mode) |\n\nNo low-confidence items to flag. All 4 requirements were explicitly stated in the client's attached functional specification, making this a high-confidence extraction. In a live run, the .eml would be in `data/requirements/drafts/2026-05-11/` and also pushed to the Outlook Drafts folder for review before sending.\n\n=== Done ===\n",
+        "stderr_tail": "2026-05-11 16:08:58,227 [INFO] claude_agent_sdk._internal.transport.subprocess_cli: Using bundled Claude Code CLI: C:\\Python313\\Lib\\site-packages\\claude_agent_sdk\\_bundled\\claude.exe\n",
+        "timed_out": false
+      },
+      "predicted_doc": {
+        "generated_at": "2026-05-11T16:09:46",
+        "docx_path": "data/requirements/Requirements Verification 2026-05-11.docx",
+        "requirement_count": 4,
+        "requirements": [
+          {
+            "title": "Implement full CRUD for operator entity",
+            "summary": "The system must support create, read, update, and delete operations on the operators table. This covers the complete lifecycle of an operator record, from initial creation through modification to removal. The client spec (Operator_spec.pdf v1.0) lists this as item 1.",
+            "source_refs": [
+              "email/akib-acme.com/2026-05-10T1423/eval0001"
+            ],
+            "confidence": 0.95,
+            "rationale": "Explicitly listed as item 1 in the attached functional specification from the client."
+          },
+          {
+            "title": "Add server-side operator search with pagination",
+            "summary": "Users must be able to search operators by name, phone number, or assigned outlet. Filtering must happen server-side (not client-side) and results must be paginated. This is item 2 in the client spec.",
+            "source_refs": [
+              "email/akib-acme.com/2026-05-10T1423/eval0001"
+            ],
+            "confidence": 0.95,
+            "rationale": "Explicitly listed as item 2 in the attached functional specification from the client."
+          },
+          {
+            "title": "Enforce role-based access control on operator management",
+            "summary": "Three roles govern access to operator records. Admin gets full CRUD permissions. Supervisor can view and comment only. Operators can view their own record but cannot edit or delete. This is item 3 in the client spec.",
+            "source_refs": [
+              "email/akib-acme.com/2026-05-10T1423/eval0001"
+            ],
+            "confidence": 0.95,
+            "rationale": "Explicitly listed as item 3 in the attached functional specification with per-role breakdown."
+          },
+          {
+            "title": "Record audit log for all operator CRUD actions with 90-day retention",
+            "summary": "Every create, update, and delete action on an operator record must produce an audit log entry capturing the actor, timestamp, and a before/after snapshot of the changed fields. Audit records must be retained for at least 90 days. This is item 4 in the client spec.",
+            "source_refs": [
+              "email/akib-acme.com/2026-05-10T1423/eval0001"
+            ],
+            "confidence": 0.95,
+            "rationale": "Explicitly listed as item 4 in the attached functional specification with retention period stated."
+          }
+        ]
+      },
+      "score": {
+        "predicted_count": 4,
+        "expected_count": 1,
+        "note": "scoring skipped (--skip-llm-judge)"
+      }
+    }
+  ],
+  "summary": {
+    "case_count": 1,
+    "scored_count": 0,
+    "errored_count": 0,
+    "mean_precision": null,
+    "mean_recall": null,
+    "mean_f1": null,
+    "mean_citation_correctness": null,
+    "mean_predicted_confidence": null,
+    "total_extras": 0,
+    "total_missed_recall": 0,
+    "total_floor_violations": 0
+  }
+}
