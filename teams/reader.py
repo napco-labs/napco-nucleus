@@ -46,6 +46,60 @@ def _is_real_chat(msg: dict) -> bool:
     return mt in ("Text", "RichText/Html") or mt.startswith("RichText")
 
 
+# URIObject types Teams uses for shared content
+_URI_TYPE_LABEL = {
+    "File.1": "File",
+    "Picture.1": "Image",
+    "Video.1": "Video",
+    "Audio.1": "Audio",
+}
+
+
+def _fmt_size(n: int) -> str:
+    for unit in ("B", "KB", "MB", "GB"):
+        if n < 1024 or unit == "GB":
+            return f"{n:.0f} {unit}" if unit == "B" else f"{n:.1f} {unit}"
+        n /= 1024
+    return f"{n:.1f} GB"
+
+
+def _extract_uriobject(content: str) -> dict | None:
+    """Pull attachment metadata from a URIObject XML blob. Returns
+    {name, kind, size_bytes, url} or None if no URIObject present."""
+    if "<URIObject" not in content:
+        return None
+    type_m = re.search(r'\btype="([^"]+)"', content)
+    uri_m = re.search(r'\buri="([^"]+)"', content)
+    name_m = re.search(r'<OriginalName\s+v="([^"]*)"', content)
+    size_m = re.search(r'<FileSize\s+v="(\d+)"', content)
+    obj_type = (type_m.group(1) if type_m else "") or ""
+    kind = _URI_TYPE_LABEL.get(obj_type, obj_type or "Attachment")
+    size_bytes = int(size_m.group(1)) if size_m else 0
+    return {
+        "name": (name_m.group(1) if name_m else "") or "(no name)",
+        "kind": kind,
+        "size_bytes": size_bytes,
+        "url": (uri_m.group(1) if uri_m else "") or "",
+    }
+
+
+def _format_attachment_body(att: dict) -> str:
+    """Render one URIObject's metadata as a single readable body line."""
+    size = f", {_fmt_size(att['size_bytes'])}" if att.get("size_bytes") else ""
+    url = f"\nURL: {att['url']}" if att.get("url") else ""
+    return f"[Attachment: {att['name']} ({att['kind']}{size})]{url}"
+
+
+def _extract_contact_body(content: str) -> str:
+    """Render <contacts><c .../></contacts> as a body line."""
+    names: list[str] = []
+    for m in re.finditer(r'<c\s[^>]*f="([^"]+)"', content):
+        names.append(m.group(1))
+    if not names:
+        return "[Shared contact]"
+    return "[Shared contact: " + ", ".join(names) + "]"
+
+
 def _find_db(db, prefix: str):
     for info in db.database_ids:
         if info.name and info.name.startswith(prefix):
@@ -139,7 +193,27 @@ def _normalize_message(msg: dict, key: str, conversation_id: str, profiles: dict
     )
 
     content = _coerce_text(msg.get("content"))
-    body = _strip_html(content) if "<" in content else content.strip()
+    mt = msg.get("messageType") or ""
+
+    # Attachment messages: file / image / video / audio shared in chat.
+    # Replace the (largely useless) HTML chrome with a structured
+    # one-liner so downstream consumers and the LLM identifier see the
+    # filename, kind, size, and URL.
+    attachment = None
+    if mt in ("RichText/Media_GenericFile", "RichText/UriObject") \
+            or mt.startswith("RichText/Media_"):
+        attachment = _extract_uriobject(content)
+
+    if attachment:
+        body = _format_attachment_body(attachment)
+    elif mt == "RichText/Contacts":
+        body = _extract_contact_body(content)
+    elif mt in ("RichText/Media_CallTranscript", "RichText/Media_Album"):
+        # CallTranscript carries opaque JSON pointer metadata; Album is empty.
+        # Neither contributes to requirement extraction — emit nothing.
+        body = ""
+    else:
+        body = _strip_html(content) if "<" in content else content.strip()
 
     return {
         "id": mid,
@@ -152,8 +226,9 @@ def _normalize_message(msg: dict, key: str, conversation_id: str, profiles: dict
             or msg.get("clientArrivalTime")
             or 0
         ),
-        "message_type": msg.get("messageType", ""),
+        "message_type": mt,
         "body": body,
+        "attachment": attachment,
         "raw": msg,
     }
 

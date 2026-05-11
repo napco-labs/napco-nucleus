@@ -319,7 +319,7 @@ def main() -> int:
                         segments, _ = model.transcribe(
                             audio, language="en", beam_size=1)
                         text = " ".join(s.text for s in segments).strip()
-                        _handle_transcript(text, state)
+                        _handle_transcript(text, state, phrases)
                     buf = []
                     silent_frames = 0
     except KeyboardInterrupt:

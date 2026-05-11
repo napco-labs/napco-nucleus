@@ -93,6 +93,10 @@ def _extract(tmp_path: Path, kind: str) -> str:
         return di._extract_doc_text(tmp_path)
     if kind == "txt":
         return di._extract_txt_text(tmp_path)
+    if kind == "xlsx":
+        return di._extract_xlsx_text(tmp_path)
+    if kind == "xls":
+        return di._extract_xls_text(tmp_path)
     return ""
 
 

@@ -1,14 +1,17 @@
 """
 Drive → inbox ingester.
 
-Lists audio/video, PDF, Word (.docx), and plain-text (.txt) files in
-the configured Google Drive folder, downloads the unprocessed ones, and
-routes each to the right handler:
+Lists audio/video, PDF, Word (.docx / .doc), plain-text (.txt), and
+Excel (.xlsx / .xls) files in the configured Google Drive folder,
+downloads the unprocessed ones, and routes each to the right handler:
 
   - Audio / video → Groq Whisper → data/requirements/inbox/meetings/*.txt
   - PDF           → pypdf text extraction → data/requirements/inbox/documents/*.txt
   - Word (.docx)  → python-docx paragraph extraction → inbox/documents/*.txt
+  - Word (.doc)   → legacy OLE byte-scan → inbox/documents/*.txt
   - Plain text    → direct read → inbox/documents/*.txt
+  - Excel (.xlsx) → openpyxl sheet dump → inbox/documents/*.txt
+  - Excel (.xls)  → xlrd sheet dump → inbox/documents/*.txt
 
 All outputs carry the standard 4-line header preface so the downstream
 LLM splitter treats them identically to email-sourced text.
@@ -84,10 +87,14 @@ DOC_MIMES = {"application/msword"}
 DOC_EXT = {".doc"}
 TXT_MIMES = {"text/plain"}
 TXT_EXT = {".txt"}
+XLSX_MIMES = {"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"}
+XLSX_EXT = {".xlsx", ".xlsm"}
+XLS_MIMES = {"application/vnd.ms-excel"}
+XLS_EXT = {".xls"}
 
 
 def _classify(file: dict) -> str:
-    """Return 'audio', 'pdf', 'docx', 'doc', 'txt', or 'skip' for a Drive file dict."""
+    """Return 'audio', 'pdf', 'docx', 'doc', 'txt', 'xlsx', 'xls', or 'skip'."""
     mt = (file.get("mimeType") or "").lower()
     ext = Path(file.get("name") or "").suffix.lower()
     if mt.startswith(AUDIO_MIME_PREFIXES) or ext in AUDIO_EXT_FALLBACK:
@@ -100,6 +107,10 @@ def _classify(file: dict) -> str:
         return "docx"
     if mt in TXT_MIMES or ext in TXT_EXT:
         return "txt"
+    if mt in XLSX_MIMES or ext in XLSX_EXT:
+        return "xlsx"
+    if mt in XLS_MIMES or ext in XLS_EXT:
+        return "xls"
     return "skip"
 
 
@@ -316,6 +327,38 @@ def _extract_txt_text(txt_path: Path) -> str:
     return txt_path.read_text(encoding="utf-8", errors="replace")
 
 
+# ─────────────────────────── Excel ────────────────────────────────
+
+def _extract_xlsx_text(xlsx_path: Path) -> str:
+    """Plain-text dump of every sheet via openpyxl. Empty cells -> ''."""
+    from openpyxl import load_workbook  # lazy
+    wb = load_workbook(str(xlsx_path), data_only=True, read_only=True)
+    parts: list[str] = []
+    for ws in wb.worksheets:
+        parts.append(f"=== Sheet: {ws.title} ===")
+        for row in ws.iter_rows(values_only=True):
+            cells = ["" if v is None else str(v) for v in row]
+            if any(c.strip() for c in cells):
+                parts.append(" | ".join(cells))
+        parts.append("")
+    return "\n".join(parts).strip()
+
+
+def _extract_xls_text(xls_path: Path) -> str:
+    """Plain-text dump of every sheet via xlrd (legacy .xls)."""
+    import xlrd  # lazy
+    book = xlrd.open_workbook(str(xls_path))
+    parts: list[str] = []
+    for sheet in book.sheets():
+        parts.append(f"=== Sheet: {sheet.name} ===")
+        for r in range(sheet.nrows):
+            cells = [str(sheet.cell_value(r, c)) for c in range(sheet.ncols)]
+            if any(c.strip() for c in cells):
+                parts.append(" | ".join(cells))
+        parts.append("")
+    return "\n".join(parts).strip()
+
+
 # ─────────────────────────── Main ─────────────────────────────────
 
 def _preface(file: dict, source_label: str) -> str:
@@ -343,7 +386,7 @@ def process_new_drive_files(dry_run: bool = False) -> dict:
     drive = _drive_service()
     listed = _list_ingestable_files(drive, folder_id)
     logger.info(f"Drive folder {folder_id}: found {len(listed)} "
-                f"ingestable file(s) (audio + PDF + docx + txt)")
+                f"ingestable file(s) (audio + PDF + docx + doc + txt + xlsx + xls)")
 
     state = _load_state()
     pending = [f for f in listed if not _already_processed(state, f["id"])]
@@ -439,6 +482,32 @@ def process_new_drive_files(dry_run: bool = False) -> dict:
                 logger.exception(f"doc extraction failed for {name}")
                 results.append({"file": name, "id": fid, "kind": kind,
                                 "error": f"doc: {e}"})
+                try: tmp_path.unlink()
+                except Exception: pass
+                continue
+        elif kind == "xlsx":
+            try:
+                logger.info(f"extracting text from {name} via openpyxl...")
+                text = _extract_xlsx_text(tmp_path)
+                if not text:
+                    logger.warning(f"openpyxl returned empty text for {name}")
+            except Exception as e:
+                logger.exception(f"xlsx extraction failed for {name}")
+                results.append({"file": name, "id": fid, "kind": kind,
+                                "error": f"xlsx: {e}"})
+                try: tmp_path.unlink()
+                except Exception: pass
+                continue
+        elif kind == "xls":
+            try:
+                logger.info(f"extracting text from {name} via xlrd...")
+                text = _extract_xls_text(tmp_path)
+                if not text:
+                    logger.warning(f"xlrd returned empty text for {name}")
+            except Exception as e:
+                logger.exception(f"xls extraction failed for {name}")
+                results.append({"file": name, "id": fid, "kind": kind,
+                                "error": f"xls: {e}"})
                 try: tmp_path.unlink()
                 except Exception: pass
                 continue

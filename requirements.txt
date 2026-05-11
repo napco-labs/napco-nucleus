@@ -19,3 +19,6 @@ faster-whisper>=1.2
 pdfplumber>=0.11
 # PDF generation for boss-facing documents
 reportlab>=4.0
+# Excel extraction (.xlsx via openpyxl, legacy .xls via xlrd)
+openpyxl>=3.1
+xlrd>=2.0.1

@@ -20,16 +20,27 @@ Layout it expects (created by the per-dev push):
           calls/<stamp>_mic.wav  <stamp>_speaker.wav  <stamp>.json
           chat/chat_<YYYY-MM-DD>_<HHMM>-<HHMM>.docx
 
+In addition to the per-dev push, collect_central also pulls EMAIL and
+GOOGLE DRIVE locally on the agent host (so the unified session doc has
+every requirement source, not just chat + calls from dev machines).
+Both pulls run against the time window controlled by --last-minutes.
+
 Usage
     python collect_central.py --client "Susmoy"
     python collect_central.py --client "all" --day 2026-05-08
     python collect_central.py --client "Acme" --no-identify     # aggregate only
     python collect_central.py --client "Acme" --dry-run         # plan only
+    python collect_central.py --client "Acme" --last-minutes 30 # widen window
+    python collect_central.py --client "Acme" --no-email        # skip email pull
+    python collect_central.py --client "Acme" --no-drive        # skip Drive pull
 
 Env
     NUCLEUS_CENTRAL_PATH   required (UNC or local path to the central root)
     VERIFICATION_TO        recipient for the verification email; must be set
                            if --no-identify is NOT passed.
+    REQ_IMAP_*             needed for the email pull (skip via --no-email)
+    GOOGLE_CREDENTIALS_PATH / GDRIVE_AUDIO_FOLDER_ID  needed for the
+                           Drive pull (skip via --no-drive)
 """
 from __future__ import annotations
 
@@ -207,6 +218,15 @@ def main() -> int:
                          "identify + draft step. Useful for inspecting "
                          "what got pulled before paying for an LLM run.")
     ap.set_defaults(identify=True)
+    ap.add_argument("--last-minutes", type=int, default=15,
+                    help="Time window (minutes) for the email + Drive "
+                         "pulls. Default: 15.")
+    ap.add_argument("--no-email", dest="pull_email", action="store_false",
+                    help="Skip pulling email from IMAP.")
+    ap.set_defaults(pull_email=True)
+    ap.add_argument("--no-drive", dest="pull_drive", action="store_false",
+                    help="Skip pulling files from Google Drive.")
+    ap.set_defaults(pull_drive=True)
     ap.add_argument("--dry-run", action="store_true",
                     help="List what would be pulled but don't read WAVs, "
                          "transcribe, or write the session doc.")
@@ -250,6 +270,32 @@ def main() -> int:
             label=f"central-{args.client.replace(' ', '-')}-{day}")
         print(f"\nSession reset: {result['session_path']} "
               f"(label '{result['new_label']}')")
+
+    # ── Email + Drive: pull fresh on the agent host so the unified ──
+    # session doc has every source, not only what's on central. These
+    # are global sources (one mailbox, one Drive folder) so they run
+    # once here regardless of --client.
+    if args.pull_email:
+        print(f"\n=== EMAIL — last {args.last_minutes} min ===")
+        rc = subprocess.call(
+            [sys.executable, "-m", "mail.pull_email",
+             "--last-minutes", str(args.last_minutes)],
+            cwd=str(_HERE),
+        )
+        if rc != 0:
+            print(f"  ! email pull exit code {rc} — continuing",
+                  file=sys.stderr)
+
+    if args.pull_drive:
+        print(f"\n=== GOOGLE DRIVE — last {args.last_minutes} min ===")
+        rc = subprocess.call(
+            [sys.executable, "-m", "drive.pull_drive",
+             "--last-minutes", str(args.last_minutes)],
+            cwd=str(_HERE),
+        )
+        if rc != 0:
+            print(f"  ! drive pull exit code {rc} — continuing",
+                  file=sys.stderr)
 
     # ── Append calls (each one is one MEETING section) ────────────
     for c in bundle["calls"]:

@@ -126,11 +126,13 @@ def _body_text(msg: email.message.Message) -> str:
 
 
 _DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+_XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+_XLS_MIME = "application/vnd.ms-excel"
 
 
 def _attachment_kind(ctype: str, fname: str) -> str | None:
-    """Classify an attachment as pdf / txt / docx / doc, or None if we
-    don't handle this type."""
+    """Classify an attachment as pdf / txt / docx / doc / xlsx / xls, or
+    None if we don't handle this type."""
     ext = fname.lower().rsplit(".", 1)[-1] if "." in fname else ""
     if ctype == "application/pdf" or ext == "pdf":
         return "pdf"
@@ -140,6 +142,10 @@ def _attachment_kind(ctype: str, fname: str) -> str | None:
         return "docx"
     if ctype == "application/msword" or ext == "doc":
         return "doc"
+    if ctype == _XLSX_MIME or ext in ("xlsx", "xlsm"):
+        return "xlsx"
+    if ctype == _XLS_MIME or ext == "xls":
+        return "xls"
     return None
 
 
@@ -196,6 +202,36 @@ def _extract_attachment_text(payload: bytes, kind: str, fname: str) -> str:
             return _extract_doc_text(_Path(tmp.name))
         except Exception as e:
             return f"[legacy .doc byte-scan failed: {e}]"
+        finally:
+            try:
+                os.unlink(tmp.name)
+            except Exception:
+                pass
+
+    if kind == "xlsx":
+        tmp = tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False)
+        try:
+            tmp.write(payload)
+            tmp.close()
+            from drive.drive_ingester import _extract_xlsx_text  # lazy
+            return _extract_xlsx_text(_Path(tmp.name))
+        except Exception as e:
+            return f"[openpyxl extraction failed: {e}]"
+        finally:
+            try:
+                os.unlink(tmp.name)
+            except Exception:
+                pass
+
+    if kind == "xls":
+        tmp = tempfile.NamedTemporaryFile(suffix=".xls", delete=False)
+        try:
+            tmp.write(payload)
+            tmp.close()
+            from drive.drive_ingester import _extract_xls_text  # lazy
+            return _extract_xls_text(_Path(tmp.name))
+        except Exception as e:
+            return f"[xlrd extraction failed: {e}]"
         finally:
             try:
                 os.unlink(tmp.name)
