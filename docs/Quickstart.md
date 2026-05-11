@@ -32,18 +32,11 @@ cd napco-nucleus
 It will:
 - Install Python 3.12 if missing (UAC prompt — click Yes)
 - Create `.venv\` and install all dependencies
-- Open `.env` in Notepad
+- Open `.env` in Notepad (pre-filled — **no secrets needed**)
 
-In Notepad, fill in **at minimum** these four values, then save and close:
+> **No Gmail App Password, no API key, nothing private.** The agent host (MVPACCESS) owns every credential — pulling email, posting drafts, hitting the LLM all happen there. Your machine only writes Teams chat/calls into a network folder using your normal Windows login.
 
-```
-REQ_IMAP_USER=your.gmail@gmail.com
-REQ_IMAP_PASSWORD=<16-char Gmail App Password — see note below>
-NUCLEUS_CENTRAL_PATH=\\MVPACCESS\nucleus
-NUCLEUS_DEV_NAME=Yourname             # optional; defaults to your Windows username
-```
-
-> **Gmail App Password**: go to `myaccount.google.com/security` → confirm 2-Step Verification is ON → click **App passwords** → app: **Mail** → label: "NAPCO Nucleus" → copy the 16-char password. Your normal Google password will not work.
+In Notepad, just confirm `NUCLEUS_CENTRAL_PATH` matches the team's share (it ships pre-set to `\\MVPACCESS\nucleus`). Optionally set `NUCLEUS_DEV_NAME` to a friendlier label than your Windows username. Save and close.
 
 You're done when you see "Setup complete."
 

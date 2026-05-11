@@ -132,23 +132,30 @@ if ($LASTEXITCODE -ne 0) {
 Write-Ok "Dependencies installed"
 
 # --- 4. .env handling ----------------------------------------------
+# Default to the dev-only template (no secrets). The agent host owns
+# the full .env.example with Gmail / Drive / API credentials and is
+# set up once by an admin, not via this script.
 Write-Step "Checking .env"
 $envFile = Join-Path $repoRoot ".env"
-$envExample = Join-Path $repoRoot ".env.example"
+$envDevExample = Join-Path $repoRoot ".env.example.dev"
+$envFullExample = Join-Path $repoRoot ".env.example"
 if (-not (Test-Path $envFile)) {
-    if (Test-Path $envExample) {
-        Copy-Item $envExample $envFile
-        Write-Ok "Copied .env.example -> .env"
-        Write-Host ""
-        Write-Host "    >>> Opening .env in Notepad. Fill in REQ_IMAP_USER and REQ_IMAP_PASSWORD" -ForegroundColor Yellow
-        Write-Host "    >>> with YOUR work email + a Gmail app password (or Outlook password)." -ForegroundColor Yellow
-        Write-Host "    >>> Save and close Notepad to continue." -ForegroundColor Yellow
-        Write-Host ""
-        Start-Process notepad.exe -ArgumentList $envFile -Wait
-    } else {
-        Write-Err ".env.example missing -- repo may be incomplete."
+    $template = $null
+    if (Test-Path $envDevExample) { $template = $envDevExample }
+    elseif (Test-Path $envFullExample) { $template = $envFullExample }
+    if ($null -eq $template) {
+        Write-Err ".env.example.dev (and .env.example) missing -- repo may be incomplete."
         exit 1
     }
+    Copy-Item $template $envFile
+    Write-Ok "Copied $(Split-Path $template -Leaf) -> .env"
+    Write-Host ""
+    Write-Host "    >>> Opening .env in Notepad." -ForegroundColor Yellow
+    Write-Host "    >>> No secrets needed -- just confirm NUCLEUS_CENTRAL_PATH points to" -ForegroundColor Yellow
+    Write-Host "    >>> your team's central share (e.g. \\MVPACCESS\nucleus)." -ForegroundColor Yellow
+    Write-Host "    >>> Save and close Notepad to continue." -ForegroundColor Yellow
+    Write-Host ""
+    Start-Process notepad.exe -ArgumentList $envFile -Wait
 } else {
     Write-Ok ".env exists (re-using). Run with -Force to reset."
 }

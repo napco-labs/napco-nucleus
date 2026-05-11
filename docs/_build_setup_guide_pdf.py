@@ -159,26 +159,23 @@ def build():
         [ListItem(Paragraph(t, bullet_s), leftIndent=14, value="circle") for t in [
             "Install Python 3.12 if missing (UAC prompt — click Yes).",
             "Create a virtualenv at <font face=\"Courier\">.venv\\</font> and install all dependencies.",
-            "Open <font face=\"Courier\">.env</font> in Notepad.",
+            "Open <font face=\"Courier\">.env</font> in Notepad — pre-filled, <b>no secrets needed</b>.",
         ]],
         bulletType="bullet", leftIndent=10,
     ))
-    flow.append(Paragraph(
-        "In Notepad, fill in <b>at minimum</b> these four values, then "
-        "save and close:", body))
-    flow.append(Paragraph(
-        "REQ_IMAP_USER=your.gmail@gmail.com<br/>"
-        "REQ_IMAP_PASSWORD=&lt;16-char Gmail App Password — see note below&gt;<br/>"
-        "NUCLEUS_CENTRAL_PATH=\\\\MVPACCESS\\nucleus<br/>"
-        "NUCLEUS_DEV_NAME=Yourname    # optional; defaults to Windows username", code))
     flow.append(_callout(
-        "<b>Gmail App Password.</b> Go to "
-        "<font face=\"Courier\">myaccount.google.com/security</font> → confirm "
-        "2-Step Verification is ON → click <b>App passwords</b> → app: "
-        "<b>Mail</b> → label: \"NAPCO Nucleus\" → copy the 16-character "
-        "password. Your normal Google password will not work — Google "
-        "blocks IMAP login with a regular password when 2FA is on.", body))
-    flow.append(Spacer(1, 0.1 * inch))
+        "<b>No Gmail App Password, no API key, nothing private.</b> "
+        "The agent host (MVPACCESS) owns every credential — pulling "
+        "email, posting drafts, hitting the LLM all happen there. "
+        "Your machine only writes Teams chat/calls into a network "
+        "folder using your normal Windows login.", body))
+    flow.append(Spacer(1, 0.08 * inch))
+    flow.append(Paragraph(
+        "In Notepad, just confirm <font face=\"Courier\">NUCLEUS_CENTRAL_PATH</font> "
+        "matches the team's share (it ships pre-set to "
+        "<font face=\"Courier\">\\\\MVPACCESS\\nucleus</font>). Optionally set "
+        "<font face=\"Courier\">NUCLEUS_DEV_NAME</font> to a friendlier label "
+        "than your Windows username. Save and close.", body))
     flow.append(Paragraph(
         "You're done with this step when you see \"Setup complete.\"", body))
 
