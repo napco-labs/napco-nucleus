@@ -68,6 +68,46 @@ This drops a sentinel file the recorder polls every ~0.5s. The recorder closes t
 - **Tracing**: every `pipeline.py` run writes `data/traces/<date>/<run_id>.jsonl`. Use `tools/replay_trace.py` to inspect.
 - **Per-developer setup**: see `docs/Setup_Guide.pdf`. No secrets in dev `.env` — only `NUCLEUS_CENTRAL_PATH`.
 
+## Client identity & roster filter
+
+NN serves multiple clients, not just one. Two buckets exist on the wire:
+
+- **`@napcosecurity.com`** → `client_name = "NAPCO Security"`. All senders at
+  this domain (Michael Carrieri, Salman Firoz, Siva, Richard Goldsobel, Robert
+  Zhu) collapse into one bucket. NAPCO Security is the external client.
+- **`@ael-bd.com`** → `client_name = <the individual's full name>`. AEL senders
+  are NOT forwards on behalf of NAPCO — they are AEL-internal client requests,
+  and each stakeholder is their own bucket. Don't lump them together.
+
+Resolution order when tagging a message:
+
+1. Sender domain matches `@napcosecurity.com` → `"NAPCO Security"`.
+2. Sender domain matches `@ael-bd.com` → the individual's full name (canonical
+   names sit alongside their addresses in `napco_config.REQUIREMENT_ROSTER`).
+3. Body explicitly says "forwarding NAPCO's ask" → override to `"NAPCO Security"`.
+4. Other domains → infer from content, prefer organization name when stated.
+
+Spelling matters — `requirements_seen` dedup is normalized, but
+`get_client_history` does case-insensitive *exact* match on the bucket name.
+
+### Requirement-management roster filter
+
+Not every email at `@napcosecurity.com` or `@ael-bd.com` is requirements work.
+`mail/pull_email.py` only keeps a message when **≥1 address from
+`napco_config.REQUIREMENT_ROSTER`** appears in **From, To, Cc, or Bcc**. Zero
+matches → silently skipped; the count surfaces in the run summary.
+
+Override mechanisms:
+
+- `python -m mail.pull_email --ignore-roster ...` — one-off bypass for debug
+  pulls. Requirement-management runs should not use this.
+- `NUCLEUS_ROSTER_EXTRA=a@x.com,b@y.com` in `.env` — per-machine additions.
+  Promote to `REQUIREMENT_ROSTER` in `napco_config.py` once the change is
+  permanent so the whole team picks it up.
+
+Roster is in code (`napco_config.REQUIREMENT_ROSTER`), single source of truth.
+Update via PR when the working group changes.
+
 ## Style conventions for code in this repo
 
 - Python 3.11+; Windows-targeted (Teams ingest reads Windows IndexedDB).
