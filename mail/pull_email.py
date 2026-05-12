@@ -31,8 +31,14 @@ Env vars (same as requirements_inbox.py):
     REQ_IMAP_MAILBOX    default INBOX
 
 Reuses the body + attachment extraction helpers from requirements_inbox
-(PDF / Word / TXT attachments are extracted to text, no email
-allowlist applied — when you ask for it, you get it).
+(PDF / Word / TXT attachments are extracted to text).
+
+Roster filter (set 2026-05-12): every fetched message is gated by
+napco_config.email_passes_roster_filter — at least one of the
+working-group addresses (NAPCO Security + AEL, see
+napco_config.REQUIREMENT_ROSTER) must appear in From / To / Cc / Bcc.
+Off-roster mail is silently skipped and counted in the run summary.
+Use --ignore-roster to override for one-off pulls.
 """
 from __future__ import annotations
 
@@ -57,6 +63,7 @@ from mail import requirements_inbox as ri  # noqa: E402
 from tools import _session_doc as session_doc  # noqa: E402
 from tools._session_doc import _slugify  # noqa: E402
 from tools._retry import retry as _retry_deco  # noqa: E402
+from napco_config import email_passes_roster_filter  # noqa: E402
 
 
 def _parse_time(s: str) -> dt.time:
@@ -95,7 +102,9 @@ def fetch_emails_in_window(*, sender: str | None, subject: str | None,
                            end_dt: dt.datetime) -> list[dict]:
     """Connect to IMAP, narrow by date, filter to the absolute datetime
     window client-side. Returns parsed message dicts with body +
-    attachments already extracted.
+    attachments already extracted. Each dict carries a ``"_msg"`` ref
+    to the underlying ``email.message.Message`` so callers (e.g. main)
+    can apply post-fetch filters like the roster gate.
 
     Retried up to 3 times on transient network / IMAP errors."""
     host = (os.getenv("REQ_IMAP_HOST") or "imap.gmail.com").strip()
@@ -153,6 +162,7 @@ def fetch_emails_in_window(*, sender: str | None, subject: str | None,
                 "received": received_local.strftime("%Y-%m-%d %H:%M") if received_local else "(no date)",
                 "body": body,
                 "attachments": attachments,
+                "_msg": msg,
             })
     finally:
         try:
@@ -234,6 +244,11 @@ def main() -> int:
                    help="End of time window (HH:MM or '5 PM')")
     p.add_argument("--date", default=None,
                    help="Target date YYYY-MM-DD (default today)")
+    p.add_argument("--ignore-roster", action="store_true",
+                   help="Skip the working-group roster filter — pull every "
+                        "matching email regardless of who's in From/To/Cc/Bcc. "
+                        "Use sparingly: requirement-management runs should "
+                        "normally enforce the roster.")
     args = p.parse_args()
 
     # All four filters are optional and can be combined freely. With no
@@ -275,7 +290,25 @@ def main() -> int:
         print(f"\nIMAP error: {type(e).__name__}: {e}", file=sys.stderr)
         return 2
 
-    print(f"\nMatched {len(emails)} email(s).")
+    # Roster gate — requirement-management only processes threads where a
+    # listed working-group address appears in From/To/Cc/Bcc. Override
+    # with --ignore-roster for one-off pulls.
+    skipped_offlist = 0
+    if not args.ignore_roster:
+        kept: list[dict] = []
+        for e in emails:
+            msg = e.get("_msg")
+            if msg is not None and not email_passes_roster_filter(msg):
+                skipped_offlist += 1
+                continue
+            kept.append(e)
+        emails = kept
+
+    if skipped_offlist:
+        print(f"\nMatched {len(emails)} email(s); "
+              f"skipped {skipped_offlist} off-roster.")
+    else:
+        print(f"\nMatched {len(emails)} email(s).")
     if not emails:
         return 0
 

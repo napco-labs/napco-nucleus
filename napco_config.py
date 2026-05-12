@@ -18,6 +18,8 @@ secrets loaded from .env (never committed), config is read-every-call
 """
 from __future__ import annotations
 
+import email.message
+import email.utils
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -153,6 +155,68 @@ def claude_cli_path() -> str | None:
         os.path.expandvars(r"%USERPROFILE%\.local\bin\claude.exe"),
     )
     return raw if os.path.exists(raw) else None
+
+
+# ─── Requirement-management roster filter ──────────────────────────
+#
+# Rule set 2026-05-12 (Titu's wording): any one of these emails
+# included in sender or receiver can be a requirements email; one or
+# more than one of these emails as sender or receiver counts as a
+# requirement email. Operationally: process only if >=1 roster address
+# is in From / To / Cc / Bcc. Zero matches => skip.
+#
+# Lives in code (not env) so all dev machines share one source of
+# truth — update via PR when the working group changes.
+#
+# NAPCO Security (client) + AEL (us) working group around the
+# "Integrations Spreadsheet" engagement. Lower-cased; matching is
+# case-insensitive on the bare address (display names ignored).
+REQUIREMENT_ROSTER: tuple[str, ...] = (
+    # NAPCO Security
+    "mcarrieri@napcosecurity.com",   # Michael Carrieri
+    "siva@napcosecurity.com",         # Thangarajah Sivapokaran
+    "rgoldsobel@napcosecurity.com",   # Richard Goldsobel
+    "safiroz@napcosecurity.com",      # Salman A. Firoz
+    "rzhu@napcosecurity.com",         # Robert Zhu
+    # AEL
+    "assad@ael-bd.com",               # Assaduz Zaman
+    "arzaman@ael-bd.com",             # Atikur Zaman
+    "arhabib@ael-bd.com",             # Ahsan Habib
+    "ihasan@ael-bd.com",              # Isruk Hasan
+    "khasan@ael-bd.com",              # Mohammad Kamrul Hasan (Titu)
+    "mferdows@ael-bd.com",            # Mostafa J Ferdows
+    "samin@ael-bd.com",               # Sheikh Amin
+)
+
+
+def requirement_roster() -> set[str]:
+    """Lowercased roster as a set, optionally extended with extras from
+    the NUCLEUS_ROSTER_EXTRA env var (comma-separated). Use the env var
+    for ad-hoc additions on a single machine — promote to the code
+    constant once it's a permanent change."""
+    extra_raw = (os.environ.get("NUCLEUS_ROSTER_EXTRA") or "").strip()
+    extras = {a.strip().lower() for a in extra_raw.split(",") if a.strip()}
+    return {a.lower() for a in REQUIREMENT_ROSTER} | extras
+
+
+def _msg_addresses(msg: email.message.Message) -> set[str]:
+    """Bare lowercased addresses from From + To + Cc + Bcc headers."""
+    headers: list[str] = []
+    for field in ("From", "To", "Cc", "Bcc"):
+        for raw in msg.get_all(field, []) or []:
+            if raw:
+                headers.append(raw)
+    out: set[str] = set()
+    for _name, addr in email.utils.getaddresses(headers):
+        a = (addr or "").strip().lower()
+        if a:
+            out.add(a)
+    return out
+
+
+def email_passes_roster_filter(msg: email.message.Message) -> bool:
+    """True iff at least one roster address appears in From/To/Cc/Bcc."""
+    return bool(_msg_addresses(msg) & requirement_roster())
 
 
 # ─── OpenProject + Drive + IMAP env sanity ─────────────────────────
