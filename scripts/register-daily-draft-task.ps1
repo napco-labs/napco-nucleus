@@ -5,7 +5,7 @@ Register the end-of-day Requirement Management run on MVPACCESS.
 .DESCRIPTION
 One Windows Scheduled Task, fires once daily at BD 23:45:
 
-  "NAPCO Nucleus - Requirement Management (Daily 23:45 BD)"
+  "NAPCO Nucleus - Requirement Management (Daily)"
       py -3 do_it_now.py --client all --last-minutes 1440
 
 What it does (per the operator rules):
@@ -43,7 +43,21 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-$taskName = "NAPCO Nucleus - Requirement Management (Daily 23:45 BD)"
+$taskName = "NAPCO Nucleus - Requirement Management (Daily)"
+
+# schtasks.exe writes harmless stderr (e.g. "task not found",
+# "syntax incorrect") that PowerShell 5.1 promotes to NativeCommandError
+# under -ErrorAction Stop. Wrap each call in try/catch so a non-fatal
+# cleanup line can't halt the registration flow.
+function Invoke-SchtasksDelete {
+    param([string]$TaskName)
+    try {
+        schtasks /delete /tn "$TaskName" /f 2>&1 | Out-Null
+    } catch {
+        # Non-fatal — orphan absent OR schtasks chokes on the name.
+        # CIM unregister has already had its turn; we tried our best.
+    }
+}
 
 if ($Unregister) {
     if (Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue) {
@@ -52,10 +66,10 @@ if ($Unregister) {
             Write-Host "Removed: $taskName"
         } catch {
             Write-Warning "Unregister-ScheduledTask failed: $($_.Exception.Message). Falling back to schtasks /delete."
-            schtasks /delete /tn "$taskName" /f 2>$null | Out-Null
+            Invoke-SchtasksDelete -TaskName $taskName
         }
     } else {
-        schtasks /delete /tn "$taskName" /f 2>$null | Out-Null
+        Invoke-SchtasksDelete -TaskName $taskName
         Write-Host "Not present: $taskName"
     }
     return
@@ -80,10 +94,10 @@ if (Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue) {
         Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction Stop
     } catch {
         Write-Warning "Unregister-ScheduledTask failed: $($_.Exception.Message). Falling back to schtasks /delete."
-        schtasks /delete /tn "$taskName" /f 2>$null | Out-Null
+        Invoke-SchtasksDelete -TaskName $taskName
     }
 } else {
-    schtasks /delete /tn "$taskName" /f 2>$null | Out-Null
+    Invoke-SchtasksDelete -TaskName $taskName
 }
 
 # Anchor: today at 23:45 BD-local. If past, anchor tomorrow.
