@@ -86,12 +86,15 @@ This is the most common place to trip. Three rules:
 2. **Don't double-click `.ps1` files** — they open in Notepad by default. Run them through PowerShell.
 3. The first run may need an execution-policy bypass for the current session.
 
-From the admin PowerShell, `cd` into wherever you cloned the repo, then:
+From the admin PowerShell, `cd` into wherever you cloned the repo. **Always wrap the path in double quotes** — that way the same command works whether your path has spaces or not:
 
 ```powershell
+cd "E:\Projects\NAPCO-Nucleus"
 Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 .\scripts\register-chat-push-task.ps1
 ```
+
+(Replace the path above with wherever you actually cloned the repo — e.g. `cd "C:\napco-nucleus"`, `cd "D:\Dev\NAPCO-Nucleus"`, etc.)
 
 You should see **three** `Registered: …` lines — Day, Transition, Evening — followed by a coverage summary. The script unregisters any old `'NAPCO Nucleus - Chat Push'` task automatically.
 
@@ -202,7 +205,7 @@ Teams reads its IndexedDB on disk. The chats you want captured must have been op
 If `Get-ScheduledTask -TaskName 'NAPCO Nucleus*'` shows a plain `NAPCO Nucleus - Chat Push` (singular, no parens) — you're on the pre-2026-05 single-task setup. Upgrade:
 
 ```powershell
-cd <your repo path>
+cd "E:\Projects\NAPCO-Nucleus"   # replace with your actual clone path
 git pull
 Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 .\scripts\register-chat-push-task.ps1

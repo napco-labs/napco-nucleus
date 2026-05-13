@@ -335,10 +335,16 @@ def build():
     flow.append(_space(0.05))
     flow.append(Paragraph(
         "From admin PowerShell, <font face=\"Courier\">cd</font> into wherever "
-        "you cloned the repo, then:", body))
+        "you cloned the repo. <b>Always wrap the path in double quotes</b> "
+        "&mdash; the same command works whether your path has spaces or not:", body))
     flow.append(_code(
+        "cd \"E:\\Projects\\NAPCO-Nucleus\"<br/>"
         "Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass<br/>"
         ".\\scripts\\register-chat-push-task.ps1", code))
+    flow.append(Paragraph(
+        "Replace the path with wherever you actually cloned the repo &mdash; e.g. "
+        "<font face=\"Courier\">cd \"C:\\napco-nucleus\"</font>, "
+        "<font face=\"Courier\">cd \"D:\\Dev\\NAPCO-Nucleus\"</font>.", body))
     flow.append(Paragraph(
         "You should see <b>three</b> &ldquo;Registered: &hellip;&rdquo; lines "
         "&mdash; Day, Transition, Evening &mdash; plus a coverage summary. "
@@ -585,7 +591,7 @@ def build():
         "(singular, no parens), you're on the pre-2026-05 single-task setup. Upgrade:",
         body))
     flow.append(_code(
-        "cd &lt;your repo path&gt;<br/>"
+        "cd \"E:\\Projects\\NAPCO-Nucleus\"   # replace with your actual clone path<br/>"
         "git pull<br/>"
         "Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass<br/>"
         ".\\scripts\\register-chat-push-task.ps1", code))
