@@ -36,7 +36,6 @@ Stop the daemon with Ctrl+C.
 from __future__ import annotations
 
 import argparse
-import datetime as dt
 import json
 import re
 import subprocess
@@ -187,16 +186,6 @@ def _audio_to_float(buf: bytes) -> np.ndarray:
     return np.frombuffer(buf, dtype=np.int16).astype(np.float32) / 32768.0
 
 
-def _in_bd_window(now: dt.datetime | None = None) -> bool:
-    """BD business window: 18:00 -> 01:00 local time, every day.
-
-    Returns True if local-clock hour is in {18,19,20,21,22,23,0}. Dev
-    machines run on BD local clock so we treat local == BD.
-    """
-    now = now or dt.datetime.now()
-    return now.hour in (18, 19, 20, 21, 22, 23, 0)
-
-
 def _excluded_active_call() -> tuple[bool, str]:
     """If the currently-active Teams call resolves to a conversation_id
     in NUCLEUS_EXCLUDE_CHATS, return (True, reason). If no call is
@@ -230,10 +219,6 @@ def _start_recording(state: dict) -> None:
         print("[voice] already recording, ignoring start.")
         return
     if not state.get("allow_any_call", False):
-        if not _in_bd_window():
-            print("[voice] start gated: outside BD 18:00-01:00 window. "
-                  "Pass --allow-any-call to disable the gate.")
-            return
         ok, reason = _teams_in_call()
         if not ok:
             print(f"[voice] start gated: {reason}. "
