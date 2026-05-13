@@ -89,9 +89,27 @@ if (Test-Path $venvPython) {
 # Drop ALL prior chat-push entries (new + legacy single-window setup)
 # so this script is idempotent and doubles as the upgrade path from
 # the pre-split schedule.
+#
+# Two cleanup paths because they catch different kinds of leftovers:
+#   - Unregister-ScheduledTask (CIM): clean unregister of tasks the
+#     modern API can see, but misses orphan XML files that have lost
+#     their CIM index entry.
+#   - schtasks /delete /f (legacy CLI): catches those orphans and is
+#     what unblocks "ERROR_ALREADY_EXISTS (0x800700b7)" on the
+#     subsequent Register-ScheduledTask call.
 foreach ($name in @($dayTask, $transTask, $eveTask) + $legacyTasks) {
     if (Get-ScheduledTask -TaskName $name -ErrorAction SilentlyContinue) {
-        Unregister-ScheduledTask -TaskName $name -Confirm:$false
+        try {
+            Unregister-ScheduledTask -TaskName $name -Confirm:$false -ErrorAction Stop
+        } catch {
+            Write-Warning "Unregister-ScheduledTask failed for '$name': $($_.Exception.Message). Falling back to schtasks /delete."
+            schtasks /delete /tn "$name" /f 2>$null | Out-Null
+        }
+    } else {
+        # CIM doesn't see one with this name, but an orphan may still be
+        # on disk. schtasks /delete will quietly succeed if the orphan
+        # exists, quietly fail if it doesn't — either way we're clean.
+        schtasks /delete /tn "$name" /f 2>$null | Out-Null
     }
 }
 
@@ -130,14 +148,20 @@ function Register-ChatPush {
         -StartWhenAvailable `
         -ExecutionTimeLimit (New-TimeSpan -Minutes 10)
 
-    Register-ScheduledTask `
-        -TaskName $Name `
-        -Action $action `
-        -Trigger $dailyTrigger `
-        -Settings $settings `
-        -Description $Description `
-        -RunLevel Limited `
-        | Out-Null
+    try {
+        Register-ScheduledTask `
+            -TaskName $Name `
+            -Action $action `
+            -Trigger $dailyTrigger `
+            -Settings $settings `
+            -Description $Description `
+            -RunLevel Limited `
+            -ErrorAction Stop `
+            | Out-Null
+    } catch {
+        Write-Error "FAILED to register '$Name': $($_.Exception.Message)"
+        return
+    }
 
     Write-Host ("Registered: {0,-40} every {1,3} min  BD {2:D2}:00-{3:D2}:00  --last-minutes {4}  first run {5}" -f `
         $Name, $IntervalMinutes, $StartHour, ($StartHour + $DurationHours), $LastMinutes, $anchor)
@@ -179,16 +203,20 @@ $transSettings = New-ScheduledTaskSettingsSet `
     -StartWhenAvailable `
     -ExecutionTimeLimit (New-TimeSpan -Minutes 10)
 
-Register-ScheduledTask `
-    -TaskName $transTask `
-    -Action $transAction `
-    -Trigger $transTrigger `
-    -Settings $transSettings `
-    -Description "Bridges the 16:00-17:30 BD gap between the Day and Evening chat-push windows. Fires once daily at 17:30 with --last-minutes 90." `
-    -RunLevel Limited `
-    | Out-Null
-
-Write-Host ("Registered: {0,-44} once daily    BD 17:30        --last-minutes 90  first run {1}" -f $transTask, $transAnchor)
+try {
+    Register-ScheduledTask `
+        -TaskName $transTask `
+        -Action $transAction `
+        -Trigger $transTrigger `
+        -Settings $transSettings `
+        -Description "Bridges the 16:00-17:30 BD gap between the Day and Evening chat-push windows. Fires once daily at 17:30 with --last-minutes 90." `
+        -RunLevel Limited `
+        -ErrorAction Stop `
+        | Out-Null
+    Write-Host ("Registered: {0,-44} once daily    BD 17:30        --last-minutes 90  first run {1}" -f $transTask, $transAnchor)
+} catch {
+    Write-Error "FAILED to register '$transTask': $($_.Exception.Message)"
+}
 
 Write-Host ""
 Write-Host "Coverage: continuous BD 08:00-24:00. Only gap is BD 00:00-10:00."
