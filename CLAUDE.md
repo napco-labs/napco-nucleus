@@ -49,7 +49,7 @@ This drops a sentinel file the recorder polls every ~0.5s. The recorder closes t
 
 | Developer says | You run |
 |---|---|
-| "push my chat now" / "send chat to central" | `Start-ScheduledTask -TaskName 'NAPCO Nucleus - Chat Push'` (PowerShell) |
+| "push my chat now" / "send chat to central" | `scripts\push-chat.bat` (last 15 min) — Scheduled Task names are now split: `'NAPCO Nucleus - Chat Push (Day)'` and `'NAPCO Nucleus - Chat Push (Evening)'`. |
 | "verify install" / "check setup" | `py -3 -m tools.healthcheck` |
 | "run it right now for X" / "do it right now X" | `py -3 do_it_now.py --client "X" --last-minutes 60` (defer to wider window if X is a multi-day client) |
 | "review the draft" / "review session" | `py -3 -m tools.review_session` |

@@ -1,39 +1,57 @@
 <#
 .SYNOPSIS
-Register the Teams chat-push as Windows scheduled tasks restricted to
-BD 18:00 -> 01:00.
+Register the Teams chat-push as two Windows Scheduled Tasks split by
+BD time-of-day, matching the daily rhythm of US-client interaction.
 
 .DESCRIPTION
 Two Task Scheduler entries on each dev machine:
 
-  "NAPCO Nucleus - Chat Push"            every 15 min, 18:00 -> 01:00
-                                         window = last 15 min
-  "NAPCO Nucleus - Chat Push (Backfill)" once daily at 18:00
-                                         window = last 1080 min (18 hr)
+  "NAPCO Nucleus - Chat Push (Day)"      every  2 hr,  BD 10:00 -> 18:00
+                                          window = last 120 min
 
-The backfill catches any chat that arrived during the BD daytime gap
-(01:00 -> 18:00) when the regular cron is intentionally off. Both
-tasks run on the dev's local clock, which is BD time.
+  "NAPCO Nucleus - Chat Push (Evening)"  every 30 min,  BD 18:00 -> 24:00
+                                          window = last  30 min
+
+Rationale: US clients arrive online around BD 19:00, so the evening
+window pushes at a higher cadence to surface fresh chat into central
+quickly. During BD daytime, internal-only chat doesn't need the same
+freshness, so we batch at 2-hr intervals.
+
+Both tasks run on the dev's local clock — dev machines are on BD time.
+
+push-chat.bat (--last-minutes 15) remains the ad-hoc entry point for
+"push my chat now" voice commands; that's untouched by this script.
+
+Coverage gap: BD 00:00 -> 10:00 is NOT auto-pushed. If overnight chat
+needs to land before the next 10:00 tick, run push-chat.bat manually
+or call:
+    py -3 -m teams.push_chat --last-minutes 600
 
 Re-running this script is idempotent — both entries are dropped and
 re-created so it doubles as the upgrade path.
 
+.PARAMETER Unregister
+Remove both tasks and exit.
+
 .EXAMPLE
     .\scripts\register-chat-push-task.ps1
-    .\scripts\register-chat-push-task.ps1 -IntervalMinutes 30
     .\scripts\register-chat-push-task.ps1 -Unregister
 #>
 param(
-    [int]$IntervalMinutes = 15,
     [switch]$Unregister
 )
 
 $ErrorActionPreference = "Stop"
-$mainTask = "NAPCO Nucleus - Chat Push"
-$backfillTask = "NAPCO Nucleus - Chat Push (Backfill)"
+
+$dayTask = "NAPCO Nucleus - Chat Push (Day)"
+$eveTask = "NAPCO Nucleus - Chat Push (Evening)"
+$legacyTasks = @(
+    "NAPCO Nucleus - Chat Push",
+    "NAPCO Nucleus - Chat Push (Backfill)"
+)
 
 if ($Unregister) {
-    foreach ($name in @($mainTask, $backfillTask)) {
+    foreach ($name in @($dayTask, $eveTask) + $legacyTasks) {
         if (Get-ScheduledTask -TaskName $name -ErrorAction SilentlyContinue) {
             Unregister-ScheduledTask -TaskName $name -Confirm:$false
             Write-Host "Removed: $name"
@@ -46,86 +64,95 @@ if ($Unregister) {
 
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $repoRoot = Split-Path -Parent $scriptDir
-$mainBat = Join-Path $scriptDir "push-chat.bat"
-$backfillBat = Join-Path $scriptDir "push-chat-backfill.bat"
 
-foreach ($p in @($mainBat, $backfillBat)) {
-    if (-not (Test-Path $p)) {
-        Write-Error "Missing helper: $p"
-        exit 1
-    }
+# Resolve a usable python — venv preferred, system py as fallback.
+$venvPython = Join-Path $repoRoot ".venv\Scripts\python.exe"
+if (Test-Path $venvPython) {
+    $pyExe = $venvPython
+    $pyArgPrefix = ""
+} else {
+    $pyExe = "py"
+    $pyArgPrefix = "-3 "
 }
 
-# Drop existing entries so this script is idempotent.
-foreach ($name in @($mainTask, $backfillTask)) {
+# Drop ALL prior chat-push entries (new + legacy single-window setup)
+# so this script is idempotent and doubles as the upgrade path from
+# the pre-split schedule.
+foreach ($name in @($dayTask, $eveTask) + $legacyTasks) {
     if (Get-ScheduledTask -TaskName $name -ErrorAction SilentlyContinue) {
         Unregister-ScheduledTask -TaskName $name -Confirm:$false
     }
 }
 
-# BD window: anchor today at 18:00 local time. If that's in the past,
-# anchor tomorrow. Repeats every $IntervalMinutes for 7 hours, so the
-# final fire is at 01:00 the next morning (window close).
-$today6pm = (Get-Date).Date.AddHours(18)
-if ($today6pm -lt (Get-Date)) {
-    $today6pm = $today6pm.AddDays(1)
+function Register-ChatPush {
+    param(
+        [string]$Name,
+        [int]$StartHour,
+        [int]$DurationHours,
+        [int]$IntervalMinutes,
+        [int]$LastMinutes,
+        [string]$Description
+    )
+    # Anchor to today's StartHour BD-local. If that's already past + the
+    # window has already closed, anchor tomorrow.
+    $anchor = (Get-Date).Date.AddHours($StartHour)
+    $windowClose = $anchor.AddHours($DurationHours)
+    if ((Get-Date) -gt $windowClose) {
+        $anchor = $anchor.AddDays(1)
+    }
+
+    $argString = $pyArgPrefix + "-m teams.push_chat --last-minutes $LastMinutes"
+    $action = New-ScheduledTaskAction `
+        -Execute $pyExe `
+        -Argument $argString `
+        -WorkingDirectory $repoRoot
+
+    $dailyTrigger = New-ScheduledTaskTrigger -Daily -At $anchor
+    $dailyTrigger.Repetition = (New-ScheduledTaskTrigger `
+        -Once -At $anchor `
+        -RepetitionInterval (New-TimeSpan -Minutes $IntervalMinutes) `
+        -RepetitionDuration (New-TimeSpan -Hours $DurationHours)).Repetition
+
+    $settings = New-ScheduledTaskSettingsSet `
+        -AllowStartIfOnBatteries `
+        -DontStopIfGoingOnBatteries `
+        -StartWhenAvailable `
+        -ExecutionTimeLimit (New-TimeSpan -Minutes 10)
+
+    Register-ScheduledTask `
+        -TaskName $Name `
+        -Action $action `
+        -Trigger $dailyTrigger `
+        -Settings $settings `
+        -Description $Description `
+        -RunLevel Limited `
+        | Out-Null
+
+    Write-Host ("Registered: {0,-40} every {1,3} min  BD {2:D2}:00-{3:D2}:00  --last-minutes {4}  first run {5}" -f `
+        $Name, $IntervalMinutes, $StartHour, ($StartHour + $DurationHours), $LastMinutes, $anchor)
 }
 
-$mainAction = New-ScheduledTaskAction `
-    -Execute "cmd.exe" `
-    -Argument "/c `"$mainBat`"" `
-    -WorkingDirectory $repoRoot
+Register-ChatPush `
+    -Name $dayTask `
+    -StartHour 10 `
+    -DurationHours 8 `
+    -IntervalMinutes 120 `
+    -LastMinutes 120 `
+    -Description "Pushes the last 120 min of Teams chat into NUCLEUS_CENTRAL_PATH. Runs every 2 hr during BD 10:00-18:00 window."
 
-# Repeats every $IntervalMinutes for the 7-hour BD window. RepetitionDuration
-# is inclusive of the trigger fire, so 7h covers 18:00..01:00.
-$mainTrigger = New-ScheduledTaskTrigger -Daily -At $today6pm
-$mainTrigger.Repetition = (New-ScheduledTaskTrigger `
-    -Once -At $today6pm `
-    -RepetitionInterval (New-TimeSpan -Minutes $IntervalMinutes) `
-    -RepetitionDuration (New-TimeSpan -Hours 7)).Repetition
+Register-ChatPush `
+    -Name $eveTask `
+    -StartHour 18 `
+    -DurationHours 6 `
+    -IntervalMinutes 30 `
+    -LastMinutes 30 `
+    -Description "Pushes the last 30 min of Teams chat into NUCLEUS_CENTRAL_PATH. Runs every 30 min during BD 18:00-24:00 window — peak US-client interaction time."
 
-$mainSettings = New-ScheduledTaskSettingsSet `
-    -AllowStartIfOnBatteries `
-    -DontStopIfGoingOnBatteries `
-    -StartWhenAvailable `
-    -ExecutionTimeLimit (New-TimeSpan -Minutes 5)
-
-Register-ScheduledTask `
-    -TaskName $mainTask `
-    -Action $mainAction `
-    -Trigger $mainTrigger `
-    -Settings $mainSettings `
-    -Description "Pushes the last $IntervalMinutes min of Teams chat into NUCLEUS_CENTRAL_PATH. Runs every $IntervalMinutes min during BD 18:00-01:00 window." `
-    -RunLevel Limited `
-    | Out-Null
-
-Write-Host "Registered: $mainTask  every $IntervalMinutes min, BD 18:00-01:00, first run $today6pm"
-
-# Backfill: once per day at 18:00, last-minutes=1080 to sweep the daytime gap.
-$backfillAction = New-ScheduledTaskAction `
-    -Execute "cmd.exe" `
-    -Argument "/c `"$backfillBat`"" `
-    -WorkingDirectory $repoRoot
-
-$backfillTrigger = New-ScheduledTaskTrigger -Daily -At $today6pm
-
-$backfillSettings = New-ScheduledTaskSettingsSet `
-    -AllowStartIfOnBatteries `
-    -DontStopIfGoingOnBatteries `
-    -StartWhenAvailable `
-    -ExecutionTimeLimit (New-TimeSpan -Minutes 15)
-
-Register-ScheduledTask `
-    -TaskName $backfillTask `
-    -Action $backfillAction `
-    -Trigger $backfillTrigger `
-    -Settings $backfillSettings `
-    -Description "Once-daily 18:00 BD backfill: pushes the last 1080 min of chat to cover the 01:00-18:00 daytime gap." `
-    -RunLevel Limited `
-    | Out-Null
-
-Write-Host "Registered: $backfillTask  daily at $today6pm  (--last-minutes 1080)"
+Write-Host ""
+Write-Host "Coverage gap: BD 00:00-10:00 has no auto-push."
+Write-Host "Run push-chat.bat manually or:"
+Write-Host "    py -3 -m teams.push_chat --last-minutes 600"
 Write-Host ""
 Write-Host "View:    Task Scheduler -> Task Scheduler Library"
-Write-Host "Run now: Start-ScheduledTask -TaskName '$mainTask'"
+Write-Host "Run now: Start-ScheduledTask -TaskName '$eveTask'"
 Write-Host "Remove:  .\scripts\register-chat-push-task.ps1 -Unregister"
