@@ -6,7 +6,7 @@ Register the end-of-day Requirement Management run on MVPACCESS.
 One Windows Scheduled Task, fires once daily at BD 23:45:
 
   "NAPCO Nucleus - Requirement Management (Daily)"
-      py -3 do_it_now.py --client all --last-minutes 1440
+      py -3 collect_central.py --client all --last-minutes 1440
 
 What it does (per the operator rules):
   - Reads everything staged into central + local inbox over the last
@@ -79,13 +79,20 @@ $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $repoRoot = Split-Path -Parent $scriptDir
 
 # Resolve a usable python — venv preferred, system py as fallback.
+# Call collect_central.py directly rather than the do_it_now.py wrapper.
+# do_it_now.py is the developer-facing entry: it (1) pushes the local
+# dev's Teams chat to central, then (2) SSHes to MVPACCESS to run
+# collect_central.py. When the daily task runs ON MVPACCESS itself,
+# step 1 has no Teams cache to push and step 2 SSHes back to itself
+# with an interactive password prompt that would hang the unattended
+# 23:45 run. Calling collect_central.py directly is correct + clean.
 $venvPython = Join-Path $repoRoot ".venv\Scripts\python.exe"
 if (Test-Path $venvPython) {
     $pyExe = $venvPython
-    $argString = "do_it_now.py --client all --last-minutes 1440"
+    $argString = "collect_central.py --client all --last-minutes 1440"
 } else {
     $pyExe = "py"
-    $argString = "-3 do_it_now.py --client all --last-minutes 1440"
+    $argString = "-3 collect_central.py --client all --last-minutes 1440"
 }
 
 # Drop any existing entry (CIM-first, schtasks fallback to clear orphans).
