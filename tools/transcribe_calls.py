@@ -3,8 +3,21 @@
 Runs on the agent host (MVPACCESS) as a Scheduled Task every couple of
 minutes. Walks <NUCLEUS_CENTRAL_PATH>/<dev>/<date>/calls/ for the
 configured day window, finds every completed call session that doesn't
-yet have a transcript, and transcribes it in place. Loads the
-faster-whisper model once per run.
+yet have a transcript, and transcribes it in place.
+
+Backend selection (per session, transparent to caller):
+    1. Try Groq Whisper translations API (whisper-large-v3 — same model
+       as our local faster-whisper, but on Groq's GPUs => ~hundreds of
+       times faster). Free tier on Groq allows 8 hr of audio/day, which
+       covers typical AEL call volume.
+    2. On ANY Groq failure (rate limit / 429, network, file > 25 MB,
+       missing GROQ_API_KEY, etc.) fall back to local faster-whisper
+       on CPU. Slower but reliable and free.
+
+This means the daily 23:45 BD pipeline gets Groq-speed transcripts on
+normal days and is still correct on bursty days when Groq hits its
+free-tier ceiling. The faster-whisper model is loaded LAZILY — if all
+sessions succeed via Groq we never pay the ~3 GB model-load cost.
 
 Completion signal:
     <session>.json exists.
@@ -17,16 +30,11 @@ the WAVs are skipped. Cross-process safe via tools._lock.file_lock; a
 second invocation while one is running aborts immediately so the
 2-minute cron can't pile up overlapping Whisper runs.
 
-Why on the agent host:
-    faster-whisper large-v3 is CPU-heavy. Doing it on each dev's PC
-    pegs the laptop right after a call. Centralising onto MVPACCESS
-    keeps dev machines responsive and gives consistent perf across the
-    team.
-
 Usage:
     py -3 -m tools.transcribe_calls
     py -3 -m tools.transcribe_calls --days 3
     py -3 -m tools.transcribe_calls --dry-run
+    py -3 -m tools.transcribe_calls --no-groq    # force faster-whisper
 """
 from __future__ import annotations
 
@@ -53,6 +61,10 @@ import memory  # noqa: E402
 from tools._lock import file_lock  # noqa: E402
 
 logger = logging.getLogger(__name__)
+
+GROQ_URL = "https://api.groq.com/openai/v1/audio/translations"
+GROQ_MODEL_DEFAULT = "whisper-large-v3"  # turbo can't translate; do not change
+GROQ_MAX_BYTES = 25 * 1024 * 1024
 
 
 def _central_root() -> Path | None:
@@ -102,6 +114,90 @@ def _scan(root: Path, days: int) -> list[tuple[Path, str]]:
     return work
 
 
+# ─── Groq backend ───────────────────────────────────────────────────
+
+def _groq_translate(wav_path: Path, label: str) -> list[dict]:
+    """POST a WAV to Groq's translations endpoint, return segments.
+
+    Each segment: {start: float, end: float, text: str, speaker: label}.
+    Raises on any non-200 response so the caller can fall back.
+    """
+    import requests  # lazy — drive_ingester already pulls this in
+    api_key = os.getenv("GROQ_API_KEY")
+    if not api_key:
+        raise RuntimeError("GROQ_API_KEY not set")
+    model = os.getenv("GROQ_TEAMS_WHISPER_MODEL") or GROQ_MODEL_DEFAULT
+
+    size = wav_path.stat().st_size
+    if size > GROQ_MAX_BYTES:
+        raise ValueError(
+            f"{wav_path.name} is {size / 1e6:.1f} MB, exceeds Groq "
+            f"{GROQ_MAX_BYTES / 1e6:.0f} MB limit")
+
+    with open(wav_path, "rb") as f:
+        files = {"file": (wav_path.name, f, "audio/wav")}
+        data = {"model": model, "response_format": "verbose_json"}
+        headers = {"Authorization": f"Bearer {api_key}"}
+        r = requests.post(GROQ_URL, headers=headers, files=files,
+                          data=data, timeout=300)
+
+    if r.status_code != 200:
+        raise RuntimeError(
+            f"Groq {r.status_code}: {r.text[:300]}")
+
+    payload = r.json()
+    out: list[dict] = []
+    for s in payload.get("segments", []):
+        text = (s.get("text") or "").strip()
+        if not text:
+            continue
+        out.append({
+            "start": float(s.get("start", 0.0)),
+            "end": float(s.get("end", 0.0)),
+            "text": text,
+            "speaker": label,
+        })
+    return out
+
+
+def _transcribe_session_via_groq(session: str, calls_dir: Path,
+                                  output_dir: Path) -> Path:
+    """Transcribe one session via Groq, write transcript .md next to
+    the WAVs (matching faster-whisper's markdown format exactly so
+    downstream readers don't care which backend produced it)."""
+    mic = calls_dir / f"{session}_mic.wav"
+    spk = calls_dir / f"{session}_speaker.wav"
+    if not mic.exists() or not spk.exists():
+        raise FileNotFoundError(
+            f"Missing mic.wav and/or speaker.wav for {session}")
+
+    mic_segs = _groq_translate(mic, label="You")
+    spk_segs = _groq_translate(spk, label="Other")
+    all_segs = sorted(mic_segs + spk_segs, key=lambda s: s["start"])
+
+    try:
+        started = dt.datetime.strptime(session, "%Y%m%d-%H%M%S")
+    except ValueError:
+        started = dt.datetime.now()
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    out = output_dir / f"{session}_transcript.md"
+    model = os.getenv("GROQ_TEAMS_WHISPER_MODEL") or GROQ_MODEL_DEFAULT
+    with out.open("w", encoding="utf-8") as f:
+        f.write(f"# Call transcript — {session}\n\n")
+        f.write(f"_Started_: {started:%Y-%m-%d %H:%M}  \n")
+        f.write(f"_Source_: {mic.name}, {spk.name}  \n")
+        f.write(f"_Translated to English by Groq {model}_\n\n")
+        f.write("---\n\n")
+        for s in all_segs:
+            ts = started + dt.timedelta(seconds=s["start"])
+            f.write(f"**{s['speaker']} [{ts:%d-%m-%Y %I:%M %p}]:**  \n")
+            f.write(f"> {s['text']}\n\n")
+    return out
+
+
+# ─── main ───────────────────────────────────────────────────────────
+
 def main() -> int:
     ap = argparse.ArgumentParser(
         description=__doc__,
@@ -112,6 +208,9 @@ def main() -> int:
                          "across midnight).")
     ap.add_argument("--dry-run", action="store_true",
                     help="List pending sessions without transcribing.")
+    ap.add_argument("--no-groq", action="store_true",
+                    help="Skip Groq entirely, use local faster-whisper "
+                         "directly. For debugging / Groq outages.")
     args = ap.parse_args()
 
     root = _central_root()
@@ -122,7 +221,10 @@ def main() -> int:
         print(f"Central path not reachable: {root}", file=sys.stderr)
         return 2
 
-    print(f"Transcribe calls — central={root}  days={args.days}")
+    use_groq = not args.no_groq and bool(os.getenv("GROQ_API_KEY"))
+    backend_hint = "Groq + faster-whisper fallback" if use_groq else "faster-whisper only"
+    print(f"Transcribe calls — central={root}  days={args.days}  backend={backend_hint}")
+
     work = _scan(root, args.days)
     if not work:
         print("  nothing to transcribe.")
@@ -143,7 +245,6 @@ def main() -> int:
             technical_details={"pending": len(work), "days": args.days})
         return 0
 
-    # Non-blocking lock — if a previous run is still going, skip this tick.
     with file_lock("transcribe_calls", block=False) as got:
         if not got:
             print("  another transcribe-calls run is in progress; "
@@ -154,34 +255,65 @@ def main() -> int:
                 technical_details={"pending": len(work)})
             return 0
 
-        # Lazy import — heavy module load only when there's real work.
-        from teams.transcribe_call import load_model, transcribe_session
+        # faster-whisper model is loaded LAZILY — only when a Groq attempt
+        # actually fails (or --no-groq). Most days this stays None and we
+        # skip the ~3 GB model load entirely.
+        fw_model = None
+        _fw_transcribe = None
 
-        print("  loading faster-whisper (one-time per run)...")
-        model = load_model()
+        def _ensure_fw():
+            nonlocal fw_model, _fw_transcribe
+            if fw_model is not None:
+                return
+            from teams.transcribe_call import load_model, transcribe_session  # noqa
+            print("  loading faster-whisper (one-time per run)...")
+            fw_model = load_model()
+            _fw_transcribe = transcribe_session
 
-        ok, failed = 0, 0
+        ok_groq, ok_fw, failed = 0, 0, 0
         for calls_dir, session in work:
-            try:
-                transcribe_session(
-                    session=session,
-                    calls_dir=calls_dir,
-                    output_dir=calls_dir,
-                    model=model,
-                )
-                ok += 1
-            except Exception as e:
-                logger.exception("transcribe failed: %s/%s",
-                                 calls_dir, session)
-                print(f"  FAILED {session}: {e}", file=sys.stderr)
-                failed += 1
+            done_via = None
 
-        print(f"  done: {ok} transcribed, {failed} failed.")
+            if use_groq:
+                try:
+                    _transcribe_session_via_groq(
+                        session=session,
+                        calls_dir=calls_dir,
+                        output_dir=calls_dir,
+                    )
+                    done_via = "groq"
+                    ok_groq += 1
+                    print(f"  [groq] {session}")
+                except Exception as e:
+                    logger.warning("Groq failed for %s: %s — "
+                                   "falling back to faster-whisper",
+                                   session, e)
+                    print(f"  [groq-fail] {session}: {e}")
+
+            if done_via is None:
+                try:
+                    _ensure_fw()
+                    _fw_transcribe(
+                        session=session,
+                        calls_dir=calls_dir,
+                        output_dir=calls_dir,
+                        model=fw_model,
+                    )
+                    done_via = "faster-whisper"
+                    ok_fw += 1
+                    print(f"  [fw] {session}")
+                except Exception as e:
+                    logger.exception("faster-whisper fallback failed: %s/%s",
+                                     calls_dir, session)
+                    print(f"  FAILED {session}: {e}", file=sys.stderr)
+                    failed += 1
+
+        print(f"  done: groq={ok_groq}  fw={ok_fw}  failed={failed}")
         memory.log_activity(
             task_name="transcribe-calls:run",
-            result=f"ok:{ok}/failed:{failed}",
-            technical_details={"transcribed": ok, "failed": failed,
-                               "days": args.days})
+            result=f"groq:{ok_groq}/fw:{ok_fw}/failed:{failed}",
+            technical_details={"groq": ok_groq, "fw": ok_fw,
+                               "failed": failed, "days": args.days})
         return 0 if failed == 0 else 1
 
 
