@@ -6,11 +6,18 @@ BD time-of-day, matching the daily rhythm of US-client interaction.
 .DESCRIPTION
 Two Task Scheduler entries on each dev machine:
 
-  "NAPCO Nucleus - Chat Push (Day)"      every  2 hr,  BD 10:00 -> 18:00
+  "NAPCO Nucleus - Chat Push (Day)"      every  2 hr,  BD 10:00 -> 17:00
+                                          fires at 10:00, 12:00, 14:00, 16:00
                                           window = last 120 min
 
   "NAPCO Nucleus - Chat Push (Evening)"  every 30 min,  BD 18:00 -> 24:00
                                           window = last  30 min
+
+Day stops at 16:00 (not 18:00) so its last fire doesn't collide with
+Evening's first fire at 18:00. Side effect: BD 16:00-17:30 chat is
+not auto-pushed by either window (Evening's 18:00 tick only looks back
+30 min). Manual catch-up if needed:
+    py -3 -m teams.push_chat --last-minutes 90
 
 Rationale: US clients arrive online around BD 19:00, so the evening
 window pushes at a higher cadence to surface fresh chat into central
@@ -135,10 +142,10 @@ function Register-ChatPush {
 Register-ChatPush `
     -Name $dayTask `
     -StartHour 10 `
-    -DurationHours 8 `
+    -DurationHours 7 `
     -IntervalMinutes 120 `
     -LastMinutes 120 `
-    -Description "Pushes the last 120 min of Teams chat into NUCLEUS_CENTRAL_PATH. Runs every 2 hr during BD 10:00-18:00 window."
+    -Description "Pushes the last 120 min of Teams chat into NUCLEUS_CENTRAL_PATH. Fires at BD 10:00, 12:00, 14:00, 16:00 — stops at 16:00 so the last tick doesn't collide with the Evening task's 18:00 fire."
 
 Register-ChatPush `
     -Name $eveTask `
