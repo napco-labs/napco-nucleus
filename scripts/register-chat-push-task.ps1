@@ -6,18 +6,21 @@ BD time-of-day, matching the daily rhythm of US-client interaction.
 .DESCRIPTION
 Two Task Scheduler entries on each dev machine:
 
-  "NAPCO Nucleus - Chat Push (Day)"      every  2 hr,  BD 10:00 -> 17:00
-                                          fires at 10:00, 12:00, 14:00, 16:00
-                                          window = last 120 min
+  "NAPCO Nucleus - Chat Push (Day)"         every  2 hr,  BD 10:00 -> 17:00
+                                             fires at 10:00, 12:00, 14:00, 16:00
+                                             window = last 120 min
 
-  "NAPCO Nucleus - Chat Push (Evening)"  every 30 min,  BD 18:00 -> 24:00
-                                          window = last  30 min
+  "NAPCO Nucleus - Chat Push (Transition)"  once daily,   BD 17:30
+                                             window = last  90 min
+                                             (closes the 16:00-17:30 BD gap
+                                             between Day and Evening)
+
+  "NAPCO Nucleus - Chat Push (Evening)"     every 30 min, BD 18:00 -> 24:00
+                                             window = last  30 min
 
 Day stops at 16:00 (not 18:00) so its last fire doesn't collide with
-Evening's first fire at 18:00. Side effect: BD 16:00-17:30 chat is
-not auto-pushed by either window (Evening's 18:00 tick only looks back
-30 min). Manual catch-up if needed:
-    py -3 -m teams.push_chat --last-minutes 90
+Evening's first fire at 18:00. The Transition task bridges the gap.
+Net coverage: continuous from BD 08:00 -> 24:00.
 
 Rationale: US clients arrive online around BD 19:00, so the evening
 window pushes at a higher cadence to surface fresh chat into central
@@ -51,6 +54,7 @@ param(
 $ErrorActionPreference = "Stop"
 
 $dayTask = "NAPCO Nucleus - Chat Push (Day)"
+$transTask = "NAPCO Nucleus - Chat Push (Transition)"
 $eveTask = "NAPCO Nucleus - Chat Push (Evening)"
 $legacyTasks = @(
     "NAPCO Nucleus - Chat Push",
@@ -58,7 +62,7 @@ $legacyTasks = @(
 )
 
 if ($Unregister) {
-    foreach ($name in @($dayTask, $eveTask) + $legacyTasks) {
+    foreach ($name in @($dayTask, $transTask, $eveTask) + $legacyTasks) {
         if (Get-ScheduledTask -TaskName $name -ErrorAction SilentlyContinue) {
             Unregister-ScheduledTask -TaskName $name -Confirm:$false
             Write-Host "Removed: $name"
@@ -85,7 +89,7 @@ if (Test-Path $venvPython) {
 # Drop ALL prior chat-push entries (new + legacy single-window setup)
 # so this script is idempotent and doubles as the upgrade path from
 # the pre-split schedule.
-foreach ($name in @($dayTask, $eveTask) + $legacyTasks) {
+foreach ($name in @($dayTask, $transTask, $eveTask) + $legacyTasks) {
     if (Get-ScheduledTask -TaskName $name -ErrorAction SilentlyContinue) {
         Unregister-ScheduledTask -TaskName $name -Confirm:$false
     }
@@ -155,9 +159,40 @@ Register-ChatPush `
     -LastMinutes 30 `
     -Description "Pushes the last 30 min of Teams chat into NUCLEUS_CENTRAL_PATH. Runs every 30 min during BD 18:00-24:00 window — peak US-client interaction time."
 
+# Transition: one fire daily at 17:30 BD to bridge the 16:00-17:30 gap.
+$transAnchor = (Get-Date).Date.AddHours(17).AddMinutes(30)
+if ((Get-Date) -gt $transAnchor) {
+    $transAnchor = $transAnchor.AddDays(1)
+}
+
+$transArgString = $pyArgPrefix + "-m teams.push_chat --last-minutes 90"
+$transAction = New-ScheduledTaskAction `
+    -Execute $pyExe `
+    -Argument $transArgString `
+    -WorkingDirectory $repoRoot
+
+$transTrigger = New-ScheduledTaskTrigger -Daily -At $transAnchor
+
+$transSettings = New-ScheduledTaskSettingsSet `
+    -AllowStartIfOnBatteries `
+    -DontStopIfGoingOnBatteries `
+    -StartWhenAvailable `
+    -ExecutionTimeLimit (New-TimeSpan -Minutes 10)
+
+Register-ScheduledTask `
+    -TaskName $transTask `
+    -Action $transAction `
+    -Trigger $transTrigger `
+    -Settings $transSettings `
+    -Description "Bridges the 16:00-17:30 BD gap between the Day and Evening chat-push windows. Fires once daily at 17:30 with --last-minutes 90." `
+    -RunLevel Limited `
+    | Out-Null
+
+Write-Host ("Registered: {0,-44} once daily    BD 17:30        --last-minutes 90  first run {1}" -f $transTask, $transAnchor)
+
 Write-Host ""
-Write-Host "Coverage gap: BD 00:00-10:00 has no auto-push."
-Write-Host "Run push-chat.bat manually or:"
+Write-Host "Coverage: continuous BD 08:00-24:00. Only gap is BD 00:00-10:00."
+Write-Host "Overnight catch-up if needed:"
 Write-Host "    py -3 -m teams.push_chat --last-minutes 600"
 Write-Host ""
 Write-Host "View:    Task Scheduler -> Task Scheduler Library"
