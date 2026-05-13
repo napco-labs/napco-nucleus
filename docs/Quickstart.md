@@ -110,18 +110,18 @@ Higher cadence in the evening — that's peak US-client interaction time.
 
 To remove later: `.\scripts\register-chat-push-task.ps1 -Unregister`
 
-### Step 5 — Start the voice daemon
+### Step 5 — Install the voice daemon (autostart)
 
-Double-click `scripts\start-daemon.bat`. Leave the terminal window running (you can minimize it).
+Double-click `scripts\install-voice-daemon.bat`. It registers **NAPCO Nucleus - Voice Daemon** as a Windows Scheduled Task that fires on every logon, restarts on crash, and starts the daemon immediately so you don't have to log out and back in. A console window appears with the daemon's logs — you can minimize it.
 
-The daemon listens for any of these phrases (case-insensitive) and only fires when MS Teams is actually in a call:
+The daemon listens for any of these phrases (case-insensitive) and only fires the recorder when MS Teams is actually in a call:
 
 - **Start**: "Assalamualaikum", "Salaam alaikum", "Nucleus start", "Start recording", "Record start", "Call start", "Start", "Record"
 - **Stop**: "Allah Hafez", "Khoda Hafiz", "Nucleus stop", "Stop recording", "End recording", "Call end", "End", "Stop"
 
 **Now 24×7** — no BD-time-window gate. Records whenever Teams is in a call and you say a start phrase.
 
-To autostart on login, drop a shortcut to `scripts\start-daemon.bat` into `shell:startup` (Win+R → `shell:startup` → Enter → paste shortcut).
+To remove later: `scripts\uninstall-voice-daemon.bat`
 
 ---
 

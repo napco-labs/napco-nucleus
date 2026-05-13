@@ -397,19 +397,22 @@ def build():
 
     # ── Step 5: Voice daemon ──────────────────────────────────────
     flow.append(_space(0.15))
-    flow.append(_step_heading("Step 5", "Start the voice daemon"))
+    flow.append(_step_heading("Step 5", "Install the voice daemon (autostart)"))
     flow.append(Paragraph(
-        "Double-click <font face=\"Courier\">scripts\\start-daemon.bat</font>. "
-        "Leave the terminal window running (you can minimize it).", body))
+        "Double-click <font face=\"Courier\">"
+        "scripts\\install-voice-daemon.bat</font>. It registers "
+        "<b>NAPCO Nucleus - Voice Daemon</b> as a Windows Scheduled Task "
+        "that fires on every logon, restarts on crash, and starts the "
+        "daemon immediately so you don't have to log out and back in. "
+        "A console window appears with the daemon's logs &mdash; you can "
+        "minimize it.", body))
     flow.append(Paragraph(
         "The daemon listens for start/stop phrases (case-insensitive) and "
-        "only fires when MS Teams is actually in a call. Now <b>24&times;7</b> "
-        "&mdash; no BD-time-window gate. Records whenever Teams is in a call "
-        "and you say a start phrase.", body))
-    flow.append(Paragraph(
-        "To autostart on login, drop a shortcut to the .bat into "
-        "<font face=\"Courier\">shell:startup</font> (Win+R &rarr; type that "
-        "&rarr; drop the shortcut into the folder that opens).", body))
+        "only fires the recorder when MS Teams is actually in a call. Now "
+        "<b>24&times;7</b> &mdash; no BD-time-window gate.", body))
+    flow.append(Paragraph("To remove later:", body))
+    flow.append(_code(
+        "scripts\\uninstall-voice-daemon.bat", code))
 
     # ── Verify ────────────────────────────────────────────────────
     flow.append(_space(0.18))

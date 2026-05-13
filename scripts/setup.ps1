@@ -205,9 +205,10 @@ Write-Host ""
 Write-Host "Setup complete." -ForegroundColor Green
 Write-Host ""
 Write-Host "Day-to-day:" -ForegroundColor White
-Write-Host "  Double-click  scripts\start-daemon.bat   to start the voice daemon"
-Write-Host "  Double-click  scripts\pull-now.bat       to pull recent activity into a session"
-Write-Host "  Double-click  scripts\update.bat         to git pull + reinstall after code changes"
+Write-Host "  Double-click  scripts\install-voice-daemon.bat              to autostart the voice daemon at every logon (one-time install)"
+Write-Host "  Double-click  scripts\start-daemon.bat                     to start the voice daemon ad-hoc (no autostart)"
+Write-Host "  Double-click  scripts\pull-now.bat                         to pull recent activity into a session"
+Write-Host "  Double-click  scripts\update.bat                           to git pull + reinstall after code changes"
 Write-Host ""
 Write-Host "Voice daemon listens for:" -ForegroundColor White
 Write-Host "  Start:  Assalamualaikum / Salaam alaikum / Nucleus start"
