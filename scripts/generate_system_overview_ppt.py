@@ -658,55 +658,76 @@ def slide_day_in_life(prs):
 
 
 def slide_what_it_costs(prs):
-    s = base_slide(prs, "What it costs us",
-                   "Cheap to run. No per-seat license.")
+    s = base_slide(prs, "What it costs",
+                   "No new line items. No per-run charge.")
 
-    stats = [
-        ("~6 cents", "per daily run", NAVY),
-        ("Free", "audio transcription tier", GREEN),
-        ("Zero", "per-developer license cost", GOLD),
+    # Giant $0 dominates the slide
+    tf_big = add_textbox(s, Inches(0.7), Inches(1.5), Inches(11.9),
+                         Inches(2.6), anchor=MSO_ANCHOR.MIDDLE)
+    set_text(tf_big, "$0", size=200, bold=True, color=NAVY,
+             align=PP_ALIGN.CENTER)
+
+    # Subtitle / explainer directly under the $0
+    tf_sub = add_textbox(s, Inches(0.7), Inches(4.2), Inches(11.9),
+                         Inches(0.7))
+    set_text(tf_sub,
+             "No per-run charge. No per-developer license. "
+             "No new infrastructure cost.",
+             size=20, bold=True, color=TEAL, align=PP_ALIGN.CENTER)
+
+    # Quiet supporting strip: 2x2 grid of "where each cost would go"
+    rows = [
+        ("AI / requirement drafting", "Existing Claude subscription"),
+        ("Audio transcription",       "Free tier (Groq)"),
+        ("Central server",            "Shared with OpenProject (no new cost)"),
+        ("GitHub runner + storage",   "Self-hosted (no charge)"),
     ]
-    cw = Inches(3.9)
-    ch = Inches(2.6)
-    gap = Inches(0.25)
-    total = 3 * 3.9 + 2 * 0.25
-    x0 = (13.333 - total) / 2
-    y = Inches(2.0)
-    for i, (big, label, color) in enumerate(stats):
-        x = Inches(x0 + i * (3.9 + 0.25))
-        container = add_rect(s, x, y, cw, ch,
-                             fill_color=WHITE, line_color=RULE)
-        add_rect(s, x, y, cw, Inches(0.18), fill_color=color)
-        tf_big = add_textbox(s, x, y + Inches(0.6),
-                             cw, Inches(1.1))
-        set_text(tf_big, big, size=44, bold=True, color=color,
-                 align=PP_ALIGN.CENTER)
-        tf_lbl = add_textbox(s, x, y + Inches(1.8),
-                             cw, Inches(0.6))
-        set_text(tf_lbl, label, size=15, color=MUTED,
-                 align=PP_ALIGN.CENTER)
-
-    tf = add_textbox(s, Inches(0.7), Inches(5.3), Inches(11.9), Inches(1.6))
-    set_text(tf, "Scaling is essentially free.",
-             size=20, bold=True, color=NAVY, align=PP_ALIGN.CENTER)
-    add_para(tf,
-             "Adding a second client or a tenth developer changes nothing "
-             "about how the system runs -- the same daily pass covers "
-             "everyone.",
-             size=14, color=MUTED, align=PP_ALIGN.CENTER, space_before=8)
+    cell_w = Inches(5.9)
+    cell_h = Inches(0.7)
+    gap_x = Inches(0.2)
+    gap_y = Inches(0.1)
+    total_w = 2 * 5.9 + 0.2
+    x0 = (13.333 - total_w) / 2
+    y0 = 5.3
+    for i, (label, value) in enumerate(rows):
+        row, col = divmod(i, 2)
+        x = Inches(x0 + col * (5.9 + 0.2))
+        y = Inches(y0 + row * (0.7 + 0.1))
+        add_rect(s, x, y, cell_w, cell_h,
+                 fill_color=SOFT, line_color=RULE)
+        # Label on the left half, value on the right half
+        tf_l = add_textbox(s, x + Inches(0.2), y, Inches(2.6), cell_h,
+                           anchor=MSO_ANCHOR.MIDDLE)
+        set_text(tf_l, label, size=12, color=MUTED, align=PP_ALIGN.LEFT)
+        tf_v = add_textbox(s, x + Inches(2.85), y,
+                           cell_w - Inches(3.0), cell_h,
+                           anchor=MSO_ANCHOR.MIDDLE)
+        set_text(tf_v, value, size=13, bold=True, color=NAVY,
+                 align=PP_ALIGN.LEFT)
 
     set_speaker_notes(s, (
-        "Cost story for the budget conversation. The ~6 cents per run "
-        "figure is the Anthropic Claude cost for a single daily "
-        "verify_session pass on a ~16k character Pull Session document, "
-        "with prompt caching enabled. The 'free' transcription tier is "
-        "Groq's free quota of 8 hours of audio per day -- comfortably "
-        "covers our actual call volume. 'Zero per-developer license' "
-        "is because the AI access uses an Anthropic Max-tier "
-        "subscription mounted into the worker containers, not "
-        "per-seat keys. Infrastructure costs are the existing Linux "
-        "host (already paid for, shared with OpenProject) and the "
-        "developers' existing PCs. Nothing new to buy."
+        "Cost story for the budget conversation. The incremental cost of "
+        "running Nucleus per daily pass is effectively zero -- there is "
+        "no new line item on anyone's bill. The AI side runs against an "
+        "Anthropic Claude Max-tier subscription, which is a flat monthly "
+        "subscription we already have in place; it's not metered per "
+        "token, so the daily verify_session pass doesn't show up as a "
+        "per-run charge. Audio transcription goes through Groq's free "
+        "tier -- 8 hours of audio per day, which is well above our "
+        "actual call volume. The central server is 172.16.205.123, the "
+        "Linux box that already hosts our OpenProject instance; Nucleus "
+        "runs as a docker-compose stack alongside it on the same host, "
+        "so there is no new VM, no new cloud subscription, no new "
+        "hardware. The GitHub Actions runner that builds and deploys "
+        "the stack is self-hosted on the same .123 box, so we don't "
+        "pay GitHub for runner minutes or artifact storage. Heads up "
+        "on an older number that may surface: a prior version of this "
+        "deck quoted '~6 cents per run' as the Claude cost. That "
+        "figure came from a snapshot where Nucleus was billed against "
+        "the regular Claude API with per-token pricing. Since we moved "
+        "to Max-tier subscription auth, that per-run charge no longer "
+        "applies -- the subscription is flat and the marginal cost of "
+        "one more daily run is $0."
     ))
 
 
