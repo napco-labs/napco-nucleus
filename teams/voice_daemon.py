@@ -1,11 +1,23 @@
-"""Voice-activated trigger for call recording (MS Teams calls only).
+"""Voice-activated + auto trigger for call recording (MS Teams calls only).
 
-Listens to the default mic, transcribes utterances with
-faster-whisper, and triggers start/stop of the call recorder when it
-hears either:
+Two trigger modes (--trigger-mode, default `auto`):
 
-  1. The wake-word command  "nucleus <start|stop|...>"  (anchored, English),
-  2. A configured natural call-bookend phrase, e.g. "Assalamualaikum"
+  auto    -> Recording starts/stops based on MS Teams audio-session state
+             alone. The moment Teams enters a call (or starts ringing),
+             recording begins. When Teams' audio session ends, recording
+             stops. Phrase matching also stays armed in this mode so a
+             dev can still say "stop recording" to end early.
+
+  phrase  -> Legacy behavior. Recording fires only on a recognized phrase
+             (wake-word `nucleus <verb>` or natural bookend like
+             "Assalamualaikum" / "Allah Hafez"). The Teams-in-call gate
+             still applies to start.
+
+In either mode the daemon also listens for the wake-word and call-bookend
+phrases below for early-stop convenience.
+
+  1. Wake-word command  "nucleus <start|stop|...>"  (anchored, English),
+  2. Configured natural call-bookend phrase, e.g. "Assalamualaikum"
      (start) or "Allah Hafez" (stop) — multilingual, substring match.
 
 Teams-only gate
@@ -14,22 +26,23 @@ Teams-only gate
     Teams is just open in the background or you say the start phrase
     in a casual conversation, nothing happens. STOP is unconditional —
     if any recording is in progress, the stop phrase always halts it.
-    Pass --allow-any-call to disable the gate.
+    Pass --allow-any-call to disable the gate (phrase mode only).
+
+Hard cap (--max-call-seconds, default 3600)
+    Any single recording is auto-stopped after this many seconds even
+    if the call continues. Guards against a stuck audio-session state.
 
 Phrase list lives in `data/teams/voice_phrases.json`. Edit that file
 to add or remove phrases — no code change needed. Default ships with
 the BD-Bangla/Arabic call-bookend phrases.
 
-Triggers
-    start phrase  -> (Teams in a call?) spawn `python -m teams.record_call`
-    stop phrase   -> write data/teams/.stop_recording sentinel
-
 Run
     python -m teams.voice_daemon
-    python -m teams.voice_daemon --model tiny       # fastest, less accurate
-    python -m teams.voice_daemon --model base       # default — multilingual
-    python -m teams.voice_daemon --model small      # most accurate, slower
-    python -m teams.voice_daemon --allow-any-call   # disable Teams gate
+    python -m teams.voice_daemon --model tiny           # fastest, less accurate
+    python -m teams.voice_daemon --model base           # default — multilingual
+    python -m teams.voice_daemon --model small          # most accurate, slower
+    python -m teams.voice_daemon --trigger-mode phrase  # legacy phrase-only
+    python -m teams.voice_daemon --allow-any-call       # disable Teams gate
 
 Stop the daemon with Ctrl+C.
 """
@@ -37,9 +50,12 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import subprocess
 import sys
+import threading
+import time
 from pathlib import Path
 
 import numpy as np
@@ -214,48 +230,122 @@ def _excluded_active_call() -> tuple[bool, str]:
 
 
 def _start_recording(state: dict) -> None:
-    proc = state.get("proc")
-    if proc and proc.poll() is None:
-        print("[voice] already recording, ignoring start.")
-        return
-    if not state.get("allow_any_call", False):
-        ok, reason = _teams_in_call()
-        if not ok:
-            print(f"[voice] start gated: {reason}. "
-                  f"Pass --allow-any-call to disable the gate.")
+    with state["lock"]:
+        proc = state.get("proc")
+        if proc and proc.poll() is None:
+            print("[voice] already recording, ignoring start.")
             return
-        print(f"[voice] Teams gate OK: {reason}")
-        excluded, exc_reason = _excluded_active_call()
-        if excluded:
-            print(f"[voice] start gated: {exc_reason}. "
-                  f"(NUCLEUS_EXCLUDE_CHATS) Pass --allow-any-call to bypass.")
-            return
-    try:
-        STOP_FILE.unlink()
-    except FileNotFoundError:
-        pass
-    print("[voice] starting recorder...")
-    proc = subprocess.Popen(
-        [sys.executable, "-m", "teams.record_call"],
-        cwd=str(_HERE),
-    )
-    state["proc"] = proc
-    print(f"[voice] recorder PID {proc.pid}")
+        if not state.get("allow_any_call", False):
+            ok, reason = _teams_in_call()
+            if not ok:
+                print(f"[voice] start gated: {reason}. "
+                      f"Pass --allow-any-call to disable the gate.")
+                return
+            print(f"[voice] Teams gate OK: {reason}")
+            excluded, exc_reason = _excluded_active_call()
+            if excluded:
+                print(f"[voice] start gated: {exc_reason}. "
+                      f"(NUCLEUS_EXCLUDE_CHATS) Pass --allow-any-call to bypass.")
+                return
+        try:
+            STOP_FILE.unlink()
+        except FileNotFoundError:
+            pass
+        print("[voice] starting recorder...")
+        proc = subprocess.Popen(
+            [sys.executable, "-m", "teams.record_call"],
+            cwd=str(_HERE),
+        )
+        state["proc"] = proc
+        state["call_started_at"] = time.monotonic()
+        print(f"[voice] recorder PID {proc.pid}")
 
 
-def _stop_recording(state: dict) -> None:
-    proc = state.get("proc")
-    if not proc or proc.poll() is not None:
-        print("[voice] no recording running, ignoring stop.")
-        return
-    STOP_FILE.parent.mkdir(parents=True, exist_ok=True)
-    STOP_FILE.touch()
-    print("[voice] stop sentinel written; waiting for recorder to flush...")
-    try:
-        proc.wait(timeout=10)
-        print(f"[voice] recorder exited rc={proc.returncode}")
-    except subprocess.TimeoutExpired:
-        print("[voice] recorder didn't exit in 10s; leaving it.")
+def _stop_recording(state: dict, reason: str = "") -> None:
+    with state["lock"]:
+        proc = state.get("proc")
+        if not proc or proc.poll() is not None:
+            print("[voice] no recording running, ignoring stop.")
+            return
+        STOP_FILE.parent.mkdir(parents=True, exist_ok=True)
+        STOP_FILE.touch()
+        suffix = f" ({reason})" if reason else ""
+        print(f"[voice] stop sentinel written{suffix}; waiting for recorder to flush...")
+        try:
+            proc.wait(timeout=10)
+            print(f"[voice] recorder exited rc={proc.returncode}")
+        except subprocess.TimeoutExpired:
+            print("[voice] recorder didn't exit in 10s; leaving it.")
+        state["call_started_at"] = None
+
+
+def _audio_session_watcher(state: dict, stop_evt: threading.Event,
+                           poll_interval_s: float = 2.0,
+                           stop_debounce: int = 2,
+                           max_call_seconds: int = 3600) -> None:
+    """Background thread: drive start/stop purely from Teams audio-session state.
+
+    Rising edge (off->on)  : start recording immediately (capture from t=0).
+    Falling edge debounced : stop after `stop_debounce` consecutive off polls
+                             so brief mid-call session blips don't end the
+                             recording prematurely.
+    Hard cap               : if a single recording exceeds max_call_seconds,
+                             stop it. Does not auto-resume — safety guard
+                             against a stuck Active state in pycaw.
+    """
+    print(f"[voice] auto watcher: poll={poll_interval_s}s, "
+          f"stop_debounce={stop_debounce} polls, "
+          f"hard_cap={max_call_seconds}s")
+    last_active = False
+    off_streak = 0
+    while not stop_evt.is_set():
+        try:
+            active, reason = _teams_in_call()
+        except Exception as e:
+            print(f"[voice] watcher: _teams_in_call errored: {e}")
+            active = False
+            reason = f"watcher exception: {e}"
+
+        if active and not last_active:
+            print(f"[voice] watcher: rising edge — {reason}")
+            _start_recording(state)
+            off_streak = 0
+        elif active:
+            off_streak = 0
+            started_at = state.get("call_started_at")
+            proc = state.get("proc")
+            if (started_at is not None and proc is not None
+                    and proc.poll() is None):
+                elapsed = time.monotonic() - started_at
+                if elapsed >= max_call_seconds:
+                    print(f"[voice] watcher: hard cap hit "
+                          f"(elapsed={elapsed:.0f}s >= {max_call_seconds}s)")
+                    _stop_recording(state, reason="hard cap")
+                    # No auto-resume: keep last_active=True (sticky) so the
+                    # still-Active session can't trigger a new rising edge.
+                    # State resets naturally when the call actually ends and
+                    # we see the falling edge.
+                    off_streak = 0
+                    stop_evt.wait(poll_interval_s)
+                    continue
+        else:
+            if last_active:
+                off_streak += 1
+                if off_streak >= stop_debounce:
+                    proc = state.get("proc")
+                    if proc is not None and proc.poll() is None:
+                        print(f"[voice] watcher: falling edge "
+                              f"(off for {off_streak} polls) — {reason}")
+                        _stop_recording(state, reason="session ended")
+                    off_streak = 0
+                    last_active = False
+                # else: still debouncing, leave last_active=True
+            else:
+                off_streak = 0
+
+        if active:
+            last_active = True
+        stop_evt.wait(poll_interval_s)
 
 
 def _handle_transcript(text: str, state: dict, phrases: dict[str, list[str]]) -> None:
@@ -310,6 +400,20 @@ def main() -> int:
         help="Disable the Teams-only gate. Start phrases will fire even "
              "when MS Teams is not in a call. Default: gate ON.",
     )
+    ap.add_argument(
+        "--trigger-mode",
+        default=os.environ.get("NUCLEUS_VOICE_TRIGGER_MODE", "auto"),
+        choices=("auto", "phrase"),
+        help="auto (default): start/stop on Teams audio-session edges. "
+             "phrase: legacy — only fire on a recognized phrase. "
+             "Env: NUCLEUS_VOICE_TRIGGER_MODE.",
+    )
+    ap.add_argument(
+        "--max-call-seconds", type=int,
+        default=int(os.environ.get("NUCLEUS_MAX_CALL_SECONDS", "3600")),
+        help="Hard cap per recording (auto mode). Default 3600s (1h). "
+             "Env: NUCLEUS_MAX_CALL_SECONDS.",
+    )
     args = ap.parse_args()
 
     phrases = _load_phrases()
@@ -338,8 +442,26 @@ def main() -> int:
     else:
         print("[voice] Teams-only gate ON: start fires only while "
               "MS Teams is ringing or in a call.")
+    print(f"[voice] trigger mode: {args.trigger_mode}")
     print('[voice] listening for start/stop phrases. Ctrl+C to quit.')
-    state: dict = {"proc": None, "allow_any_call": args.allow_any_call}
+    state: dict = {
+        "proc": None,
+        "allow_any_call": args.allow_any_call,
+        "lock": threading.Lock(),
+        "call_started_at": None,
+    }
+
+    watcher_stop = threading.Event()
+    watcher_thread: threading.Thread | None = None
+    if args.trigger_mode == "auto":
+        watcher_thread = threading.Thread(
+            target=_audio_session_watcher,
+            args=(state, watcher_stop),
+            kwargs={"max_call_seconds": args.max_call_seconds},
+            daemon=True,
+            name="audio-session-watcher",
+        )
+        watcher_thread.start()
 
     buf: list[bytes] = []
     silent_frames = 0
@@ -380,6 +502,9 @@ def main() -> int:
     except KeyboardInterrupt:
         print("\n[voice] shutting down.")
     finally:
+        watcher_stop.set()
+        if watcher_thread is not None:
+            watcher_thread.join(timeout=5)
         proc = state.get("proc")
         if proc and proc.poll() is None:
             print("[voice] recorder still running; sending stop sentinel.")

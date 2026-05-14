@@ -7,7 +7,10 @@ autostarts on every user logon.
 One Task Scheduler entry on the dev's machine:
 
   "NAPCO Nucleus - Voice Daemon"   triggers: At logon (current user)
-                                   action:   scripts\start-daemon.bat
+                                   action:   wscript scripts\start-daemon-hidden.vbs
+                                             -> hidden cmd -> scripts\start-daemon.bat
+                                             -> python -m teams.voice_daemon
+                                             (logs to logs\voice_daemon.log)
                                    restart:  5 times, 1 min apart
                                    limit:    none (long-running)
                                    single-instance: yes (new fires ignored)
@@ -17,10 +20,10 @@ Bangla/Arabic call-bookends) and only fires the recorder when MS
 Teams has an active audio session. No BD-time-window gate -- the
 daemon runs 24x7.
 
-The .bat is launched in the user's interactive session so the
-console window is visible (you can minimize it) and stdout logs are
-right there if anything goes wrong. Closing the window stops the
-daemon; the next logon brings it back.
+The .bat is launched via a hidden-window VBS wrapper so devs don't
+see a cmd console pop up at logon. stdout/stderr land in
+logs\voice_daemon.log (append mode) — tail it with:
+    Get-Content logs\voice_daemon.log -Wait -Tail 50
 
 Re-running this script is idempotent -- the entry is dropped and
 re-created so it doubles as the upgrade path.
@@ -53,9 +56,14 @@ if ($Unregister) {
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $repoRoot = Split-Path -Parent $scriptDir
 $batPath = Join-Path $scriptDir "start-daemon.bat"
+$vbsPath = Join-Path $scriptDir "start-daemon-hidden.vbs"
 
 if (-not (Test-Path $batPath)) {
     Write-Error "Cannot find $batPath. Aborting."
+    return
+}
+if (-not (Test-Path $vbsPath)) {
+    Write-Error "Cannot find $vbsPath. Aborting."
     return
 }
 
@@ -86,8 +94,12 @@ if (Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue) {
     Invoke-SchtasksDelete -Name $taskName
 }
 
+# Action runs wscript.exe against a tiny VBS that launches start-daemon.bat
+# with a hidden window (no cmd flash). wscript stays alive for the daemon's
+# lifetime so Task Scheduler can track + restart on failure correctly.
 $action = New-ScheduledTaskAction `
-    -Execute $batPath `
+    -Execute "wscript.exe" `
+    -Argument ('"{0}"' -f $vbsPath) `
     -WorkingDirectory $repoRoot
 
 $trigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
@@ -120,7 +132,10 @@ try {
 
 Write-Host "Registered: $taskName"
 Write-Host "  Trigger:  At logon of $env:USERNAME"
-Write-Host "  Action:   $batPath"
+Write-Host "  Action:   wscript.exe `"$vbsPath`""
+Write-Host "             -> hidden cmd -> $batPath"
+Write-Host "             -> python -u -m teams.voice_daemon"
+Write-Host "             logs:   $repoRoot\logs\voice_daemon.log"
 Write-Host "  WorkDir:  $repoRoot"
 Write-Host ""
 Write-Host "Start now (without re-logging on):"

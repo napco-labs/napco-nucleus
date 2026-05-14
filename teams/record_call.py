@@ -32,6 +32,7 @@ import time
 import wave
 from pathlib import Path
 
+import numpy as np
 import pyaudiowpatch as pyaudio
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -72,6 +73,109 @@ def record(p: pyaudio.PyAudio, dev: dict, path: Path, stop: threading.Event, lab
             wf.writeframes(stream.read(CHUNK, exception_on_overflow=False))
     stream.stop_stream()
     stream.close()
+
+
+def _denoise_mic_wav(path: Path,
+                     mains_hz: float = 50.0,
+                     max_harmonic_hz: float = 1000.0,
+                     notch_width_hz: float = 4.0,
+                     hpf_cutoff_hz: float = 40.0) -> None:
+    """Remove mains hum + low-freq rumble from an int16 mic WAV (FFT, in place).
+
+    Bangladesh / Europe / most of Asia is on a 50 Hz grid; the US +
+    parts of the Americas are 60 Hz. Set NUCLEUS_MIC_MAINS_HZ=60 in
+    .env to switch. A poorly-grounded USB sound card picks up mains
+    and its odd harmonics (50, 150, 250, 350 Hz...) which sound like
+    a continuous "system" hum/buzz once normalize boosts the signal.
+
+    This filter:
+      1. High-pass below hpf_cutoff_hz to kill DC offset + sub-audible.
+      2. Narrow notches at every multiple of mains_hz up to
+         max_harmonic_hz. Notches are notch_width_hz wide each, which
+         is narrow enough not to dent speech (~85+ Hz fundamental,
+         formants well away from the comb).
+    """
+    try:
+        with wave.open(str(path), "rb") as wf:
+            params = wf.getparams()
+            n_frames = wf.getnframes()
+            n_channels = wf.getnchannels()
+            sr = wf.getframerate()
+            if n_frames == 0:
+                return
+            frames = wf.readframes(n_frames)
+        samples = np.frombuffer(frames, dtype=np.int16).astype(np.float32)
+        samples = samples.reshape(-1, n_channels)
+        freqs = np.fft.rfftfreq(samples.shape[0], 1.0 / sr)
+        mask = np.ones_like(freqs)
+
+        # High-pass below hpf_cutoff_hz (kills DC and sub-audible rumble).
+        mask[freqs < hpf_cutoff_hz] = 0.0
+
+        # Notch every multiple of mains_hz up to max_harmonic_hz.
+        half_w = notch_width_hz / 2.0
+        f = mains_hz
+        notch_count = 0
+        while f <= max_harmonic_hz and f < sr / 2:
+            mask[(freqs >= f - half_w) & (freqs <= f + half_w)] = 0.0
+            notch_count += 1
+            f += mains_hz
+
+        out = np.empty_like(samples)
+        for ch in range(n_channels):
+            spec = np.fft.rfft(samples[:, ch])
+            out[:, ch] = np.fft.irfft(spec * mask, n=samples.shape[0])
+        out = np.clip(out.reshape(-1), -32768, 32767).astype(np.int16)
+        with wave.open(str(path), "wb") as wf:
+            wf.setparams(params)
+            wf.writeframes(out.tobytes())
+        print(f"  mic denoise: hpf<{hpf_cutoff_hz:.0f}Hz, "
+              f"{notch_count} notches at multiples of {mains_hz:.0f}Hz "
+              f"(width {notch_width_hz:.1f}Hz, up to {max_harmonic_hz:.0f}Hz)")
+    except Exception as e:
+        print(f"  mic denoise FAILED: {e}", file=sys.stderr)
+
+
+def _normalize_mic_wav(path: Path, target_dbfs: float = -1.0,
+                       max_gain_db: float = 24.0) -> None:
+    """Peak-normalize an int16 PCM mic WAV to target dBFS in-place.
+
+    Teams applies AGC on the outgoing call audio but our recorder
+    captures raw mic, so the mic WAV ends up much quieter than the
+    speaker loopback (which is post-AGC). Normalizing on disk after
+    the recording stops adapts per-PC and per-call without clipping
+    risk in the realtime path.
+
+    `max_gain_db` caps the scale factor so a quiet/silent recording
+    doesn't blow up the noise floor. `target_dbfs` is the peak target
+    (slightly below 0 dBFS for headroom).
+    """
+    try:
+        with wave.open(str(path), "rb") as wf:
+            params = wf.getparams()
+            n_frames = wf.getnframes()
+            if n_frames == 0:
+                return
+            frames = wf.readframes(n_frames)
+        samples = np.frombuffer(frames, dtype=np.int16).astype(np.float32)
+        peak = float(np.max(np.abs(samples)))
+        if peak < 1.0:
+            return  # silent
+        target_peak = 32768.0 * (10 ** (target_dbfs / 20.0))
+        scale = target_peak / peak
+        max_scale = 10 ** (max_gain_db / 20.0)
+        scale = min(scale, max_scale)
+        if abs(scale - 1.0) < 0.01:
+            return  # negligible
+        gain_db = 20.0 * float(np.log10(scale))
+        samples = np.clip(samples * scale, -32768, 32767).astype(np.int16)
+        with wave.open(str(path), "wb") as wf:
+            wf.setparams(params)
+            wf.writeframes(samples.tobytes())
+        print(f"  mic normalize: peak {peak:.0f} -> "
+              f"{int(peak * scale)}, gain {gain_db:+.1f} dB")
+    except Exception as e:
+        print(f"  mic normalize FAILED: {e}", file=sys.stderr)
 
 
 def _write_metadata_and_upload(
@@ -225,12 +329,50 @@ def main() -> int:
         size = path.stat().st_size / 1024 / 1024 if path.exists() else 0
         print(f"  {path}  ({size:.1f} MB)")
 
+    ended_dt = datetime.datetime.now()
+    duration_s = (ended_dt - started_dt).total_seconds()
+
+    # Mic post-processing on the recorder side. Order matters:
+    #   1. Denoise FIRST -- kills mains hum + sub-audible rumble. If we
+    #      normalize first, peak amplitude includes hum -> headroom
+    #      wasted on noise instead of speech.
+    #   2. Normalize -- bring speech peak to a reasonable dBFS.
+    # Both toggleable via env so a dev can disable them if needed.
+    if mic_path.exists() and mic_path.stat().st_size > 0:
+        if os.environ.get("NUCLEUS_MIC_DENOISE", "1") != "0":
+            try:
+                mains_hz = float(os.environ.get("NUCLEUS_MIC_MAINS_HZ", "50"))
+            except ValueError:
+                mains_hz = 50.0
+            _denoise_mic_wav(mic_path, mains_hz=mains_hz)
+        if os.environ.get("NUCLEUS_MIC_NORMALIZE", "1") != "0":
+            _normalize_mic_wav(mic_path)
+
+    # Discard sessions shorter than the configured minimum (default 20s).
+    # In auto-trigger mode the daemon fires on any Teams audio-session
+    # edge — that includes a ringing-then-declined call and brief voice
+    # notes / playback. A short WAV would waste Whisper time on central.
+    try:
+        min_duration_s = float(os.environ.get("NUCLEUS_CALL_MIN_DURATION_S", "20"))
+    except ValueError:
+        min_duration_s = 20.0
+    if duration_s < min_duration_s:
+        print(f"  duration {duration_s:.1f}s < min {min_duration_s:.1f}s — "
+              f"discarding WAVs, skipping metadata + upload.")
+        for path in (spk_path, mic_path):
+            try:
+                if path.exists():
+                    path.unlink()
+            except Exception as e:
+                print(f"  delete {path.name} FAILED: {e}", file=sys.stderr)
+        return 0
+
     # Resolve client + write metadata + push to central if configured.
     _write_metadata_and_upload(
         out_dir=out_dir,
         stamp=stamp,
         started_dt=started_dt,
-        ended_dt=datetime.datetime.now(),
+        ended_dt=ended_dt,
         spk_path=spk_path,
         mic_path=mic_path,
     )

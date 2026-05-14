@@ -1,18 +1,32 @@
 @echo off
-REM Launch the voice daemon. Window stays open so logs are visible.
-REM Press Ctrl+C in the window to stop the daemon.
+REM Launch the voice daemon. stdout/stderr go to logs\voice_daemon.log
+REM (append mode -- preserves history across restarts).
+REM
+REM Tail live:    powershell -c "Get-Content logs\voice_daemon.log -Wait -Tail 50"
+REM Stop:         stop-daemon.bat (or kill the python process)
 
 cd /d "%~dp0\.."
+if not exist "logs" mkdir "logs"
+
+REM Force UTF-8 for stdout/stderr so Whisper transcripts containing
+REM non-Latin characters (Arabic / Bangla / CJK / etc.) don't crash
+REM print() on Windows' default cp1252 console encoding. Child
+REM processes (record_call subprocess) inherit this env.
+set PYTHONIOENCODING=utf-8
+
+REM Separator + start marker so multiple runs in one file are easy to scan.
+echo. >> "logs\voice_daemon.log"
+echo ============================================================ >> "logs\voice_daemon.log"
+echo [start-daemon.bat] %DATE% %TIME% -- launching voice_daemon >> "logs\voice_daemon.log"
+echo ============================================================ >> "logs\voice_daemon.log"
+
 if not exist ".venv\Scripts\python.exe" (
     REM No venv on this machine - fall back to system python.
-    python -m teams.voice_daemon
-    echo.
-    echo Daemon stopped.
-    pause
+    python -u -m teams.voice_daemon >> "logs\voice_daemon.log" 2>&1
+    echo [start-daemon.bat] %DATE% %TIME% -- voice_daemon exited rc=%ERRORLEVEL% >> "logs\voice_daemon.log"
     exit /b %ERRORLEVEL%
 )
 call ".venv\Scripts\activate.bat"
-python -m teams.voice_daemon
-echo.
-echo Daemon stopped.
-pause
+python -u -m teams.voice_daemon >> "logs\voice_daemon.log" 2>&1
+echo [start-daemon.bat] %DATE% %TIME% -- voice_daemon exited rc=%ERRORLEVEL% >> "logs\voice_daemon.log"
+exit /b %ERRORLEVEL%
