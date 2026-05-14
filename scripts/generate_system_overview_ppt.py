@@ -1,12 +1,14 @@
-"""NAPCO Nucleus — end-to-end system-overview deck.
+"""NAPCO Nucleus - end-to-end system-overview deck.
 
-Stakeholder-facing explainer of how Nucleus works today, after the
-2026-05-14 move of the central host from Windows MVPACCESS (.209) to
-the Ubuntu 24.04 box at .123. 14 slides, 16:9, terse on the slide
-itself so the boss drives narration. Speaker notes carry the detail.
+Stakeholder-facing explainer aimed at non-technical viewers
+(executives, sponsors, boss demo). Each slide is readable in
+about 5 seconds; technical detail lives in speaker notes.
 
-Self-contained: every helper that the deck needs is in this file,
-matching the convention of the other generators in scripts/.
+Narrative arc: PROBLEM -> WHAT WE BUILT -> HOW IT WORKS -> WHAT'S NEXT.
+No personal names appear in slide-visible text. Jargon is restricted
+to speaker notes.
+
+Self-contained: every helper that the deck needs is in this file.
 
 Run:
     python scripts\\generate_system_overview_ppt.py
@@ -31,7 +33,7 @@ OUT = ROOT / "docs" / "NAPCO-Nucleus-System-Overview.pptx"
 SLIDE_W = Inches(13.333)
 SLIDE_H = Inches(7.5)
 
-# Palette — match docs/NAPCO-Nucleus-Presentation.pptx
+# Palette - match docs/NAPCO-Nucleus-Presentation.pptx
 NAVY   = RGBColor(0x1F, 0x4E, 0x79)
 TEAL   = RGBColor(0x2E, 0x8A, 0x8A)
 CORAL  = RGBColor(0xE0, 0x78, 0x56)
@@ -45,7 +47,7 @@ RULE   = RGBColor(0xD5, 0xDC, 0xE5)
 WHITE  = RGBColor(0xFF, 0xFF, 0xFF)
 
 
-# ── helpers ────────────────────────────────────────────────────────
+# -- helpers --------------------------------------------------------
 
 def solid(shape, color):
     shape.fill.solid()
@@ -116,10 +118,10 @@ def add_rect(slide, x, y, w, h, fill_color=None, line_color=None,
         no_line(rect)
     else:
         line(rect, line_color, line_width)
-    rect.text_frame.margin_left = Inches(0.1)
-    rect.text_frame.margin_right = Inches(0.1)
-    rect.text_frame.margin_top = Inches(0.05)
-    rect.text_frame.margin_bottom = Inches(0.05)
+    rect.text_frame.margin_left = Inches(0.12)
+    rect.text_frame.margin_right = Inches(0.12)
+    rect.text_frame.margin_top = Inches(0.08)
+    rect.text_frame.margin_bottom = Inches(0.08)
     return rect
 
 
@@ -130,18 +132,22 @@ def add_arrow(slide, x1, y1, x2, y2, color=NAVY, width_pt=2.0):
     return conn
 
 
-def base_slide(prs, title_text, subtitle_text=None):
+def base_slide(prs, title_text, subtitle_text=None,
+               title_size=36, subtitle_size=16):
+    """Standard slide with bigger, more breathable headings."""
     blank = prs.slide_layouts[6]
     s = prs.slides.add_slide(blank)
     # Top accent bar
     add_rect(s, Inches(0), Inches(0), SLIDE_W, Inches(0.18), fill_color=NAVY)
     # Title
-    tf = add_textbox(s, Inches(0.6), Inches(0.35), Inches(12), Inches(0.7))
-    set_text(tf, title_text, size=28, bold=True, color=NAVY)
+    tf = add_textbox(s, Inches(0.7), Inches(0.45), Inches(12), Inches(0.9))
+    set_text(tf, title_text, size=title_size, bold=True, color=NAVY)
     if subtitle_text:
-        add_para(tf, subtitle_text, size=14, color=MUTED, space_before=2)
+        add_para(tf, subtitle_text, size=subtitle_size, color=MUTED,
+                 space_before=4)
     # Footer rule
-    add_rect(s, Inches(0.6), Inches(7.05), Inches(12.1), Inches(0.02), fill_color=RULE)
+    add_rect(s, Inches(0.7), Inches(7.05), Inches(12.0), Inches(0.02),
+             fill_color=RULE)
     return s
 
 
@@ -152,8 +158,8 @@ def set_speaker_notes(slide, text):
     p.text = text
 
 
-def add_chip(slide, x, y, w, h, text, color, font_size=11):
-    """Small pill with white text used for role labels."""
+def add_chip(slide, x, y, w, h, text, color, font_size=14):
+    """Pill with white text, used for labeled roles / channels."""
     rect = add_rect(slide, x, y, w, h, fill_color=color, rounded=True)
     tf = rect.text_frame
     set_text(tf, text, size=font_size, bold=True, color=WHITE,
@@ -163,875 +169,651 @@ def add_chip(slide, x, y, w, h, text, color, font_size=11):
 
 
 def add_box(slide, x, y, w, h, title, lines, accent=NAVY,
-            title_size=14, body_size=11):
-    """Title-bar + content box used for the architecture diagrams."""
+            title_size=16, body_size=13):
+    """Title-bar + content box for grouped concepts."""
     container = add_rect(slide, x, y, w, h, fill_color=WHITE, line_color=RULE)
-    # accent stripe on left
     add_rect(slide, x, y, Inches(0.08), h, fill_color=accent)
-    tf = add_textbox(slide, x + Inches(0.18), y + Inches(0.1),
-                     w - Inches(0.25), h - Inches(0.2))
+    tf = add_textbox(slide, x + Inches(0.22), y + Inches(0.12),
+                     w - Inches(0.32), h - Inches(0.24))
     set_text(tf, title, size=title_size, bold=True, color=accent)
     for ln in lines:
-        add_para(tf, ln, size=body_size, color=INK, space_before=2)
+        add_para(tf, ln, size=body_size, color=INK, space_before=3)
     return container
 
 
-# ── slides ─────────────────────────────────────────────────────────
+# -- slides ---------------------------------------------------------
 
 def slide_title(prs):
     s = prs.slide_layouts[6]
     s = prs.slides.add_slide(s)
     add_rect(s, Inches(0), Inches(0), SLIDE_W, SLIDE_H, fill_color=NAVY)
-    tf = add_textbox(s, Inches(0.8), Inches(2.3), Inches(11.7), Inches(1.5))
-    set_text(tf, "NAPCO Nucleus", size=58, bold=True, color=WHITE)
-    add_para(tf, "How It Works", size=34, color=WHITE)
-    tf2 = add_textbox(s, Inches(0.8), Inches(4.4), Inches(11.7), Inches(1.4))
-    set_text(tf2, "From Teams call to client requirement, hands-off.",
-             size=20, color=RGBColor(0xC8, 0xD2, 0xE0))
-    tf3 = add_textbox(s, Inches(0.8), Inches(6.7), Inches(11.7), Inches(0.5))
+
+    tf = add_textbox(s, Inches(0.9), Inches(2.2), Inches(11.5), Inches(1.6))
+    set_text(tf, "NAPCO Nucleus", size=64, bold=True, color=WHITE)
+
+    tf2 = add_textbox(s, Inches(0.9), Inches(3.6), Inches(11.5), Inches(1.4))
+    set_text(tf2,
+             "Turning client conversations into verified requirements,",
+             size=26, color=RGBColor(0xC8, 0xD2, 0xE0))
+    add_para(tf2, "automatically.",
+             size=26, color=RGBColor(0xC8, 0xD2, 0xE0))
+
+    tf3 = add_textbox(s, Inches(0.9), Inches(6.7), Inches(11.5), Inches(0.5))
     set_text(tf3, "2026-05-14   |   Adaptive Enterprise / NAPCO labs",
              size=12, color=RGBColor(0x9C, 0xAB, 0xBE))
+
     set_speaker_notes(s, (
         "Set the frame. Nucleus is the system that takes everything the "
         "team says, types, mails or shares with a client over the course "
-        "of a day, and -- with one human review step -- produces a "
+        "of a day and -- with one human review step -- produces a single "
         "verification email back to the client confirming what we heard. "
-        "It runs hands-off; the developers don't change their workflow. "
-        "Today is 2026-05-14 -- the day the central host moved from the "
+        "It runs hands-off; developers do not change their workflow. "
+        "Today is 2026-05-14, the day the central host moved from the "
         "Windows MVPACCESS box to a Linux docker stack on .123. The deck "
         "explains the whole pipeline end-to-end."
     ))
 
 
-def slide_cast(prs):
-    s = base_slide(prs, "The cast",
-                   "One client. Seven developers. One central pipeline.")
+def slide_problem(prs):
+    s = base_slide(prs, "The problem",
+                   "Client needs arrive everywhere at once. Without help, things slip.")
 
-    # Client column on the left
-    tf = add_textbox(s, Inches(0.8), Inches(1.7), Inches(4.0), Inches(0.5))
-    set_text(tf, "Client", size=14, bold=True, color=MUTED)
-    add_chip(s, Inches(0.8), Inches(2.3), Inches(3.8), Inches(0.9),
-             "Salman", CORAL, font_size=20)
+    pains = [
+        ("Scattered", CORAL,
+         "Clients raise needs across calls, chats,\nemails, and shared files."),
+        ("Fragmented", PURPLE,
+         "Each developer hears only their slice.\nNo one sees the whole picture."),
+        ("Lost", GOLD,
+         "Requirements get missed, half-captured,\nor re-asked weeks later."),
+    ]
+    cw = Inches(3.9)
+    ch = Inches(3.0)
+    gap = Inches(0.25)
+    total = 3 * 3.9 + 2 * 0.25
+    x0 = (13.333 - total) / 2
+    y = Inches(2.0)
+    for i, (title, color, body) in enumerate(pains):
+        x = Inches(x0 + i * (3.9 + 0.25))
+        add_box(s, x, y, cw, ch, title, body.split("\n"),
+                accent=color, title_size=22, body_size=14)
 
-    # Pipeline pill in the middle
-    add_chip(s, Inches(5.4), Inches(3.7), Inches(2.5), Inches(0.7),
-             "Nucleus", NAVY, font_size=16)
+    tf = add_textbox(s, Inches(0.7), Inches(5.6), Inches(11.9), Inches(1.2))
+    set_text(tf, "Nothing was centralized. Nothing was reconciled.",
+             size=20, bold=True, color=NAVY, align=PP_ALIGN.CENTER)
+    add_para(tf,
+             "The cost was invisible -- until a deliverable shipped without "
+             "what the client thought they had asked for.",
+             size=14, color=MUTED, align=PP_ALIGN.CENTER, space_before=8)
 
-    # Devs column on the right
-    tf2 = add_textbox(s, Inches(8.7), Inches(1.7), Inches(4.0), Inches(0.5))
-    set_text(tf2, "Developers (7)", size=14, bold=True, color=MUTED)
-    devs = ["Assad", "Rocky", "Ferdows", "Titu", "Atik", "Isruk", "Amin"]
-    for i, d in enumerate(devs):
-        row, col = divmod(i, 2)
-        x = Inches(8.7 + col * 2.0)
-        y = Inches(2.3 + row * 0.75)
-        add_chip(s, x, y, Inches(1.8), Inches(0.6), d, NAVY, font_size=14)
-
-    # Faint arrows to the pipeline
-    add_arrow(s, Inches(4.6), Inches(2.75),
-              Inches(5.4), Inches(4.0), color=CORAL, width_pt=2)
-    for i in range(7):
-        row, col = divmod(i, 2)
-        x_from = Inches(8.7 + col * 2.0)
-        y_from = Inches(2.6 + row * 0.75)
-        add_arrow(s, x_from, y_from, Inches(7.9), Inches(4.0),
-                  color=NAVY, width_pt=1.0)
-
-    # Caption
-    tf3 = add_textbox(s, Inches(0.8), Inches(5.6), Inches(11.7), Inches(1.4))
-    set_text(tf3,
-             "Every dev's Teams calls, chats, emails and shared files "
-             "feed the same place. One pass per day stitches them back "
-             "into one verification email.",
-             size=14, color=MUTED)
     set_speaker_notes(s, (
-        "Today the active roster is Salman as the client and seven "
-        "developers on our side -- Assad, Rocky, Ferdows, Titu, Atik, "
-        "Isruk, and Amin. Each developer has their own conversations "
-        "with Salman across Teams calls, Teams chats, email threads, "
-        "and the shared Google Drive folder. None of those developers "
-        "hears the whole picture; we used to lose requirements in the "
-        "gaps. Nucleus is the answer to that fragmentation: every "
-        "channel from every dev flows into one central pipeline, and "
-        "the daily run reconciles them into a single artefact."
+        "Set up the pain. Client requirements arrive through four "
+        "different surfaces: Teams calls, Teams chats, Gmail threads, "
+        "and the shared Google Drive folder. Each developer on our side "
+        "talks to the client through some subset of those, but never "
+        "all of them. Before Nucleus there was no place where all "
+        "conversations with a client landed in the same shape, on the "
+        "same day, attributable back to source. Half a feature would "
+        "be mentioned on a call with one developer, the rest typed "
+        "into an email reply to another -- and unless someone happened "
+        "to be in both conversations, the request fell into the gap. "
+        "This deck is the story of how we closed that gap."
     ))
 
 
-def slide_four_channel_flow(prs):
-    s = base_slide(prs, "The four-channel flow",
-                   "CAPTURE everywhere. IDENTIFY once. VERIFY by hand. DELIVER.")
+def slide_what_we_built(prs):
+    s = base_slide(prs, "What we built",
+                   "Four inputs. One AI pass. One verified email out.")
 
-    # Top row: four capture sources
-    sources = [
-        ("Teams chat", TEAL),
-        ("Teams calls", PURPLE),
-        ("Email", CORAL),
-        ("Drive", GOLD),
+    # Four input chips on the left
+    inputs = [
+        ("Calls", PURPLE),
+        ("Chats", TEAL),
+        ("Emails", CORAL),
+        ("Files", GOLD),
     ]
-    src_y = Inches(1.6)
-    src_w = Inches(2.6)
-    gap = Inches(0.3)
-    total_w = 4 * 2.6 + 3 * 0.3
-    src_x0 = (13.333 - total_w) / 2
-    for i, (name, color) in enumerate(sources):
-        x = Inches(src_x0 + i * (2.6 + 0.3))
-        add_chip(s, x, src_y, src_w, Inches(0.7), name, color, font_size=16)
+    in_x = Inches(0.7)
+    in_w = Inches(2.4)
+    in_h = Inches(0.75)
+    in_y0 = 1.9
+    in_gap = 0.35
+    for i, (name, color) in enumerate(inputs):
+        y = Inches(in_y0 + i * (0.75 + in_gap))
+        add_chip(s, in_x, y, in_w, in_h, name, color, font_size=20)
 
-    # Down arrows into CAPTURE bar
+    # Central AI box
+    ai_x = Inches(5.4)
+    ai_y = Inches(2.6)
+    ai_w = Inches(2.6)
+    ai_h = Inches(1.8)
+    add_rect(s, ai_x, ai_y, ai_w, ai_h, fill_color=NAVY, line_color=NAVY)
+    tf_ai = add_textbox(s, ai_x, ai_y, ai_w, ai_h, anchor=MSO_ANCHOR.MIDDLE)
+    set_text(tf_ai, "AI", size=44, bold=True, color=WHITE,
+             align=PP_ALIGN.CENTER)
+    add_para(tf_ai, "reads and reconciles", size=14,
+             color=RGBColor(0xC8, 0xD2, 0xE0), align=PP_ALIGN.CENTER,
+             space_before=4)
+
+    # Arrows from each input into AI box
     for i in range(4):
-        x = Inches(src_x0 + i * (2.6 + 0.3) + 1.3)
-        add_arrow(s, x, Inches(2.4), x, Inches(2.9),
-                  color=MUTED, width_pt=1.5)
+        y = in_y0 + i * (0.75 + in_gap) + 0.375
+        add_arrow(s, in_x + in_w, Inches(y),
+                  ai_x, ai_y + Inches(0.9),
+                  color=MUTED, width_pt=2)
 
-    # The four-stage pipeline
-    stages = [
-        ("CAPTURE", TEAL,
-         "Voice daemon, chat-push, Gmail IMAP, Drive watcher."),
-        ("IDENTIFY", PURPLE,
-         "verify_session reads the whole day, scopes per client."),
-        ("VERIFY", GOLD,
-         "Human reviews the Gmail draft, edits if needed."),
-        ("DELIVER", GREEN,
-         "Send. Reply gets parsed back through tools.poll_replies."),
-    ]
-    pipe_y = Inches(2.95)
-    pipe_h = Inches(1.4)
-    pipe_w = Inches(2.85)
-    pipe_gap = Inches(0.2)
-    total_pw = 4 * 2.85 + 3 * 0.2
-    pipe_x0 = (13.333 - total_pw) / 2
-    for i, (name, color, sub) in enumerate(stages):
-        x = Inches(pipe_x0 + i * (2.85 + 0.2))
-        add_box(s, x, pipe_y, pipe_w, pipe_h, name, [sub],
-                accent=color, title_size=18, body_size=11)
-        if i < 3:
-            x_arr = Inches(pipe_x0 + i * (2.85 + 0.2) + 2.85)
-            add_arrow(s, x_arr, Inches(2.95 + 1.4 / 2),
-                      x_arr + Inches(0.2), Inches(2.95 + 1.4 / 2),
-                      color=NAVY, width_pt=2.5)
-
-    # Bottom annotation
-    tf = add_textbox(s, Inches(0.8), Inches(5.4), Inches(11.7), Inches(1.6))
-    set_text(tf, "One client requirement can span multiple developers "
-                 "and multiple channels.", size=15, bold=True, color=NAVY)
-    add_para(tf,
-             "Half a feature mentioned on a Teams call with Rocky, the "
-             "rest typed into an email reply to Atik. Without a single "
-             "reconciliation pass, no one ever sees the whole thing.",
-             size=13, color=MUTED, space_before=6)
-    set_speaker_notes(s, (
-        "Four capture channels, all feeding the same identification pass. "
-        "Teams chat is pushed by a per-dev cron in three BD-local windows "
-        "across the day. Teams calls come in via the voice daemon on each "
-        "dev PC. Email is pulled by IMAP on the central host every 15 "
-        "minutes. Drive is pulled by a Drive watcher on the central host "
-        "every 15 minutes. Once captured, IDENTIFY happens ONCE per day "
-        "-- not five times, not seven times -- because cross-developer "
-        "fragments only resolve when the model can see them all together. "
-        "VERIFY is the human-in-the-loop gate: the boss reviews the Gmail "
-        "draft and clicks send. DELIVER is the round trip -- when Salman "
-        "replies, the reply gets parsed back into the pipeline so the "
-        "next day's identification knows what's already confirmed."
-    ))
-
-
-def slide_voice_capture(prs):
-    s = base_slide(prs, "Voice capture on each dev PC",
-                   "Auto-trigger on Teams audio. No wake word needed.")
-
-    # Left: the trigger
-    add_box(s, Inches(0.5), Inches(1.5), Inches(5.8), Inches(5.3),
-            "voice_daemon.py (per dev PC)", [
-                "Watches MS Teams audio-session state via pycaw.",
-                "  -> session becomes Active  =>  start recording",
-                "  -> session ends            =>  stop recording",
-                "",
-                "No verbal phrase needed in `auto` mode.",
-                "Wake words still accepted as an early-stop shortcut",
-                "  (\"nucleus stop\", \"Allah Hafez\", ...).",
-                "",
-                "Records two WAV tracks:",
-                "  - mic.wav      (your voice)",
-                "  - speaker.wav  (their voice via WASAPI loopback)",
-            ], accent=TEAL, title_size=15, body_size=12)
-
-    # Right: post-processing
-    add_box(s, Inches(6.6), Inches(1.5), Inches(6.2), Inches(5.3),
-            "Post-record pipeline (on stop)", [
-                "1. Comb-notch denoise at 50 Hz + harmonics.",
-                "      removes mains hum from cheap USB cards.",
-                "",
-                "2. Peak normalize mic.wav to -1 dBFS.",
-                "      consistent loudness for Whisper.",
-                "",
-                "3. Drop calls under 20 seconds.",
-                "      ringtone-only / accidental triggers.",
-                "",
-                "4. Hard cap at 1 hour per recording.",
-                "      guards against a stuck audio-session state.",
-                "",
-                "5. Resolve client via Teams IndexedDB.",
-                "      every WAV lands self-labeled.",
-                "",
-                "6. Copy to central share with metadata sidecar.",
-            ], accent=GREEN, title_size=15, body_size=12)
-    set_speaker_notes(s, (
-        "Each developer runs the voice daemon at the start of the day "
-        "from start-daemon.bat. The daemon's auto mode -- which is the "
-        "default since the 2026-05-13 change -- watches Teams' audio "
-        "session via pycaw. The instant Teams starts producing audio "
-        "(call ringing counts), recording begins; the instant Teams' "
-        "session ends, recording stops. The developers don't have to "
-        "say anything special. Post-processing strips mains hum at 50 "
-        "Hz and its harmonics, normalizes the mic track so Whisper sees "
-        "consistent levels, and drops anything under 20 seconds as "
-        "almost certainly an accidental ring-and-drop. The hard 1-hour "
-        "cap prevents one stuck audio session from filling the share "
-        "with junk. The IndexedDB resolver was the trick we shipped in "
-        "April -- it auto-tags every recording with the client name so "
-        "the central pipeline can scope per client without anyone "
-        "labeling manually."
-    ))
-
-
-def slide_where_call_lands(prs):
-    s = base_slide(prs, "Where the call lands",
-                   "Samba share on .123. One folder per dev, per day.")
-
-    # Left: dev PC chip
-    add_chip(s, Inches(0.6), Inches(2.6), Inches(2.6), Inches(1.0),
-             "Dev PC\n(voice_daemon)", TEAL, font_size=14)
-
-    # Arrow
-    add_arrow(s, Inches(3.3), Inches(3.1), Inches(5.3), Inches(3.1),
+    # Output chip on the right
+    out_x = Inches(10.0)
+    out_y = Inches(2.9)
+    out_w = Inches(2.6)
+    out_h = Inches(1.3)
+    add_chip(s, out_x, out_y, out_w, out_h,
+             "Verification\nemail", GREEN, font_size=22)
+    add_arrow(s, ai_x + ai_w, ai_y + Inches(0.9),
+              out_x, out_y + Inches(0.65),
               color=NAVY, width_pt=3)
-    tf_lbl = add_textbox(s, Inches(3.3), Inches(2.5), Inches(2.0), Inches(0.5))
-    set_text(tf_lbl, "SMB / Samba", size=12, bold=True,
-             color=NAVY, align=PP_ALIGN.CENTER)
-    tf_lbl2 = add_textbox(s, Inches(3.3), Inches(3.3), Inches(2.0), Inches(0.5))
-    set_text(tf_lbl2, "(port 445)", size=10, color=MUTED, align=PP_ALIGN.CENTER)
 
-    # Right: central tree
-    add_box(s, Inches(5.4), Inches(1.5), Inches(7.4), Inches(5.3),
-            r"\\172.16.205.123\nucleus-central\\", [
-                r"    salman\\2026-05-14\\",
-                "        calls\\",
-                "            20260514-100432_mic.wav",
-                "            20260514-100432_speaker.wav",
-                "            20260514-100432_transcript.md",
-                "            20260514-100432.json     (metadata)",
-                "        chat\\",
-                "            chat_2026-05-14_1000-1015.docx",
-                "        email\\        (staged on .123)",
-                "        drive\\        (staged on .123)",
-                "    rocky\\2026-05-14\\",
-                "        calls\\ ...",
-                "    isruk\\2026-05-14\\",
-                "        ...",
-                "",
-                "metadata.client_name comes from the IndexedDB resolver.",
-                "collect_central uses substring match on this field",
-                "to scope by client.",
-            ], accent=PURPLE, title_size=13, body_size=11)
-    set_speaker_notes(s, (
-        "The Samba container on .123 serves the same UNC path that the "
-        "old MVPACCESS share served. Every dev PC has it mapped at "
-        "boot. After a call ends and the post-record steps complete, "
-        "the daemon copies the mic, speaker, and metadata files into "
-        "the dev's day folder over SMB. The transcript .md gets written "
-        "later by the transcribe worker on .123 once Groq finishes "
-        "processing the WAVs. The layout is the load-bearing convention "
-        "for the whole pipeline -- everything downstream is just a walk "
-        "of this tree filtered by date and client name."
-    ))
-
-
-def slide_central_host(prs):
-    s = base_slide(prs, "The .123 Linux central host",
-                   "Ubuntu 24.04. Six containers. One docker-compose stack.")
-
-    # Header strip with host path
-    tf = add_textbox(s, Inches(0.6), Inches(1.4), Inches(12.2), Inches(0.5))
-    set_text(tf, "/home/ubuntu/napco-nucleus/deploy/linux-central/",
-             size=13, color=MUTED, font="Consolas")
-
-    # Six containers in two rows of three
-    containers = [
-        ("nucleus-samba", TEAL,
-         "Serves SMB share to dev PCs.\nHost network mode (port 445)."),
-        ("nucleus-transcribe", PURPLE,
-         "Loop: walks /data for new calls.\nGroq first, faster-whisper fallback."),
-        ("nucleus-stage-email", CORAL,
-         "15-min cadence.\nGmail IMAP -> per-dev /email/ folders."),
-        ("nucleus-stage-drive", GOLD,
-         "15-min cadence.\nDrive folder -> per-dev /drive/ folders."),
-        ("nucleus-daily-draft", GREEN,
-         "Fires at BD 23:45.\nRuns collect_central.py --client all."),
-        ("nucleus-gha-runner", NAVY,
-         "Org-scoped self-hosted runner.\nLabels: linux, nucleus-central."),
-    ]
-    col_w = Inches(4.05)
-    col_h = Inches(2.0)
-    col_gap = Inches(0.15)
-    x0 = Inches(0.5)
-    y0 = Inches(2.0)
-    for i, (name, color, body) in enumerate(containers):
-        row, col = divmod(i, 3)
-        x = x0 + col * (col_w + col_gap)
-        y = y0 + Inches(row * 2.15)
-        add_box(s, x, y, col_w, col_h, name, body.split("\n"),
-                accent=color, title_size=14, body_size=11)
-
-    # Bind-mounts strip at the bottom
-    tf2 = add_textbox(s, Inches(0.6), Inches(6.35), Inches(12.2), Inches(0.7))
-    set_text(tf2, "Bind mounts:", size=12, bold=True, color=NAVY)
-    add_para(tf2,
-             "/srv/nucleus-central  -> /data/nucleus-central     "
-             "(everyone shares this dir, Samba serves it)",
-             size=11, color=INK, font="Consolas", space_before=1)
-    add_para(tf2,
-             "/srv/nucleus-data     -> /app/data                 "
-             "(writable overlay of repo's data/, holds session docs + locks)",
-             size=11, color=INK, font="Consolas", space_before=1)
-    add_para(tf2,
-             "nucleus-state (vol)   -> /state                    "
-             "(sqlite memory db; survives `compose down`)",
-             size=11, color=INK, font="Consolas", space_before=1)
-    add_para(tf2,
-             "/home/ubuntu/.claude  -> /root/.claude  (read-only) "
-             "(Claude Max-tier auth, every worker inherits)",
-             size=11, color=INK, font="Consolas", space_before=1)
-    set_speaker_notes(s, (
-        "This is the single biggest change of the week: the agent host "
-        "moved off Windows MVPACCESS onto the existing Linux box at "
-        ".123 that already hosts the OpenProject stack. The whole "
-        "thing is a docker-compose file, six services, one shared "
-        "image (`nucleus-worker:latest`) plus the third-party Samba "
-        "and GitHub runner containers. The repo itself is bind-mounted "
-        "read-only -- `git pull` on the host updates every worker "
-        "without an image rebuild. Bind mounts are designed so we can "
-        "`docker compose down` and `up` without losing state: the "
-        "sqlite memory database lives in a named volume, the central "
-        "share lives on the host filesystem, and the Claude auth tree "
-        "is mounted in from the ubuntu user's home directory."
-    ))
-
-
-def slide_transcription_pipeline(prs):
-    s = base_slide(prs, "Transcription pipeline",
-                   "Groq primary. faster-whisper fallback. Same model on both.")
-
-    # Two boxes, primary vs fallback
-    add_box(s, Inches(0.5), Inches(1.5), Inches(6.1), Inches(5.3),
-            "Primary: Groq Whisper (cloud)", [
-                "Model:       whisper-large-v3",
-                "Endpoint:    api.groq.com/openai/v1/audio/translations",
-                "Hardware:    Groq LPU (GPU class)",
-                "Throughput:  ~30 s per call (typical 3-min call)",
-                "Cost:        free tier, 8 hours of audio/day",
-                "Limit:       file size capped at 25 MB",
-                "",
-                "Calls translation endpoint (Bangla speech -> English text)",
-                "in one round trip; no separate transcribe + translate step.",
-                "",
-                "If GROQ_API_KEY missing, rate-limited, network error, or",
-                "file > 25 MB: silent fallback to faster-whisper.",
-            ], accent=GREEN, title_size=15, body_size=12)
-
-    add_box(s, Inches(6.8), Inches(1.5), Inches(6.0), Inches(5.3),
-            "Fallback: faster-whisper (local CPU)", [
-                "Model:       whisper-large-v3 (int8 quantized)",
-                "Hardware:    CPU on .123 (no GPU on this host)",
-                "Throughput:  ~10 min per call",
-                "Cost:        free, no external dependency",
-                "Load:        ~3 GB model, loaded LAZILY",
-                "",
-                "Only fires when Groq fails. On normal days the int8 model",
-                "is never loaded -- we save the ~3 GB allocation entirely.",
-                "",
-                "Same model lineage as Groq's, so transcript quality is",
-                "consistent across the boundary -- only the latency",
-                "differs.",
-            ], accent=GOLD, title_size=15, body_size=12)
-    set_speaker_notes(s, (
-        "Transcription is where the daily pipeline used to bottleneck on "
-        "the Windows host -- a 3-minute Bangla call took about 10 minutes "
-        "to transcribe on CPU with faster-whisper. Groq is the same "
-        "whisper-large-v3 model running on their LPU hardware; we hit "
-        "their translation endpoint, which folds Bangla speech -> English "
-        "text into one round trip. A typical call comes back in about 30 "
-        "seconds. The free tier gives us 8 hours of audio per day, which "
-        "comfortably covers the team's actual call volume. If Groq fails "
-        "for ANY reason -- missing key, network blip, rate limit, file "
-        "over 25 MB -- the worker falls back to the local faster-whisper "
-        "on CPU. The fallback is correct but slow; on bursty days that's "
-        "fine because we have hours before the 23:45 daily draft fires."
-    ))
-
-
-def slide_email_drive_chat(prs):
-    s = base_slide(prs, "Email, Drive, and chat capture",
-                   "Periodic pulls on .123. Chat push on dev PCs.")
-
-    # Three columns
-    add_box(s, Inches(0.5), Inches(1.5), Inches(4.05), Inches(5.3),
-            "Teams chat (per-dev push)", [
-                "Where:    each dev PC",
-                "Trigger:  Windows Task Scheduler",
-                "Windows:  3 BD-local windows/day",
-                "    - Day       (~10:00 BD)",
-                "    - Transition(~14:00 BD)",
-                "    - Evening   (~20:00 BD)",
-                "",
-                "Each push bundles every Teams chat",
-                "the dev exchanged since the last",
-                "push, writes a .docx per window, and",
-                "copies to central:",
-                "  /<dev>/<date>/chat/",
-            ], accent=TEAL, title_size=14, body_size=11)
-
-    add_box(s, Inches(4.65), Inches(1.5), Inches(4.05), Inches(5.3),
-            "Email (Gmail IMAP)", [
-                "Where:    nucleus-stage-email on .123",
-                "Trigger:  loop, 15-min cadence",
-                "",
-                "Pulls every new mail thread the team",
-                "had with the client. Each thread is",
-                "saved as a structured .docx with",
-                "attachments fanned out:",
-                "  /<dev>/<date>/email/",
-                "      thread_<id>.docx",
-                "      thread_<id>__att1.pdf",
-                "      ...",
-                "",
-                "PDFs + legacy .doc bodies are byte-",
-                "scanned and inlined so verify_session",
-                "sees the full content, not just the",
-                "filename.",
-            ], accent=CORAL, title_size=14, body_size=11)
-
-    add_box(s, Inches(8.8), Inches(1.5), Inches(4.05), Inches(5.3),
-            "Drive (Google Drive)", [
-                "Where:    nucleus-stage-drive on .123",
-                "Trigger:  loop, 15-min cadence",
-                "",
-                "Watches the shared client folder.",
-                "New files copy into:",
-                "  /<dev>/<date>/drive/",
-                "",
-                "Audio uploads (.m4a, .mp3, .wav)",
-                "are re-transcribed through the same",
-                "Groq pipeline -- so a voice note in",
-                "the shared folder gets a transcript",
-                "alongside, just like a call would.",
-                "",
-                "Drive transcripts and call transcripts",
-                "are tracked separately so we don't",
-                "double-count.",
-            ], accent=GOLD, title_size=14, body_size=11)
-    set_speaker_notes(s, (
-        "Three capture channels that are independent of the voice "
-        "daemon. Teams chat is the only channel still pushed from "
-        "dev PCs (the chat database lives in each user's Teams app "
-        "data, so we have to walk it on their machine); three BD-local "
-        "windows per day balance freshness against API rate limits. "
-        "Email is pulled by the stage-email container on .123 every "
-        "15 minutes via Gmail IMAP -- threads are saved as structured "
-        ".docx with attachments fanned out and PDFs inlined so the "
-        "downstream model actually sees the content. Drive is similar "
-        "but for Google Drive; the wrinkle is that voice notes "
-        "uploaded to the shared folder get sent through Groq too, so "
-        "an audio file in the Drive folder ends up with a transcript "
-        "next to it just like a Teams call recording would."
-    ))
-
-
-def slide_daily_requirement_management(prs):
-    s = base_slide(prs, "Daily Requirement Management",
-                   "BD 23:45 on .123. One pass aggregates the whole day.")
-
-    # Timeline of the daily run
-    tf = add_textbox(s, Inches(0.8), Inches(1.5), Inches(11.7), Inches(0.6))
-    set_text(tf, "Container nucleus-daily-draft, TZ=Asia/Dhaka, sleep-until-target loop:",
-             size=14, color=MUTED)
-
-    # Step boxes in a horizontal flow
-    steps = [
-        ("23:45 BD", NAVY,
-         "Loop wakes.\nFires once.\nSleeps until 23:45 tomorrow."),
-        ("collect_central.py", TEAL,
-         "--client all\n--last-minutes 1440\n(walks last 24h)"),
-        ("Aggregate", PURPLE,
-         "Read every .md / .docx in central tree.\nGroup by client.\nWrite Pull Session <date>.docx."),
-        ("verify_session", GREEN,
-         "Claude Agent SDK\non the session doc.\nIdentify + draft."),
-        ("Gmail Drafts", GOLD,
-         "One .eml per client\nlands in your Drafts\nready for review."),
-    ]
-    box_w = Inches(2.4)
-    gap = Inches(0.15)
-    total = 5 * 2.4 + 4 * 0.15
-    x0 = (13.333 - total) / 2
-    y_steps = Inches(2.3)
-    for i, (title, color, body) in enumerate(steps):
-        x = Inches(x0 + i * (2.4 + 0.15))
-        add_box(s, x, y_steps, box_w, Inches(2.7), title, body.split("\n"),
-                accent=color, title_size=14, body_size=11)
-        if i < 4:
-            x_arr = Inches(x0 + i * (2.4 + 0.15) + 2.4)
-            add_arrow(s, x_arr, Inches(2.3 + 2.7 / 2),
-                      x_arr + Inches(0.15), Inches(2.3 + 2.7 / 2),
-                      color=NAVY, width_pt=2.5)
-
-    # Cost annotation
-    tf2 = add_textbox(s, Inches(0.8), Inches(5.4), Inches(11.7), Inches(1.6))
-    set_text(tf2, "Typical run: 7 devs, 1 client, full day of capture.",
-             size=14, bold=True, color=NAVY)
-    add_para(tf2,
-             "Session document around 16k characters. One Claude pass. "
-             "Target cost ~$0.06 per run. Walks come in under 60 seconds.",
-             size=12, color=MUTED, space_before=4)
-    add_para(tf2,
-             "Same workhorse script runs ad-hoc -- collect_central.py "
-             "--client \"Salman\" --day 2026-05-14 -- if you want a "
-             "mid-day rebuild without waiting for 23:45.",
-             size=12, color=MUTED, space_before=4)
-    set_speaker_notes(s, (
-        "The daily run is the heartbeat of the system. Container TZ "
-        "is Asia/Dhaka so the wall clock IS BD; a simple sleep-until-"
-        "target loop replaces the old Windows Task Scheduler entry. "
-        "At 23:45 it shells out to collect_central.py with --client "
-        "all and --last-minutes 1440 -- the workhorse script that "
-        "walks the central tree, groups everything that touched each "
-        "client in the last 24 hours, and writes a single Pull Session "
-        ".docx. That doc is what gets handed to the verify_session task "
-        "on the Claude Agent SDK. The whole run targets about six "
-        "cents on Anthropic's pricing because we're scoping tightly "
-        "and using prompt caching."
-    ))
-
-
-def slide_claude_identifies(prs):
-    s = base_slide(prs, "Claude identifies and drafts",
-                   "One Claude Agent SDK session per client. ~16k chars in.")
-
-    add_box(s, Inches(0.5), Inches(1.5), Inches(6.1), Inches(5.3),
-            "Input: Pull Session <date>.docx", [
-                "  Calls section (transcripts, in time order)",
-                "  Chats section (per chat window)",
-                "  Emails section (subject + body + inlined attachments)",
-                "  Drive section (file names + audio transcripts)",
-                "",
-                "Around 16k characters for a typical full day.",
-                "",
-                "Pre-filtered before Claude sees it:",
-                "  - system notifications stripped",
-                "  - recorder test snippets dropped",
-                "  - peer-to-peer dev chatter dropped",
-                "  - already-confirmed requirements (from previous",
-                "    days' replies) marked as resolved.",
-            ], accent=NAVY, title_size=15, body_size=12)
-
-    add_box(s, Inches(6.7), Inches(1.5), Inches(6.1), Inches(5.3),
-            "Output: per-client artefacts", [
-                "1. Requirements Verification <date>.docx",
-                "      a numbered list of what the team heard.",
-                "      one entry per requirement, with the",
-                "      source pointer (call timestamp, chat",
-                "      thread, email subject).",
-                "",
-                "2. .eml draft in Gmail Drafts",
-                "      To:      <client>@<domain>",
-                "      Subject: Requirements Verification <date>",
-                "      Body:    bullet summary",
-                "      Attach:  the .docx above",
-                "      Attach:  the Pull Session source doc",
-                "",
-                "Memory: writes new state to sqlite at",
-                "      /state/nucleus_memory.db",
-            ], accent=GOLD, title_size=15, body_size=12)
-    set_speaker_notes(s, (
-        "Inside the verify_session task, Claude is doing one job: read "
-        "the day's collated source material and pick out the things that "
-        "are actually client requirements -- as distinct from noise like "
-        "system notifications, recorder-test snippets, peer-to-peer dev "
-        "chatter, or already-confirmed items from prior days. The output "
-        "is two artefacts per client per day. The .docx is the curated "
-        "list with source pointers so the client can cross-check. The "
-        ".eml is the verification email itself, with both the curated "
-        ".docx and the raw Pull Session attached -- the raw source is "
-        "deliberately included so the client can audit anything that "
-        "looks off. State written to the sqlite memory db lives in the "
-        "named docker volume; it survives container restarts."
-    ))
-
-
-def slide_human_in_the_loop(prs):
-    s = base_slide(prs, "Human in the loop",
-                   "Review the draft. Send. Reply gets parsed back.")
-
-    # Three steps as horizontal cards
-    steps = [
-        ("Review", NAVY,
-         "Open Gmail Drafts.\nRead the curated .docx.\nSpot-check anything questionable\nagainst the Pull Session doc."),
-        ("Send", GREEN,
-         "Click send when satisfied.\nNo auto-send -- the human gate\nis deliberate.\nSalman gets the email + 2 attachments."),
-        ("Parse the reply", PURPLE,
-         "Salman replies in Gmail.\ntools.poll_replies picks it up,\nupdates the sqlite memory db,\nfeeds tomorrow's run."),
-    ]
-    cw = Inches(4.0)
-    gap = Inches(0.2)
-    total = 3 * 4.0 + 2 * 0.2
-    x0 = (13.333 - total) / 2
-    y = Inches(1.8)
-    for i, (title, color, body) in enumerate(steps):
-        x = Inches(x0 + i * (4.0 + 0.2))
-        add_box(s, x, y, cw, Inches(3.4), title, body.split("\n"),
-                accent=color, title_size=18, body_size=13)
-        if i < 2:
-            x_arr = Inches(x0 + i * (4.0 + 0.2) + 4.0)
-            add_arrow(s, x_arr, Inches(1.8 + 3.4 / 2),
-                      x_arr + Inches(0.2), Inches(1.8 + 3.4 / 2),
-                      color=NAVY, width_pt=2.5)
-
-    # Bottom annotation
-    tf = add_textbox(s, Inches(0.8), Inches(5.7), Inches(11.7), Inches(1.4))
-    set_text(tf, "The loop closes automatically.",
-             size=15, bold=True, color=NAVY)
+    tf = add_textbox(s, Inches(0.7), Inches(6.0), Inches(11.9), Inches(1.0))
+    set_text(tf,
+             "Everything a client said to anyone, anywhere, in one day --",
+             size=16, color=INK, align=PP_ALIGN.CENTER)
     add_para(tf,
-             "Replies are matched back to the verification email by "
-             "thread id, parsed for accept/reject/clarify-on-each-line, "
-             "and written into the same sqlite memory the next day's "
-             "Pull Session reads from. Items confirmed yesterday don't "
-             "re-surface today.",
-             size=13, color=MUTED, space_before=6)
+             "summarised back to them for sign-off.",
+             size=16, bold=True, color=NAVY, align=PP_ALIGN.CENTER,
+             space_before=4)
+
     set_speaker_notes(s, (
-        "This is the only manual step in the whole pipeline. The "
-        "deliberate design choice is that the system never sends mail "
-        "to a client without a human pressing send. You open Gmail "
-        "Drafts -- the .eml is already there -- skim the curated "
-        ".docx, cross-check anything that looks weird against the Pull "
-        "Session source doc, edit if needed, and send. Once Salman "
-        "replies, tools.poll_replies (which runs on the central host) "
-        "matches the reply by thread id, parses line-by-line "
-        "accept/reject/clarify, and writes the deltas into the "
-        "sqlite memory. Tomorrow's daily run reads that memory before "
-        "drafting the next verification email, so confirmed items "
-        "don't get re-asked."
+        "One-sentence answer to 'what does this thing do?'. Four capture "
+        "surfaces feed one daily AI pass, which produces one verification "
+        "email per client. The AI in question is Claude (Anthropic), "
+        "running via the Claude Agent SDK on the central Linux host. "
+        "Capture happens continuously through the day; the AI pass fires "
+        "once at 23:45 Bangladesh time and writes a Gmail draft for "
+        "human review. After this slide, the viewer should be able to "
+        "explain Nucleus in one sentence."
     ))
 
 
-def slide_tools_and_tech(prs):
-    s = base_slide(prs, "Tools and technologies",
-                   "Boring tech, deliberately. One Python stack end-to-end.")
+def slide_four_channels(prs):
+    s = base_slide(prs, "Four ways we capture",
+                   "Whatever the client touches, we pick up.")
 
-    # Categories
-    cats = [
-        ("Runtime", TEAL, [
-            "Python 3.12",
-            "Ubuntu 24.04 LTS (.123)",
-            "Windows 11 (dev PCs)",
-            "Docker + docker-compose",
-        ]),
-        ("AI / transcription", PURPLE, [
-            "Anthropic Claude Opus (Max-tier)",
-            "Claude Agent SDK",
-            "Groq API (whisper-large-v3)",
-            "faster-whisper int8 (fallback)",
-        ]),
-        ("Storage / share", GOLD, [
-            "Samba (SMB / port 445)",
-            "sqlite (memory.db)",
-            "python-docx (artefacts)",
-            "Named docker volume (state)",
-        ]),
-        ("Capture surfaces", CORAL, [
-            "MS Teams (pycaw, IndexedDB)",
-            "Gmail IMAP + OAuth",
-            "Google Drive API + OAuth",
-            "Windows Task Scheduler (chat push)",
-        ]),
-        ("Ops", GREEN, [
-            "GitHub Actions (self-hosted runner)",
-            "docker-compose .env config",
-            "git pull -> RO bind-mount = hot reload",
-            "tools.healthcheck (CLI status)",
-        ]),
-        ("Auth", NAVY, [
-            "Claude Max-tier (.claude bind-mounted RO)",
-            "Gmail OAuth refresh tokens",
-            "Drive OAuth (same project)",
-            "Samba single shared user (Phase 1)",
-        ]),
+    channels = [
+        ("Calls", PURPLE,
+         "Recorded automatically\nwhen a Teams call starts."),
+        ("Chats", TEAL,
+         "Collected from each\nteammate's Teams chats."),
+        ("Emails", CORAL,
+         "Pulled from the team's\nGmail throughout the day."),
+        ("Shared files", GOLD,
+         "Watched in the shared\nGoogle Drive folder."),
+    ]
+    cw = Inches(2.9)
+    ch = Inches(3.6)
+    gap = Inches(0.2)
+    total = 4 * 2.9 + 3 * 0.2
+    x0 = (13.333 - total) / 2
+    y = Inches(2.0)
+    for i, (title, color, body) in enumerate(channels):
+        x = Inches(x0 + i * (2.9 + 0.2))
+        add_box(s, x, y, cw, ch, title, body.split("\n"),
+                accent=color, title_size=22, body_size=14)
+
+    tf = add_textbox(s, Inches(0.7), Inches(6.0), Inches(11.9), Inches(1.0))
+    set_text(tf, "Capture is silent. No one has to remember to log anything.",
+             size=16, color=NAVY, align=PP_ALIGN.CENTER, bold=True)
+
+    set_speaker_notes(s, (
+        "Four capture surfaces, each running in the background. Teams "
+        "calls are picked up by a small voice daemon on each developer "
+        "PC -- it watches the audio session via pycaw, and the instant "
+        "Teams becomes active it records the mic and the speaker as "
+        "two separate WAV tracks. Teams chats are collected by a "
+        "scheduled task on each developer PC in three windows per day "
+        "(morning, transition, evening). Email is pulled by a container "
+        "on the central host via Gmail IMAP every 15 minutes -- threads "
+        "are converted to structured .docx with attachments fanned out. "
+        "Drive is watched by another container on the central host, "
+        "also every 15 minutes; voice notes uploaded to the shared "
+        "folder get re-transcribed through the same pipeline as calls."
+    ))
+
+
+def slide_call_to_text(prs):
+    s = base_slide(prs, "How calls become text",
+                   "Fast cloud transcription. Local backup if cloud fails.")
+
+    # Step strip
+    steps = [
+        ("1", "Call starts",
+         "Recording begins\nautomatically.", PURPLE),
+        ("2", "Call ends",
+         "Recording stops.\nFiles uploaded.", TEAL),
+        ("3", "Transcribed",
+         "Text ready within\na few minutes.", GREEN),
+    ]
+    sw = Inches(3.6)
+    sh = Inches(3.4)
+    gap = Inches(0.3)
+    total = 3 * 3.6 + 2 * 0.3
+    x0 = (13.333 - total) / 2
+    y = Inches(2.0)
+    for i, (num, title, body, color) in enumerate(steps):
+        x = Inches(x0 + i * (3.6 + 0.3))
+        container = add_rect(s, x, y, sw, sh,
+                             fill_color=WHITE, line_color=RULE)
+        add_rect(s, x, y, sw, Inches(0.5), fill_color=color)
+        tf_n = add_textbox(s, x + Inches(0.2), y + Inches(0.05),
+                           Inches(0.6), Inches(0.4),
+                           anchor=MSO_ANCHOR.MIDDLE)
+        set_text(tf_n, num, size=18, bold=True, color=WHITE)
+        tf_t = add_textbox(s, x + Inches(0.2), y + Inches(0.7),
+                           sw - Inches(0.4), Inches(0.7))
+        set_text(tf_t, title, size=22, bold=True, color=color)
+        tf_b = add_textbox(s, x + Inches(0.2), y + Inches(1.7),
+                           sw - Inches(0.4), Inches(1.6))
+        set_text(tf_b, body.split("\n")[0], size=15, color=INK)
+        for ln in body.split("\n")[1:]:
+            add_para(tf_b, ln, size=15, color=INK, space_before=4)
+        if i < 2:
+            x_arr = Inches(x0 + i * (3.6 + 0.3) + 3.6)
+            add_arrow(s, x_arr, y + Inches(1.7),
+                      x_arr + Inches(0.3), y + Inches(1.7),
+                      color=NAVY, width_pt=3)
+
+    tf = add_textbox(s, Inches(0.7), Inches(5.9), Inches(11.9), Inches(1.2))
+    set_text(tf, "Cloud-first for speed. Local fallback when cloud is unavailable.",
+             size=16, bold=True, color=NAVY, align=PP_ALIGN.CENTER)
+    add_para(tf,
+             "Bangla speech is translated to English in the same step -- "
+             "no separate translation pass.",
+             size=13, color=MUTED, align=PP_ALIGN.CENTER, space_before=6)
+
+    set_speaker_notes(s, (
+        "Transcription pipeline in plain terms. Primary path is the Groq "
+        "API hitting whisper-large-v3 on their LPU hardware; we use the "
+        "translation endpoint so Bangla audio comes back as English text "
+        "in one round trip. A typical 3-minute call comes back in about "
+        "30 seconds. Groq's free tier gives us 8 hours of audio per "
+        "day, which comfortably covers the team's actual call volume. "
+        "Fallback path is faster-whisper int8 quantized on CPU on the "
+        "Linux host -- same model lineage, slower (~10 min for the "
+        "same call) but no external dependency. Fallback fires "
+        "automatically if the API key is missing, the network is down, "
+        "we hit the rate limit, or the file is over the 25 MB upload "
+        "cap. On normal days the fallback model is never loaded, "
+        "saving ~3 GB of memory."
+    ))
+
+
+def slide_central_server(prs):
+    s = base_slide(prs, "What our central server does",
+                   "One Linux box. Six quiet background jobs.")
+
+    roles = [
+        ("Stores recordings", TEAL,
+         "Holds every call, chat,\nemail, and shared file."),
+        ("Listens for new content", CORAL,
+         "Notices the moment\nsomething new arrives."),
+        ("Turns audio into text", PURPLE,
+         "Sends recordings out\nfor fast transcription."),
+        ("Pulls email and files", GOLD,
+         "Checks Gmail and Drive\nevery 15 minutes."),
+        ("Runs the AI", NAVY,
+         "Each night, reviews the\nwhole day's material."),
+        ("Drafts the email", GREEN,
+         "Writes the verification\nemail for your review."),
     ]
     cw = Inches(4.05)
-    ch = Inches(2.55)
+    ch = Inches(2.15)
     gap = Inches(0.15)
     x0 = Inches(0.5)
-    y0 = Inches(1.5)
-    for i, (name, color, items) in enumerate(cats):
+    y0 = Inches(1.55)
+    for i, (title, color, body) in enumerate(roles):
         row, col = divmod(i, 3)
         x = x0 + col * (cw + gap)
-        y = y0 + Inches(row * 2.7)
-        add_box(s, x, y, cw, ch, name, items, accent=color,
-                title_size=14, body_size=12)
+        y = y0 + Inches(row * 2.3)
+        add_box(s, x, y, cw, ch, title, body.split("\n"),
+                accent=color, title_size=17, body_size=13)
+
+    tf = add_textbox(s, Inches(0.7), Inches(6.4), Inches(11.9), Inches(0.6))
+    set_text(tf,
+             "All six jobs run continuously. No one logs in to babysit them.",
+             size=14, color=MUTED, align=PP_ALIGN.CENTER)
+
     set_speaker_notes(s, (
-        "Nothing exotic in the stack. The whole system is one Python "
-        "codebase running in docker containers on Linux, with a small "
-        "Windows footprint on each dev PC for the parts that have to "
-        "live next to Teams. Anthropic + Groq are the only paid "
-        "external services -- and Groq is currently free-tier. Gmail "
-        "and Drive use ordinary OAuth refresh tokens against a single "
-        "Google Cloud project. Self-hosted GitHub Actions on .123 "
-        "means CI runs in the same network neighborhood as the "
-        "containers, which keeps deploys simple."
+        "The central server is the Ubuntu 24.04 box at 172.16.205.123. "
+        "Implementation detail: it's a single docker-compose stack of "
+        "six containers -- nucleus-samba (serves the shared folder over "
+        "SMB on port 445), nucleus-transcribe (the call-to-text loop), "
+        "nucleus-stage-email (Gmail IMAP every 15 min), "
+        "nucleus-stage-drive (Google Drive watcher every 15 min), "
+        "nucleus-daily-draft (the 23:45 BD agent run), and "
+        "nucleus-gha-runner (self-hosted GitHub Actions runner). The "
+        "repo is bind-mounted read-only so `git pull` on the host hot-"
+        "reloads every worker without an image rebuild. State that "
+        "must survive `compose down` lives in a named docker volume "
+        "(the sqlite memory database) and on the host filesystem (the "
+        "shared central tree). Today (2026-05-14) is the day this box "
+        "took over from the old Windows MVPACCESS agent host."
     ))
 
 
-def slide_status_today(prs):
-    s = base_slide(prs, "What .123 actually does today",
-                   "Live as of 2026-05-14. Six containers up. Four channels active.")
+def slide_what_ai_does(prs):
+    s = base_slide(prs, "What the AI does",
+                   "Reads everything from the day. Drafts one email per client.")
 
-    # Status row
+    # Big sequential cards
+    cards = [
+        ("Reads", NAVY,
+         "Every call transcript, chat,\nemail, and file from the day."),
+        ("Identifies", PURPLE,
+         "Picks out real client requirements.\nIgnores noise and chatter."),
+        ("Drafts", GOLD,
+         "Writes a verification email,\nattaches the source material."),
+    ]
+    cw = Inches(3.9)
+    ch = Inches(3.4)
+    gap = Inches(0.25)
+    total = 3 * 3.9 + 2 * 0.25
+    x0 = (13.333 - total) / 2
+    y = Inches(1.9)
+    for i, (title, color, body) in enumerate(cards):
+        x = Inches(x0 + i * (3.9 + 0.25))
+        add_box(s, x, y, cw, ch, title, body.split("\n"),
+                accent=color, title_size=24, body_size=15)
+        if i < 2:
+            x_arr = Inches(x0 + i * (3.9 + 0.25) + 3.9)
+            add_arrow(s, x_arr, y + Inches(1.7),
+                      x_arr + Inches(0.25), y + Inches(1.7),
+                      color=NAVY, width_pt=3)
+
+    tf = add_textbox(s, Inches(0.7), Inches(5.7), Inches(11.9), Inches(1.4))
+    set_text(tf, "One pass per day. One email per client.",
+             size=20, bold=True, color=NAVY, align=PP_ALIGN.CENTER)
+    add_para(tf,
+             "Already-confirmed items from earlier days are skipped, "
+             "so the client only ever sees what's new.",
+             size=14, color=MUTED, align=PP_ALIGN.CENTER, space_before=6)
+
+    set_speaker_notes(s, (
+        "The AI is Anthropic's Claude, running through the Claude Agent "
+        "SDK in the nucleus-daily-draft container on the central host. "
+        "It fires once per day at 23:45 BD. The input is a 'Pull Session' "
+        "document -- about 16,000 characters for a typical day -- that "
+        "stitches every call transcript, chat window, email thread, and "
+        "Drive file together, grouped by client and ordered in time. "
+        "Pre-filters strip system notifications, recorder test snippets, "
+        "and peer-to-peer dev chatter before Claude sees it. The output "
+        "is two artefacts per client: a curated Requirements "
+        "Verification .docx with one entry per requirement (each with "
+        "a source pointer back to the call timestamp / chat / email) "
+        "and a .eml draft in Gmail Drafts ready for human review. "
+        "Cost target is around 6 cents per run thanks to tight scoping "
+        "and prompt caching."
+    ))
+
+
+def slide_human_in_loop(prs):
+    s = base_slide(prs, "Human in the loop",
+                   "You always review before it sends. By design.")
+
+    # Big centered emphasis with three short cards below
+    tf = add_textbox(s, Inches(0.7), Inches(1.7), Inches(11.9), Inches(1.4))
+    set_text(tf, "Nothing goes to the client without your click.",
+             size=28, bold=True, color=NAVY, align=PP_ALIGN.CENTER)
+
+    cards = [
+        ("Review", NAVY,
+         "Open Gmail Drafts.\nRead the list of\nidentified items."),
+        ("Edit if needed", GREEN,
+         "Fix anything that looks\nwrong. Add what's missing.\nThen click send."),
+        ("Reply loops back", PURPLE,
+         "When the client replies,\nthe system learns.\nConfirmed items don't\nresurface tomorrow."),
+    ]
+    cw = Inches(3.9)
+    ch = Inches(2.9)
+    gap = Inches(0.25)
+    total = 3 * 3.9 + 2 * 0.25
+    x0 = (13.333 - total) / 2
+    y = Inches(3.6)
+    for i, (title, color, body) in enumerate(cards):
+        x = Inches(x0 + i * (3.9 + 0.25))
+        add_box(s, x, y, cw, ch, title, body.split("\n"),
+                accent=color, title_size=20, body_size=14)
+        if i < 2:
+            x_arr = Inches(x0 + i * (3.9 + 0.25) + 3.9)
+            add_arrow(s, x_arr, y + Inches(1.4),
+                      x_arr + Inches(0.25), y + Inches(1.4),
+                      color=NAVY, width_pt=2.5)
+
+    tf2 = add_textbox(s, Inches(0.7), Inches(6.7), Inches(11.9), Inches(0.5))
+    set_text(tf2, "The system drafts. The human ships.",
+             size=14, color=MUTED, align=PP_ALIGN.CENTER)
+
+    set_speaker_notes(s, (
+        "This is the only manual step in the whole pipeline, and the "
+        "deliberate design choice is that the system never sends mail to "
+        "a client without a human pressing send. Open Gmail Drafts -- "
+        "the .eml is already there with the curated .docx and the raw "
+        "Pull Session source doc attached. Skim, cross-check anything "
+        "weird against the source, edit if needed, send. When the client "
+        "replies, tools.poll_replies on the central host matches the "
+        "reply by thread id, parses line-by-line accept/reject/clarify, "
+        "and writes the deltas into the sqlite memory database. "
+        "Tomorrow's daily run reads that memory before drafting, so "
+        "confirmed items do not get re-asked. This slide matters for "
+        "trust-building -- emphasize that the human gate is the policy, "
+        "not a temporary precaution."
+    ))
+
+
+def slide_day_in_life(prs):
+    s = base_slide(prs, "A day in the life",
+                   "Same client mentioned across channels. One draft at the end.")
+
+    # Vertical timeline
+    events = [
+        ("9 AM",  PURPLE, "Call",    "Client asks for a feature on a call."),
+        ("11 AM", CORAL,  "Email",   "Same client follows up with more detail by email."),
+        ("3 PM",  GOLD,   "File",    "Client uploads a reference document to the shared folder."),
+        ("6 PM",  TEAL,   "Chat",    "Another teammate gets a clarifying chat message."),
+        ("11:45 PM", GREEN, "Draft", "The AI produces one verification email covering all four."),
+    ]
+    line_x = Inches(2.5)
+    add_rect(s, line_x, Inches(1.7), Inches(0.04), Inches(5.0),
+             fill_color=RULE)
+    y0 = 1.6
+    step = 1.0
+    for i, (time_label, color, kind, body) in enumerate(events):
+        y = Inches(y0 + i * step)
+        # Time on the left
+        tf_t = add_textbox(s, Inches(0.7), y, Inches(1.7), Inches(0.5))
+        set_text(tf_t, time_label, size=18, bold=True, color=color,
+                 align=PP_ALIGN.RIGHT)
+        # Dot on the line
+        add_chip(s, line_x - Inches(0.1), y + Inches(0.08),
+                 Inches(0.25), Inches(0.25), "", color)
+        # Kind + body on the right
+        kind_chip_w = Inches(1.3)
+        add_chip(s, Inches(2.8), y + Inches(0.02),
+                 kind_chip_w, Inches(0.45), kind, color, font_size=13)
+        tf_b = add_textbox(s, Inches(2.8) + kind_chip_w + Inches(0.2),
+                           y + Inches(0.05), Inches(7.5), Inches(0.5))
+        set_text(tf_b, body, size=15, color=INK)
+
+    tf = add_textbox(s, Inches(0.7), Inches(6.7), Inches(11.9), Inches(0.5))
+    set_text(tf, "No one saw all four. The system did.",
+             size=15, bold=True, color=NAVY, align=PP_ALIGN.CENTER)
+
+    set_speaker_notes(s, (
+        "Concrete illustrative scenario. The point is that no single "
+        "person was in the room (or thread, or call) for all four "
+        "touchpoints. A client requirement that spans channels is the "
+        "common case, not the edge case, and that's exactly the kind "
+        "of thing humans lose track of. The AI pass at 23:45 BD doesn't "
+        "care which channel said what -- it stitches the day together "
+        "and surfaces the full picture in one draft. The times in this "
+        "slide are illustrative; the only real time on the slide is "
+        "23:45 BD, which is the actual daily-draft fire time."
+    ))
+
+
+def slide_what_it_costs(prs):
+    s = base_slide(prs, "What it costs us",
+                   "Cheap to run. No per-seat license.")
+
+    stats = [
+        ("~6 cents", "per daily run", NAVY),
+        ("Free", "audio transcription tier", GREEN),
+        ("Zero", "per-developer license cost", GOLD),
+    ]
+    cw = Inches(3.9)
+    ch = Inches(2.6)
+    gap = Inches(0.25)
+    total = 3 * 3.9 + 2 * 0.25
+    x0 = (13.333 - total) / 2
+    y = Inches(2.0)
+    for i, (big, label, color) in enumerate(stats):
+        x = Inches(x0 + i * (3.9 + 0.25))
+        container = add_rect(s, x, y, cw, ch,
+                             fill_color=WHITE, line_color=RULE)
+        add_rect(s, x, y, cw, Inches(0.18), fill_color=color)
+        tf_big = add_textbox(s, x, y + Inches(0.6),
+                             cw, Inches(1.1))
+        set_text(tf_big, big, size=44, bold=True, color=color,
+                 align=PP_ALIGN.CENTER)
+        tf_lbl = add_textbox(s, x, y + Inches(1.8),
+                             cw, Inches(0.6))
+        set_text(tf_lbl, label, size=15, color=MUTED,
+                 align=PP_ALIGN.CENTER)
+
+    tf = add_textbox(s, Inches(0.7), Inches(5.3), Inches(11.9), Inches(1.6))
+    set_text(tf, "Scaling is essentially free.",
+             size=20, bold=True, color=NAVY, align=PP_ALIGN.CENTER)
+    add_para(tf,
+             "Adding a second client or a tenth developer changes nothing "
+             "about how the system runs -- the same daily pass covers "
+             "everyone.",
+             size=14, color=MUTED, align=PP_ALIGN.CENTER, space_before=8)
+
+    set_speaker_notes(s, (
+        "Cost story for the budget conversation. The ~6 cents per run "
+        "figure is the Anthropic Claude cost for a single daily "
+        "verify_session pass on a ~16k character Pull Session document, "
+        "with prompt caching enabled. The 'free' transcription tier is "
+        "Groq's free quota of 8 hours of audio per day -- comfortably "
+        "covers our actual call volume. 'Zero per-developer license' "
+        "is because the AI access uses an Anthropic Max-tier "
+        "subscription mounted into the worker containers, not "
+        "per-seat keys. Infrastructure costs are the existing Linux "
+        "host (already paid for, shared with OpenProject) and the "
+        "developers' existing PCs. Nothing new to buy."
+    ))
+
+
+def slide_where_we_are(prs):
+    s = base_slide(prs, "Where we are today",
+                   "Live as of 2026-05-14.")
+
+    # Top status row
     statuses = [
-        ("6 / 6", "containers up", GREEN),
-        ("4 / 4", "capture channels active", GREEN),
-        ("~$0.06", "target cost per daily run", GOLD),
-        ("~30 s", "per call via Groq", TEAL),
+        ("Live", "since 2026-05-14", GREEN),
+        ("6", "background jobs running", NAVY),
+        ("4", "capture channels active", TEAL),
+        ("1", "verification email last night", GOLD),
     ]
     box_w = Inches(2.95)
     gap = Inches(0.2)
     total = 4 * 2.95 + 3 * 0.2
     x0 = (13.333 - total) / 2
-    y = Inches(1.6)
+    y = Inches(1.7)
     for i, (big, label, color) in enumerate(statuses):
         x = Inches(x0 + i * (2.95 + 0.2))
-        container = add_rect(s, x, y, box_w, Inches(1.7),
+        container = add_rect(s, x, y, box_w, Inches(2.0),
                              fill_color=WHITE, line_color=RULE)
-        add_rect(s, x, y, box_w, Inches(0.12), fill_color=color)
-        tf_big = add_textbox(s, x + Inches(0.1), y + Inches(0.3),
-                             box_w - Inches(0.2), Inches(0.8))
-        set_text(tf_big, big, size=30, bold=True, color=color,
+        add_rect(s, x, y, box_w, Inches(0.14), fill_color=color)
+        tf_big = add_textbox(s, x, y + Inches(0.4),
+                             box_w, Inches(1.0))
+        set_text(tf_big, big, size=38, bold=True, color=color,
                  align=PP_ALIGN.CENTER)
-        tf_lbl = add_textbox(s, x + Inches(0.1), y + Inches(1.05),
-                             box_w - Inches(0.2), Inches(0.5))
-        set_text(tf_lbl, label, size=12, color=MUTED, align=PP_ALIGN.CENTER)
+        tf_lbl = add_textbox(s, x, y + Inches(1.4),
+                             box_w, Inches(0.5))
+        set_text(tf_lbl, label, size=13, color=MUTED,
+                 align=PP_ALIGN.CENTER)
 
-    # The loop ran today
-    add_box(s, Inches(0.5), Inches(3.6), Inches(6.1), Inches(3.2),
-            "The loop ran today", [
-                "Daily draft fired at 23:45 BD on .123.",
-                "  collect_central --client all --last-minutes 1440",
-                "  walked the central tree in under a minute.",
-                "  one Pull Session doc per client.",
-                "  one verify_session run per client.",
-                "  one .eml landed in Gmail Drafts.",
-                "",
-                "Memory updated: /state/nucleus_memory.db",
-            ], accent=GREEN, title_size=15, body_size=12)
+    # Healthy / ready strip
+    add_box(s, Inches(0.7), Inches(4.2), Inches(11.9), Inches(2.4),
+            "Yesterday, end to end", [
+                "The day's calls, chats, emails, and files were captured.",
+                "The AI pass ran on schedule.",
+                "A draft verification email landed in Gmail Drafts.",
+                "Memory was updated so today won't re-ask anything.",
+            ], accent=GREEN, title_size=18, body_size=14)
 
-    # Health snapshot
-    add_box(s, Inches(6.7), Inches(3.6), Inches(6.1), Inches(3.2),
-            "Health snapshot", [
-                "nucleus-samba         -- serving share",
-                "nucleus-transcribe    -- idle, queue empty",
-                "nucleus-stage-email   -- last pull <15 min ago",
-                "nucleus-stage-drive   -- last pull <15 min ago",
-                "nucleus-daily-draft   -- next fire 23:45 BD",
-                "nucleus-gha-runner    -- registered, idle",
-                "",
-                "Run `python -m tools.healthcheck` on .123 for the",
-                "live version of this snapshot.",
-            ], accent=NAVY, title_size=15, body_size=12)
     set_speaker_notes(s, (
-        "Status check, fact-by-fact, for the boss. Everything that was "
-        "supposed to be running on the Linux host today IS running on "
-        "the Linux host today. The cost target is around six cents per "
-        "daily run on Anthropic pricing -- well inside the budget we "
-        "discussed. Groq is doing roughly 30 seconds per call, which "
-        "is the speed-up that let us move off the Windows host: the "
-        "old CPU faster-whisper run was the slowest stage of the day "
-        "by a wide margin. The healthcheck CLI gives a live version of "
-        "the right-hand snapshot any time we want to spot-check the "
-        "host without SSHing in for `docker ps`."
+        "Status snapshot for today, 2026-05-14. Everything that was "
+        "supposed to be running on the Linux central host today IS "
+        "running. The six containers are nucleus-samba, "
+        "nucleus-transcribe, nucleus-stage-email, nucleus-stage-drive, "
+        "nucleus-daily-draft, and nucleus-gha-runner. The four "
+        "channels are calls, chats, email, and Drive. The 23:45 BD "
+        "fire produced a verification email last night for the one "
+        "active client. Run `python -m tools.healthcheck` on the host "
+        "for the live version of this snapshot at any time."
     ))
 
 
 def slide_whats_next(prs):
     s = base_slide(prs, "What's next",
-                   "Roster, onboarding, retire .209, automate the send loop.")
+                   "Three priorities for the coming weeks.")
 
     nexts = [
-        ("Extend the client roster", CORAL, [
-            "Salman is client #1 today.",
-            "Add a second client without changing code:",
-            "  Drive folder + email alias + ",
-            "  metadata.client_name on calls,",
-            "  collect_central is per-client already.",
-        ]),
-        ("Dev-PC onboarding", TEAL, [
-            "Bring all 7 devs onto the daemon:",
-            "  scripts\\setup.bat",
-            "  net use \\\\172.16.205.123\\nucleus-central",
-            "  scripts\\start-daemon.bat",
-            "About 10 minutes per teammate.",
-        ]),
-        ("Retire MVPACCESS (.209)", PURPLE, [
-            "Confirm a full week of green on .123.",
-            "Decommission the .209 Scheduled Tasks.",
-            "Keep .209's nucleus-central archive RO",
-            "  for the historical record, then power it down.",
-        ]),
-        ("Automate verify -> send", GOLD, [
-            "Track accuracy of the human-edit deltas",
-            "  for the next N daily drafts.",
-            "When accuracy crosses the agreed threshold,",
-            "  flip a feature flag to auto-send for",
-            "  routine confirmations only.",
-        ]),
-        ("Future integrations", NAVY, [
-            "OpenProject publishing (auto-create tasks",
-            "  for newly-confirmed requirements).",
-            "Calendar-aware capture (cross-reference",
-            "  meeting invites against call recordings).",
-            "Slack / Discord channels (if a client uses them).",
-        ]),
-        ("Operational hardening", GREEN, [
-            "Backups for /srv/nucleus-central and",
-            "  the sqlite memory volume.",
-            "Per-dev Samba accounts (drop the shared user).",
-            "Prometheus exporter on healthcheck for",
-            "  alerting on stuck containers.",
-        ]),
+        ("Bring on more clients", CORAL,
+         "The pipeline scales\nper client at no\nadditional cost."),
+        ("Onboard remaining\ndevelopers", TEAL,
+         "Add each teammate's PC\nto the capture network.\nAround 10 minutes each."),
+        ("Tighten the loop", GOLD,
+         "Track edits the human\nmakes to drafts. Reduce\nthem over time."),
     ]
-    cw = Inches(4.05)
-    ch = Inches(2.6)
-    gap = Inches(0.15)
-    x0 = Inches(0.5)
-    y0 = Inches(1.45)
-    for i, (name, color, items) in enumerate(nexts):
-        row, col = divmod(i, 3)
-        x = x0 + col * (cw + gap)
-        y = y0 + Inches(row * 2.75)
-        add_box(s, x, y, cw, ch, name, items, accent=color,
-                title_size=14, body_size=11)
+    cw = Inches(3.9)
+    ch = Inches(3.4)
+    gap = Inches(0.25)
+    total = 3 * 3.9 + 2 * 0.25
+    x0 = (13.333 - total) / 2
+    y = Inches(2.0)
+    for i, (title, color, body) in enumerate(nexts):
+        x = Inches(x0 + i * (3.9 + 0.25))
+        add_box(s, x, y, cw, ch, title, body.split("\n"),
+                accent=color, title_size=20, body_size=15)
+
+    tf = add_textbox(s, Inches(0.7), Inches(5.8), Inches(11.9), Inches(1.2))
+    set_text(tf, "The foundation is built. Now we extend it.",
+             size=20, bold=True, color=NAVY, align=PP_ALIGN.CENTER)
+    add_para(tf,
+             "Each next step builds on the same daily pass -- no "
+             "re-architecture needed.",
+             size=14, color=MUTED, align=PP_ALIGN.CENTER, space_before=6)
+
     set_speaker_notes(s, (
-        "Six tracks for the next phase, ordered roughly by what unblocks "
-        "what. First two are pure rollout work -- adding a second client "
-        "and onboarding the remaining devs onto the voice daemon. Then "
-        "retiring the old Windows agent host once .123 has a full week "
-        "of clean runs. The big policy question is automating verify "
-        "-> send: we want to keep the human gate for now, but once we "
-        "have a track record of human-edit deltas being trivial for "
-        "routine confirmations, we can flip a feature flag and let the "
-        "system auto-send those while keeping human review for new "
-        "asks. Future integrations + operational hardening are the "
-        "long tail -- OpenProject auto-publishing of confirmed reqs is "
-        "the highest-value of those."
+        "Three near-term priorities, ordered by what unblocks what. "
+        "First, extend the client roster -- today's roster is one "
+        "client; the pipeline is already per-client (collect_central "
+        "takes --client as an argument), so adding another is "
+        "configuration, not code (Drive folder + email alias + "
+        "metadata.client_name resolution on calls). Second, onboard "
+        "the remaining developers onto the voice daemon -- 10 minutes "
+        "per teammate using setup.bat plus the SMB mount plus "
+        "start-daemon.bat. Third, track the human-edit deltas on the "
+        "AI's drafts; once accuracy is high enough on routine "
+        "confirmations we can flip a feature flag and let the system "
+        "auto-send those, while keeping the human gate on new asks. "
+        "Beyond these: OpenProject auto-publishing of confirmed "
+        "requirements, calendar-aware capture, per-developer Samba "
+        "accounts, Prometheus monitoring, and backups for the "
+        "central tree and sqlite memory volume."
     ))
 
 
-# ── build ──────────────────────────────────────────────────────────
+# -- build ----------------------------------------------------------
 
 def build():
     prs = Presentation()
@@ -1039,18 +821,16 @@ def build():
     prs.slide_height = SLIDE_H
 
     slide_title(prs)
-    slide_cast(prs)
-    slide_four_channel_flow(prs)
-    slide_voice_capture(prs)
-    slide_where_call_lands(prs)
-    slide_central_host(prs)
-    slide_transcription_pipeline(prs)
-    slide_email_drive_chat(prs)
-    slide_daily_requirement_management(prs)
-    slide_claude_identifies(prs)
-    slide_human_in_the_loop(prs)
-    slide_tools_and_tech(prs)
-    slide_status_today(prs)
+    slide_problem(prs)
+    slide_what_we_built(prs)
+    slide_four_channels(prs)
+    slide_call_to_text(prs)
+    slide_central_server(prs)
+    slide_what_ai_does(prs)
+    slide_human_in_loop(prs)
+    slide_day_in_life(prs)
+    slide_what_it_costs(prs)
+    slide_where_we_are(prs)
     slide_whats_next(prs)
 
     OUT.parent.mkdir(parents=True, exist_ok=True)
