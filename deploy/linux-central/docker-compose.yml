@@ -119,9 +119,15 @@ services:
     env_file:
       - .env
     environment:
+      # Don't validate these at compose-parse time -- the gha-runner
+      # service is behind --profile runner, but compose still
+      # interpolates env for all services on every command. Leave
+      # blank-by-default; the runner container will fail-fast at
+      # start time if the token is missing, which is the right
+      # signal to fill .env before `--profile runner`.
       - RUNNER_SCOPE=org
-      - ORG_NAME=${GHA_RUNNER_ORG:?GHA_RUNNER_ORG missing in .env}
-      - ACCESS_TOKEN=${GHA_RUNNER_TOKEN:?GHA_RUNNER_TOKEN missing in .env}
+      - ORG_NAME=${GHA_RUNNER_ORG:-}
+      - ACCESS_TOKEN=${GHA_RUNNER_TOKEN:-}
       - RUNNER_NAME=nucleus-central-123
       - LABELS=self-hosted,linux,nucleus-central
       - EPHEMERAL=false
