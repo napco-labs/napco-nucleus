@@ -28,12 +28,20 @@ x-worker-base: &worker-base
     # host paths. Bind mounts below remap host -> container.
     - NUCLEUS_CENTRAL_PATH=/data/nucleus-central
     - PYTHONPATH=/app
+    # memory.py defaults to <repo-root>/nucleus_memory.db; the repo is
+    # bind-mounted RO, so the sqlite open fails. Point it at the
+    # `nucleus-state` named volume below.
+    - NAPCO_NUCLEUS_DB_PATH=/state/nucleus_memory.db
   volumes:
     # The repo, read-only. `git pull` on the host updates all workers
     # without an image rebuild.
     - ${REPO_PATH:-/home/ubuntu/napco-nucleus}:/app:ro
     # The shared central data dir -- same path Samba serves.
     - /srv/nucleus-central:/data/nucleus-central
+    # Writable worker state (sqlite memory db, checkpoints, locks).
+    # Lives in a named volume so `docker compose down` keeps it,
+    # `docker compose down -v` resets it on purpose.
+    - nucleus-state:/state
     # Faster-whisper model cache (fallback path; rarely fires when
     # GROQ_API_KEY is set, but the model must persist when it does).
     - whisper-models:/root/.cache/huggingface
@@ -140,5 +148,7 @@ services:
 volumes:
   whisper-models:
     name: nucleus-whisper-models
+  nucleus-state:
+    name: nucleus-state
   gha-runner-work:
     name: nucleus-gha-runner-work
