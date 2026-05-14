@@ -248,11 +248,11 @@ def build():
         "(they contain secrets &mdash; never share them publicly):",
         body))
     flow.append(Paragraph(
-        "1. <font face=\"Courier\">.env</font> &mdash; save at "
-        "<font face=\"Courier\">E:\\Projects\\NAPCO-Nucleus\\.env</font> "
-        "(after Step 1 clones the repo)<br/>"
-        "2. <font face=\"Courier\">google-credentials.json</font> &mdash; save at "
-        "<font face=\"Courier\">E:\\Projects\\NAPCO-Nucleus\\google-credentials.json</font>",
+        "1. <font face=\"Courier\">.env</font> &mdash; save inside your "
+        "repo folder after Step 1 (<font face=\"Courier\">$NN\\.env</font>)<br/>"
+        "2. <font face=\"Courier\">google-credentials.json</font> &mdash; "
+        "save inside your repo folder "
+        "(<font face=\"Courier\">$NN\\google-credentials.json</font>)",
         body))
     flow.append(Paragraph(
         "<i>The Samba password is provided inline in Step 5 below.</i>",
@@ -261,22 +261,37 @@ def build():
     # ── Step 1: Clone ─────────────────────────────────────────────
     flow.append(_space(0.18))
     flow.append(_step_heading("Step 1", "Clone the repo"))
+    flow.append(Paragraph(
+        "Pick where you want the repo installed. Set "
+        "<font face=\"Courier\">$NN</font> to that path &mdash; every "
+        "later step references <font face=\"Courier\">$NN</font>, so the "
+        "install location is yours to decide.", body))
     flow.append(_where("Run in <b><i>PowerShell</i></b>:", where_style))
     flow.append(_code(
-        "cd E:\\\n"
-        "mkdir Projects -Force\n"
-        "cd E:\\Projects\n"
-        "git clone https://github.com/napco-labs/napco-nucleus.git "
-        "NAPCO-Nucleus",
+        "$NN = \"E:\\Projects\\NAPCO-Nucleus\"   "
+        "# change this if you want it elsewhere\n"
+        "mkdir (Split-Path $NN -Parent) -Force | Out-Null\n"
+        "git clone https://github.com/napco-labs/napco-nucleus.git $NN\n"
+        "Set-Location $NN",
         code))
+    flow.append(Paragraph(
+        "<i><font face=\"Courier\">$NN</font> only lives in the current "
+        "PowerShell session. If you close PowerShell, set it again at "
+        "the top of any new session before running the rest of the "
+        "commands. To make it permanent across sessions:</i>", body))
+    flow.append(_code(
+        "[Environment]::SetEnvironmentVariable(\"NN\", $NN, \"User\")",
+        code))
+    flow.append(Paragraph(
+        "<i>After that, use <font face=\"Courier\">$env:NN</font> from "
+        "any future shell.</i>", body))
 
     # ── Step 2: Install Python packages ───────────────────────────
     flow.append(_space(0.18))
     flow.append(_step_heading("Step 2", "Install Python packages"))
-    flow.append(_where(
-        "Run in <b><i>E:\\Projects\\NAPCO-Nucleus</i></b>:", where_style))
+    flow.append(_where("Run in <b><i>PowerShell</i></b>:", where_style))
     flow.append(_code(
-        "cd E:\\Projects\\NAPCO-Nucleus\n"
+        "Set-Location $NN\n"
         "python -m pip install -r requirements.txt",
         code))
 
@@ -286,7 +301,9 @@ def build():
     flow.append(_where(
         "Run anywhere in <b><i>PowerShell</i></b>:", where_style))
     flow.append(_code("winget install UB-Mannheim.TesseractOCR", code))
-    flow.append(Paragraph("Then close and reopen PowerShell.", body))
+    flow.append(Paragraph(
+        "Then close and reopen PowerShell (re-set "
+        "<font face=\"Courier\">$NN</font> after reopen).", body))
 
     # ── Step 4: .env ──────────────────────────────────────────────
     flow.append(_space(0.18))
@@ -294,11 +311,16 @@ def build():
                               "Place the files Titu sent you + set your dev name"))
     flow.append(Paragraph(
         "Save the two files from the &quot;What Titu sends you first&quot; "
-        "section above:", body))
+        "section above into your repo folder:", body))
     flow.append(_code(
-        "E:\\Projects\\NAPCO-Nucleus\\.env\n"
-        "E:\\Projects\\NAPCO-Nucleus\\google-credentials.json",
+        "$NN\\.env\n"
+        "$NN\\google-credentials.json",
         code))
+    flow.append(Paragraph(
+        "(Replace <font face=\"Courier\">$NN</font> with your actual path "
+        "in your file manager &mdash; e.g. "
+        "<font face=\"Courier\">E:\\Projects\\NAPCO-Nucleus\\.env</font>.)",
+        body))
     flow.append(Paragraph(
         "Open the <font face=\"Courier\">.env</font> file in Notepad. "
         "Find this line:", body))
@@ -330,10 +352,9 @@ def build():
     # ── Step 6: Voice daemon ──────────────────────────────────────
     flow.append(_space(0.18))
     flow.append(_step_heading("Step 6", "Install the voice daemon"))
-    flow.append(_where(
-        "Run in <b><i>E:\\Projects\\NAPCO-Nucleus</i></b>:", where_style))
+    flow.append(_where("Run in <b><i>PowerShell</i></b>:", where_style))
     flow.append(_code(
-        "cd E:\\Projects\\NAPCO-Nucleus\n"
+        "Set-Location $NN\n"
         ".\\scripts\\register-voice-daemon-task.ps1\n"
         "Start-ScheduledTask -TaskName 'NAPCO Nucleus - Voice Daemon'",
         code))
@@ -341,10 +362,9 @@ def build():
     # ── Step 7: Chat push ─────────────────────────────────────────
     flow.append(_space(0.18))
     flow.append(_step_heading("Step 7", "Install chat-push tasks"))
-    flow.append(_where(
-        "Run in <b><i>E:\\Projects\\NAPCO-Nucleus</i></b>:", where_style))
+    flow.append(_where("Run in <b><i>PowerShell</i></b>:", where_style))
     flow.append(_code(
-        "cd E:\\Projects\\NAPCO-Nucleus\n"
+        "Set-Location $NN\n"
         ".\\scripts\\register-chat-push-task.ps1",
         code))
 
@@ -352,10 +372,10 @@ def build():
     flow.append(_space(0.18))
     flow.append(_step_heading("Step 8", "Test"))
     flow.append(Paragraph(
-        "Make a Teams call (any short call). Wait 2 minutes. Then run in "
-        "<b><i>PowerShell</i></b>:", body))
+        "Make a Teams call (any short call, at least 20 seconds). Wait "
+        "2 minutes. Then run in <b><i>PowerShell</i></b>:", body))
     flow.append(_code(
-        "$you   = ((Select-String -Path E:\\Projects\\NAPCO-Nucleus\\.env "
+        "$you   = ((Select-String -Path \"$NN\\.env\" "
         "-Pattern '^NUCLEUS_DEV_NAME=').Line -replace "
         "'NUCLEUS_DEV_NAME=','').Trim()\n"
         "$today = Get-Date -Format \"yyyy-MM-dd\"\n"
@@ -369,6 +389,19 @@ def build():
         "<font face=\"Courier\">*.json</font>, "
         "<font face=\"Courier\">*_transcript.md</font>).",
         verify_style))
+    # ── Step 9: Enable remote ops ─────────────────────────────────
+    flow.append(_space(0.18))
+    flow.append(_step_heading("Step 9",
+                              "Enable remote operations (admin one-time)"))
+    flow.append(Paragraph(
+        "So Titu can troubleshoot and update your PC remotely without "
+        "bothering you again, run this <b>once in admin PowerShell</b> "
+        "(right-click PowerShell &rarr; Run as administrator):", body))
+    flow.append(_code("Enable-PSRemoting -Force", code))
+    flow.append(Paragraph(
+        "That's it. Opens the WinRM listener + firewall rule. After this, "
+        "Titu can run diagnostics + apply fixes on your PC from his "
+        "without you needing to be at the keyboard.", body))
     flow.append(_callout("<b>Setup is complete.</b>", body))
 
     # ── If a step fails ───────────────────────────────────────────
@@ -377,8 +410,7 @@ def build():
 
     flow.append(Paragraph("<b>Tail the voice daemon log:</b>", body))
     flow.append(_code(
-        "Get-Content E:\\Projects\\NAPCO-Nucleus\\logs\\voice_daemon.log "
-        "-Tail 50",
+        "Get-Content \"$NN\\logs\\voice_daemon.log\" -Tail 50",
         code))
 
     flow.append(Paragraph(
@@ -386,7 +418,7 @@ def build():
         "error in Step 6 or 7:</b>", body))
     flow.append(_code(
         "powershell.exe -ExecutionPolicy Bypass -File "
-        ".\\scripts\\register-voice-daemon-task.ps1",
+        "\"$NN\\scripts\\register-voice-daemon-task.ps1\"",
         code))
     flow.append(Paragraph(
         "(Use the same form for "
@@ -409,9 +441,11 @@ def build():
     flow.append(_space(0.22))
     flow.append(_step_heading("Update", "Update the system later"))
     flow.append(_where(
-        "Run in <b><i>E:\\Projects\\NAPCO-Nucleus</i></b>:", where_style))
+        "Run in <b><i>PowerShell</i></b> (re-set "
+        "<font face=\"Courier\">$NN</font> first if it's a fresh session):",
+        where_style))
     flow.append(_code(
-        "cd E:\\Projects\\NAPCO-Nucleus\n"
+        "Set-Location $NN\n"
         "git pull\n"
         "python -m pip install -r requirements.txt\n"
         "Stop-ScheduledTask -TaskName 'NAPCO Nucleus - Voice Daemon'\n"
@@ -422,9 +456,11 @@ def build():
     flow.append(_space(0.22))
     flow.append(_step_heading("Uninstall", "Uninstall"))
     flow.append(_where(
-        "Run in <b><i>E:\\Projects\\NAPCO-Nucleus</i></b>:", where_style))
+        "Run in <b><i>PowerShell</i></b> (re-set "
+        "<font face=\"Courier\">$NN</font> first if it's a fresh session):",
+        where_style))
     flow.append(_code(
-        "cd E:\\Projects\\NAPCO-Nucleus\n"
+        "Set-Location $NN\n"
         ".\\scripts\\register-voice-daemon-task.ps1 -Unregister\n"
         ".\\scripts\\register-chat-push-task.ps1 -Unregister\n"
         "cmdkey /delete:172.16.205.123",

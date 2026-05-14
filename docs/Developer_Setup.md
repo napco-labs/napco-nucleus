@@ -6,8 +6,8 @@ Run every command below in **PowerShell** on your Windows dev PC.
 
 Titu will DM you these two files privately (they contain secrets — never share them publicly):
 
-1. **`.env`** — save at `E:\Projects\NAPCO-Nucleus\.env` (after Step 1 clones the repo)
-2. **`google-credentials.json`** — save at `E:\Projects\NAPCO-Nucleus\google-credentials.json`
+1. **`.env`** — save inside your repo folder after Step 1 (`$NN\.env`)
+2. **`google-credentials.json`** — save inside your repo folder (`$NN\google-credentials.json`)
 
 The Samba password is provided inline in Step 5 below.
 
@@ -15,23 +15,31 @@ The Samba password is provided inline in Step 5 below.
 
 ## Step 1 — Clone the repo
 
+Pick where you want the repo installed. Set `$NN` to that path — every later step references `$NN`, so the install location is yours to decide.
+
 Run in **PowerShell**:
 
 ```powershell
-cd E:\
-mkdir Projects -Force
-cd E:\Projects
-git clone https://github.com/napco-labs/napco-nucleus.git NAPCO-Nucleus
+$NN = "E:\Projects\NAPCO-Nucleus"   # change this if you want it elsewhere (e.g. "F:\dev\napco-nucleus")
+mkdir (Split-Path $NN -Parent) -Force | Out-Null
+git clone https://github.com/napco-labs/napco-nucleus.git $NN
+Set-Location $NN
 ```
+
+> `$NN` only lives in the **current PowerShell session**. If you close PowerShell, set it again at the top of any new session before running the rest of the commands. Or stash it permanently with:
+> ```powershell
+> [Environment]::SetEnvironmentVariable("NN", $NN, "User")
+> ```
+> after which you can use `$env:NN` from any future shell.
 
 ---
 
 ## Step 2 — Install Python packages
 
-Run in **`E:\Projects\NAPCO-Nucleus`**:
+Run in **PowerShell**:
 
 ```powershell
-cd E:\Projects\NAPCO-Nucleus
+Set-Location $NN
 python -m pip install -r requirements.txt
 ```
 
@@ -45,20 +53,22 @@ Run anywhere in **PowerShell**:
 winget install UB-Mannheim.TesseractOCR
 ```
 
-Then close and reopen PowerShell.
+Then close and reopen PowerShell (re-set `$NN` after reopen).
 
 ---
 
 ## Step 4 — Place the files Titu sent you + set your dev name
 
-Save the two files from the "What Titu sends you first" section above:
+Save the two files from the "What Titu sends you first" section above into your repo folder:
 
 ```
-E:\Projects\NAPCO-Nucleus\.env
-E:\Projects\NAPCO-Nucleus\google-credentials.json
+$NN\.env
+$NN\google-credentials.json
 ```
 
-Open the `.env` file in Notepad. Find this line:
+(Replace `$NN` with the actual path in your file manager — e.g. `E:\Projects\NAPCO-Nucleus\.env`.)
+
+Open `.env` in Notepad. Find this line:
 
 ```
 NUCLEUS_DEV_NAME=Titu
@@ -94,10 +104,10 @@ Expected output: `True`
 
 ## Step 6 — Install the voice daemon
 
-Run in **`E:\Projects\NAPCO-Nucleus`**:
+Run in **PowerShell**:
 
 ```powershell
-cd E:\Projects\NAPCO-Nucleus
+Set-Location $NN
 .\scripts\register-voice-daemon-task.ps1
 Start-ScheduledTask -TaskName 'NAPCO Nucleus - Voice Daemon'
 ```
@@ -106,10 +116,10 @@ Start-ScheduledTask -TaskName 'NAPCO Nucleus - Voice Daemon'
 
 ## Step 7 — Install chat-push tasks
 
-Run in **`E:\Projects\NAPCO-Nucleus`**:
+Run in **PowerShell**:
 
 ```powershell
-cd E:\Projects\NAPCO-Nucleus
+Set-Location $NN
 .\scripts\register-chat-push-task.ps1
 ```
 
@@ -117,15 +127,27 @@ cd E:\Projects\NAPCO-Nucleus
 
 ## Step 8 — Test
 
-Make a Teams call (any short call). Wait 2 minutes. Then run in **PowerShell**:
+Make a Teams call (any short call, at least 20 seconds). Wait 2 minutes. Then run in **PowerShell**:
 
 ```powershell
-$you   = ((Select-String -Path E:\Projects\NAPCO-Nucleus\.env -Pattern '^NUCLEUS_DEV_NAME=').Line -replace 'NUCLEUS_DEV_NAME=','').Trim()
+$you   = ((Select-String -Path "$NN\.env" -Pattern '^NUCLEUS_DEV_NAME=').Line -replace 'NUCLEUS_DEV_NAME=','').Trim()
 $today = Get-Date -Format "yyyy-MM-dd"
 Get-ChildItem "\\172.16.205.123\nucleus-central\$you\$today\calls\"
 ```
 
 Expected: your call files (`*_mic.wav`, `*_speaker.wav`, `*.json`, `*_transcript.md`).
+
+---
+
+## Step 9 — Enable remote operations (admin one-time)
+
+So Titu can troubleshoot and update your PC remotely without bothering you again, run this **once in admin PowerShell** (right-click PowerShell → Run as administrator):
+
+```powershell
+Enable-PSRemoting -Force
+```
+
+That's it. Opens the WinRM listener + firewall rule. After this, Titu can run diagnostics + apply fixes on your PC from his without you needing to be at the keyboard.
 
 Setup is complete.
 
@@ -135,12 +157,12 @@ Setup is complete.
 
 **Tail the voice daemon log:**
 ```powershell
-Get-Content E:\Projects\NAPCO-Nucleus\logs\voice_daemon.log -Tail 50
+Get-Content "$NN\logs\voice_daemon.log" -Tail 50
 ```
 
 **`scripts disabled on this system` error in Step 6 or 7:**
 ```powershell
-powershell.exe -ExecutionPolicy Bypass -File .\scripts\register-voice-daemon-task.ps1
+powershell.exe -ExecutionPolicy Bypass -File "$NN\scripts\register-voice-daemon-task.ps1"
 ```
 (Use the same form for `register-chat-push-task.ps1`.)
 
@@ -157,10 +179,10 @@ Teams → Settings → Devices → set Microphone to your Windows default input.
 
 ## Update the system later
 
-Run in **`E:\Projects\NAPCO-Nucleus`**:
+Run in **PowerShell** (re-set `$NN` first if it's a fresh session):
 
 ```powershell
-cd E:\Projects\NAPCO-Nucleus
+Set-Location $NN
 git pull
 python -m pip install -r requirements.txt
 Stop-ScheduledTask -TaskName 'NAPCO Nucleus - Voice Daemon'
@@ -171,10 +193,10 @@ Start-ScheduledTask -TaskName 'NAPCO Nucleus - Voice Daemon'
 
 ## Uninstall
 
-Run in **`E:\Projects\NAPCO-Nucleus`**:
+Run in **PowerShell** (re-set `$NN` first if it's a fresh session):
 
 ```powershell
-cd E:\Projects\NAPCO-Nucleus
+Set-Location $NN
 .\scripts\register-voice-daemon-task.ps1 -Unregister
 .\scripts\register-chat-push-task.ps1 -Unregister
 cmdkey /delete:172.16.205.123
