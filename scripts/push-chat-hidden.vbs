@@ -30,15 +30,28 @@ For i = 0 To WScript.Arguments.Count - 1
     args = args & " " & WScript.Arguments(i)
 Next
 
-' Prefer the project venv if present; otherwise fall back to system python.
+' Resolve python in this order: venv -> python.exe on PATH -> py -3 launcher.
+' VBS can't probe PATH cleanly, so we let cmd's `where` do it. The
+' launcher fallback matters because fresh dev machines often have only
+' the Python Launcher (py.exe) on PATH, not bare python.exe.
 pythonExe = repoRoot & "\.venv\Scripts\python.exe"
-If Not fs.FileExists(pythonExe) Then pythonExe = "python.exe"
+If fs.FileExists(pythonExe) Then
+    pyInvoke = Chr(34) & pythonExe & Chr(34) & " -u"
+Else
+    ' `where python` exit code is 0 if python.exe is on PATH.
+    Set tmpShell = CreateObject("WScript.Shell")
+    whereRC = tmpShell.Run("cmd /c where python.exe >nul 2>&1", 0, True)
+    If whereRC = 0 Then
+        pyInvoke = "python -u"
+    Else
+        pyInvoke = "py -3 -u"
+    End If
+End If
 
 ' cmd /c wrapper so we can redirect stdout+stderr to the log file.
 ' Use `>>` (append) so multiple runs in a day accumulate.
-quoted_py  = Chr(34) & pythonExe & Chr(34)
 quoted_log = Chr(34) & logFile & Chr(34)
-cmdLine = "cmd /c " & Chr(34) & quoted_py & " -u -m teams.push_chat" & args & _
+cmdLine = "cmd /c " & Chr(34) & pyInvoke & " -m teams.push_chat" & args & _
           " >> " & quoted_log & " 2>&1" & Chr(34)
 
 Set sh = CreateObject("WScript.Shell")

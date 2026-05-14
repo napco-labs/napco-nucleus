@@ -9,8 +9,13 @@ if "%MINS%"=="" (
 if "%MINS%"=="" set MINS=30
 
 if not exist ".venv\Scripts\python.exe" (
-    REM No venv on this machine - fall back to system python.
-    python collect_all.py --last-minutes %MINS%
+    REM No venv - try system python, then py launcher.
+    where python.exe >nul 2>&1
+    if errorlevel 1 (
+        py -3 collect_all.py --last-minutes %MINS%
+    ) else (
+        python collect_all.py --last-minutes %MINS%
+    )
     echo.
     pause
     exit /b %ERRORLEVEL%

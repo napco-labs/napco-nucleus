@@ -20,8 +20,13 @@ REM Or use the helper: scripts\register-chat-push-task.ps1
 
 cd /d "%~dp0\.."
 if not exist ".venv\Scripts\python.exe" (
-    REM No venv on this machine - fall back to system python.
-    python -m teams.push_chat --last-minutes 15
+    REM No venv on this machine - try system python, then py launcher.
+    where python.exe >nul 2>&1
+    if errorlevel 1 (
+        py -3 -m teams.push_chat --last-minutes 15
+    ) else (
+        python -m teams.push_chat --last-minutes 15
+    )
     exit /b %ERRORLEVEL%
 )
 call ".venv\Scripts\activate.bat"

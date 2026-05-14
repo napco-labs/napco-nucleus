@@ -6,7 +6,13 @@ REM Window: --last-minutes 1080 (18 hours).
 
 cd /d "%~dp0\.."
 if not exist ".venv\Scripts\python.exe" (
-    python -m teams.push_chat --last-minutes 1080
+    REM No venv - try system python, then py launcher.
+    where python.exe >nul 2>&1
+    if errorlevel 1 (
+        py -3 -m teams.push_chat --last-minutes 1080
+    ) else (
+        python -m teams.push_chat --last-minutes 1080
+    )
     exit /b %ERRORLEVEL%
 )
 call ".venv\Scripts\activate.bat"

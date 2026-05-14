@@ -196,10 +196,11 @@ if ((Get-Date) -gt $transAnchor) {
     $transAnchor = $transAnchor.AddDays(1)
 }
 
-$transArgString = $pyArgPrefix + "-m teams.push_chat --last-minutes 90"
+# Hidden launcher (same VBS wrapper as Day + Evening). VBS resolves
+# venv vs system python on its own.
 $transAction = New-ScheduledTaskAction `
-    -Execute $pyExe `
-    -Argument $transArgString `
+    -Execute "wscript.exe" `
+    -Argument ('"{0}" --last-minutes 90' -f $vbsPath) `
     -WorkingDirectory $repoRoot
 
 $transTrigger = New-ScheduledTaskTrigger -Daily -At $transAnchor

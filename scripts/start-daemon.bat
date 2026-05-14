@@ -21,8 +21,15 @@ echo [start-daemon.bat] %DATE% %TIME% -- launching voice_daemon >> "logs\voice_d
 echo ============================================================ >> "logs\voice_daemon.log"
 
 if not exist ".venv\Scripts\python.exe" (
-    REM No venv on this machine - fall back to system python.
-    python -u -m teams.voice_daemon >> "logs\voice_daemon.log" 2>&1
+    REM No venv on this machine - fall back to system python or, failing
+    REM that, the Python Launcher. Fresh devs often have only py.exe on
+    REM PATH, not bare python.exe.
+    where python.exe >nul 2>&1
+    if errorlevel 1 (
+        py -3 -u -m teams.voice_daemon >> "logs\voice_daemon.log" 2>&1
+    ) else (
+        python -u -m teams.voice_daemon >> "logs\voice_daemon.log" 2>&1
+    )
     echo [start-daemon.bat] %DATE% %TIME% -- voice_daemon exited rc=%ERRORLEVEL% >> "logs\voice_daemon.log"
     exit /b %ERRORLEVEL%
 )

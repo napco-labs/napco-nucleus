@@ -11,11 +11,17 @@ REM    scripts\central-pull.bat "Susmoy" 2026-05-08
 
 cd /d "%~dp0\.."
 if not exist ".venv\Scripts\python.exe" (
-    python collect_central.py --client %1 --day %2
-    pause
-    exit /b %ERRORLEVEL%
+    REM No venv - try system python, then py launcher.
+    where python.exe >nul 2>&1
+    if errorlevel 1 (
+        set "PY=py -3"
+    ) else (
+        set "PY=python"
+    )
+) else (
+    call ".venv\Scripts\activate.bat"
+    set "PY=python"
 )
-call ".venv\Scripts\activate.bat"
 
 set "CLIENT=%~1"
 if "%CLIENT%"=="" (
@@ -23,9 +29,9 @@ if "%CLIENT%"=="" (
 )
 set "DAY=%~2"
 if "%DAY%"=="" (
-    python collect_central.py --client "%CLIENT%"
+    %PY% collect_central.py --client "%CLIENT%"
 ) else (
-    python collect_central.py --client "%CLIENT%" --day %DAY%
+    %PY% collect_central.py --client "%CLIENT%" --day %DAY%
 )
 echo.
 pause
