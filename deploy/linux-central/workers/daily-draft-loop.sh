@@ -1,10 +1,14 @@
 #!/bin/bash
 # Daily Requirement Management draft -- mirrors the MVPACCESS daily
-# 23:45 BD Scheduled Task. Runs do_it_now.py for all clients over
-# the last 24h. Container TZ=Asia/Dhaka so `date` already speaks BD.
+# 23:45 BD Scheduled Task.
 #
-# Implementation: simple sleep-until-target loop. Cheap and obvious;
-# no cron daemon needed inside the container.
+# IMPORTANT: this runs collect_central.py directly, NOT do_it_now.py.
+# do_it_now.py is the dev-side wrapper that SSHes to the agent host
+# (MVPACCESS) to run collect_central.py remotely. Since we ARE the
+# agent host now, we skip the SSH hop and call the workhorse directly.
+#
+# Container TZ=Asia/Dhaka so `date` already speaks BD.
+# No cron daemon -- simple sleep-until-target loop.
 
 set -u
 TARGET_TIME="${DAILY_DRAFT_TARGET_TIME:-23:45}"
@@ -27,9 +31,9 @@ while true; do
     wait $!
 
     echo "[daily-draft-loop] firing $(date -Iseconds)"
-    python do_it_now.py --client all --last-minutes "$LOOKBACK_MINUTES"
+    python collect_central.py --client all --last-minutes "$LOOKBACK_MINUTES"
     rc=$?
-    echo "[daily-draft-loop] do_it_now.py exited rc=$rc"
+    echo "[daily-draft-loop] collect_central.py exited rc=$rc"
 
     # Sleep past the target by 60s so the next iteration's
     # "today $TIME" doesn't re-fire immediately.

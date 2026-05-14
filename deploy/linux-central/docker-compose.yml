@@ -42,6 +42,14 @@ x-worker-base: &worker-base
     # Lives in a named volume so `docker compose down` keeps it,
     # `docker compose down -v` resets it on purpose.
     - nucleus-state:/state
+    # Writable overlay of data/requirements/ so daily-draft (which
+    # invokes collect_central.py -> agent.py -> docx_writer) can land
+    # the Requirements Verification artifacts. The rest of the repo
+    # stays RO via the /app:ro mount above. Seed this dir on first
+    # deploy from the repo's tracked data/requirements/ contents
+    # (drive-processed.json, proposed-tasks.json, state.json, the
+    # empty inbox/ subdirs).
+    - /srv/nucleus-data/requirements:/app/data/requirements
     # Faster-whisper model cache (fallback path; rarely fires when
     # GROQ_API_KEY is set, but the model must persist when it does).
     - whisper-models:/root/.cache/huggingface
