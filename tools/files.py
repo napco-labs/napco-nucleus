@@ -172,11 +172,16 @@ const { chromium } = require('playwright');
 }})();
 """
     try:
+        # shell=False: node.exe is a real binary on PATH (not a .cmd
+        # shim like npx). Passing the list through cmd.exe with
+        # shell=True mangles the embedded JS string's ( ) = > { } ;
+        # tokens. The list form goes straight to CreateProcess and is
+        # both safer (no shell-meta interpretation) and correct.
         proc = subprocess.run(
             ["node", "-e", script],
             cwd=project_dir,
             capture_output=True, text=True,
-            timeout=60, shell=True,
+            timeout=60, shell=False,
             env={**os.environ, "NODE_PATH": os.path.join(project_dir, "node_modules")},
         )
         stdout = (proc.stdout or "").strip()

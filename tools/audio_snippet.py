@@ -62,8 +62,12 @@ _SNIPPETS_DIR = _HERE / "data" / "requirements" / "_snippets"
 
 # ── Source-ID parsing ────────────────────────────────────────────
 
+# Stamp anchored to the end of the dev/stamp segment so dev names that
+# contain hyphens (e.g. "Atikur-Z", "Kamrul-H") aren't truncated at the
+# first hyphen. The stamp shape '\d{8}-\d{6}' is unambiguous, so we
+# anchor the regex on it from the right.
 _CALL_SOURCE_RE = re.compile(
-    r"^call/(?P<dev>.+?)-(?P<stamp>\d{8}-\d{6})/(?P<hash>[a-zA-Z0-9]+)$"
+    r"^call/(?P<dev>.+)-(?P<stamp>\d{8}-\d{6})/(?P<hash>[a-zA-Z0-9]+)$"
 )
 
 

@@ -250,6 +250,35 @@ def main() -> int:
         print(f"IMAP error: {type(e).__name__}: {e}", file=sys.stderr)
         return 2
 
+    # UIDVALIDITY check (mirrors mail/requirements_inbox.py).
+    # If Gmail/IMAP rebuilds the UID-space, our stored since_uid points
+    # at the wrong message and we'd silently skip everything new. When
+    # the server's UIDVALIDITY differs from what's in the checkpoint,
+    # drop since_uid and fall back to the time window so the next run
+    # re-ingests recent history. Always record the server's current
+    # UIDVALIDITY back into the checkpoint.
+    import re as _re
+    mailbox = (os.getenv("REQ_IMAP_MAILBOX") or "INBOX").strip()
+    server_uidvalidity: str | None = None
+    try:
+        typ, uidval_data = m.status(mailbox, "(UIDVALIDITY)")
+        if typ == "OK" and uidval_data:
+            m_ = _re.search(r"UIDVALIDITY (\d+)", uidval_data[0].decode())
+            if m_:
+                server_uidvalidity = m_.group(1)
+    except Exception as e:
+        print(f"  WARN: UIDVALIDITY probe failed ({e}); proceeding with "
+              f"stored since_uid", file=sys.stderr)
+    stored_uidvalidity = checkpoint.get("uidvalidity")
+    if (server_uidvalidity and stored_uidvalidity
+            and server_uidvalidity != stored_uidvalidity):
+        print(f"  UIDVALIDITY changed ({stored_uidvalidity} -> "
+              f"{server_uidvalidity}); resetting since_uid and falling "
+              f"back to 24h time window")
+        since_uid = None
+        if since_dt is None:
+            since_dt = dt.datetime.now() - dt.timedelta(hours=24)
+
     try:
         uids = _fetch_new_uids(m, since_uid, since_dt)
         print(f"  matched {len(uids)} new UID(s)")
@@ -274,11 +303,14 @@ def main() -> int:
             except ValueError:
                 pass
 
-        # Update checkpoint (unless dry-run)
+        # Update checkpoint (unless dry-run). Store the SERVER's
+        # current UIDVALIDITY -- if we just reset on a UIDVALIDITY
+        # change, this is what makes the next run see the new value
+        # as "stored" and not loop into another reset.
         if not args.dry_run and max_uid_seen > (since_uid or 0):
             memory.set_email_checkpoint(
                 mailbox_key=key,
-                uidvalidity=checkpoint.get("uidvalidity"),
+                uidvalidity=server_uidvalidity or checkpoint.get("uidvalidity"),
                 last_uid=str(max_uid_seen),
             )
             print(f"  updated checkpoint -> last_uid={max_uid_seen}")

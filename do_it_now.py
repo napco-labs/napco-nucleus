@@ -27,6 +27,7 @@ Env
 from __future__ import annotations
 
 import argparse
+import os
 import shlex
 import subprocess
 import sys
@@ -34,8 +35,14 @@ from pathlib import Path
 
 _HERE = Path(__file__).parent
 
-DEFAULT_SSH_TARGET = r"AEL\samin@172.16.205.209"
-DEFAULT_REMOTE_PATH = r"C:\napco-nucleus"
+# SSH target for the (retired-but-still-reachable) MVPACCESS host. Now
+# overridable via env so we don't embed another teammate's username +
+# the .209 IP into every dev's invocation. If neither --ssh-target nor
+# NUCLEUS_SSH_TARGET is set, the script fails fast with a clear error
+# rather than silently SSHing as a hardcoded account.
+DEFAULT_SSH_TARGET = os.environ.get("NUCLEUS_SSH_TARGET", "").strip() or None
+DEFAULT_REMOTE_PATH = os.environ.get(
+    "NUCLEUS_SSH_REMOTE_PATH", r"C:\napco-nucleus")
 
 
 def _run_local_push(last_minutes: int, dry_run: bool) -> int:
@@ -127,6 +134,13 @@ def main() -> int:
                   file=sys.stderr)
     else:
         print("\n  1/2  LOCAL TEAMS CHAT PUSH  — skipped (--no-push)")
+
+    if not args.ssh_target:
+        print("\nERROR: no SSH target. Set NUCLEUS_SSH_TARGET in .env "
+              "or pass --ssh-target user@host. There is no built-in "
+              "default to prevent accidentally SSHing as another "
+              "teammate's account.", file=sys.stderr)
+        return 2
 
     rc = _run_remote_collect(args.ssh_target, args.remote_path, args.client,
                               args.last_minutes, args.day,

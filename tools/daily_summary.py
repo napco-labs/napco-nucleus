@@ -260,10 +260,16 @@ def _send_email(text: str) -> bool:
     try:
         port = int(os.environ.get("SMTP_PORT", "587"))
         ctx = ssl.create_default_context()
-        with smtplib.SMTP(host, port, timeout=20) as s:
-            s.starttls(context=ctx)
-            s.login(user, pw)
-            s.send_message(msg)
+        # Port 465 = implicit SSL; everything else uses STARTTLS.
+        if port == 465:
+            with smtplib.SMTP_SSL(host, port, context=ctx, timeout=20) as s:
+                s.login(user, pw)
+                s.send_message(msg)
+        else:
+            with smtplib.SMTP(host, port, timeout=20) as s:
+                s.starttls(context=ctx)
+                s.login(user, pw)
+                s.send_message(msg)
     except Exception as e:
         print(f"[summary] send failed: {type(e).__name__}: {e}",
               file=sys.stderr)
