@@ -133,22 +133,16 @@ def _strip_html(html: str) -> str:
 
 def _sender_to_client(sender: str) -> str | None:
     """Map an email From header to a canonical client_name following
-    the verify_session prompt conventions."""
+    the verify_session prompt conventions.
+
+    Roster definitions live in napco_config.REQUIREMENT_ROSTER. The
+    napcosecurity.com domain collapses to a single client name
+    'NAPCO Security' regardless of which individual replied."""
+    from napco_config import roster_display_name  # lazy
     s = (sender or "").lower()
     if "@napcosecurity.com" in s:
         return "NAPCO Security"
-    # AEL-internal: map specific addresses we know
-    aliases = {
-        "assad@ael-bd.com":   "Assaduz Zaman",
-        "arzaman@ael-bd.com": "Atikur Zaman",
-        "arhabib@ael-bd.com": "Ahsan Habib",
-        "ihasan@ael-bd.com":  "Isruk Hasan",
-        "khasan@ael-bd.com":  "Titu",
-    }
-    for addr, name in aliases.items():
-        if addr in s:
-            return name
-    return None
+    return roster_display_name(s)
 
 
 @_retry_deco(attempts=3, base_delay=1.0)
@@ -339,8 +333,23 @@ def process_reply(reply: dict, dry_run: bool) -> dict:
                 "status": "no_client_match",
                 "reason": "could not resolve sender to a known client"}
 
+    # Idempotency: every poll-replies cron in the lookback window
+    # would otherwise re-classify the same reply against the same
+    # client and burn Claude tokens. Skip if we've already handled
+    # this (reply, client) pair. Dry-run still consults the table
+    # but does NOT mark, so a real subsequent run won't be blocked.
+    if memory.was_reply_processed(reply["uid"], client):
+        return {"uid": reply["uid"], "client": client,
+                "status": "already_processed",
+                "reason": "this (reply, client) pair was classified "
+                          "by a prior poll-replies run"}
+
     pending = memory.pending_requirements(client_name=client, limit=200)
     if not pending:
+        # Mark even the no-pending case so a subsequent poll doesn't
+        # re-classify if there's nothing actionable on this reply.
+        if not dry_run:
+            memory.mark_reply_processed(reply["uid"], client, "no_pending")
         return {"uid": reply["uid"], "client": client,
                 "status": "no_pending",
                 "reason": f"no pending requirements for {client}"}
@@ -378,6 +387,11 @@ def process_reply(reply: dict, dry_run: bool) -> dict:
             requirement_id=rid, status=status, notes=notes,
             email_uid=reply["uid"], confirmed_at=confirmed_at)
         applied.append({"id": rid, "status": status, "applied": bool(ok)})
+
+    # Mark on success so future polls in the window skip this reply.
+    # Dry-runs intentionally don't mark.
+    if not dry_run:
+        memory.mark_reply_processed(reply["uid"], client, "processed")
 
     return {"uid": reply["uid"], "client": client,
             "status": "processed",

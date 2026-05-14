@@ -179,48 +179,55 @@ def append_section(
     `source` + `headline` so the same section always gets the same ID."""
     sid = (source_id or _derive_source_id(source, headline)).strip()
 
-    path = get_or_create()
-    doc = Document(str(path))
+    # Cross-process lock around the read-modify-write so concurrent
+    # callers (push_chat --all-chats, pull_email, pull_drive, the cron
+    # tasks) can't race and corrupt current.docx. The outer pipeline
+    # takes file_lock("collect_central"); this is a separate lock name
+    # so it never deadlocks against the outer one.
+    from tools._lock import file_lock  # lazy to avoid import cycles
+    with file_lock("session_doc_append", block=True, wait_max_s=60):
+        path = get_or_create()
+        doc = Document(str(path))
 
-    # Heading
-    h = doc.add_heading(f"{source.upper()} — {headline}", level=1)
+        # Heading
+        h = doc.add_heading(f"{source.upper()} — {headline}", level=1)
 
-    # Metadata block — Source ID first so the LLM can find it easily.
-    full_metadata = {"Source ID": sid, **(metadata or {})}
-    meta_p = doc.add_paragraph()
-    meta_p.paragraph_format.space_after = Pt(2)
-    first = True
-    for k, v in full_metadata.items():
-        if not first:
-            meta_p.add_run("   |   ")
-        first = False
-        kr = meta_p.add_run(f"{k}: ")
-        kr.bold = True
-        kr.font.size = Pt(9)
-        kr.font.color.rgb = _GREY
-        vr = meta_p.add_run(str(v))
-        vr.font.size = Pt(9)
-        vr.font.color.rgb = _GREY
+        # Metadata block — Source ID first so the LLM can find it easily.
+        full_metadata = {"Source ID": sid, **(metadata or {})}
+        meta_p = doc.add_paragraph()
+        meta_p.paragraph_format.space_after = Pt(2)
+        first = True
+        for k, v in full_metadata.items():
+            if not first:
+                meta_p.add_run("   |   ")
+            first = False
+            kr = meta_p.add_run(f"{k}: ")
+            kr.bold = True
+            kr.font.size = Pt(9)
+            kr.font.color.rgb = _GREY
+            vr = meta_p.add_run(str(v))
+            vr.font.size = Pt(9)
+            vr.font.color.rgb = _GREY
 
-    # Body
-    for line in body_paragraphs:
-        if not line.strip():
-            doc.add_paragraph()
-            continue
-        doc.add_paragraph(line)
+        # Body
+        for line in body_paragraphs:
+            if not line.strip():
+                doc.add_paragraph()
+                continue
+            doc.add_paragraph(line)
 
-    # Trailing spacer between sections
-    doc.add_paragraph()
+        # Trailing spacer between sections
+        doc.add_paragraph()
 
-    doc.save(str(path))
+        doc.save(str(path))
 
-    return {
-        "session_path": str(path.relative_to(_NN_ROOT).as_posix()),
-        "absolute_path": str(path),
-        "section": f"{source.upper()} — {headline}",
-        "source_id": sid,
-        "appended_paragraphs": len([p for p in body_paragraphs if p.strip()]),
-    }
+        return {
+            "session_path": str(path.relative_to(_NN_ROOT).as_posix()),
+            "absolute_path": str(path),
+            "section": f"{source.upper()} — {headline}",
+            "source_id": sid,
+            "appended_paragraphs": len([p for p in body_paragraphs if p.strip()]),
+        }
 
 
 def status() -> dict:

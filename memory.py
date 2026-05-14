@@ -127,6 +127,20 @@ CREATE TABLE IF NOT EXISTS email_checkpoints (
     updated_at   TEXT NOT NULL
 );
 
+-- Idempotency for tools.poll_replies: one row per (reply_uid, client).
+-- Once a reply has been classified for a client, subsequent polls in
+-- the lookback window skip the Claude call instead of re-classifying.
+-- This is keyed by (reply_uid, client) because the same reply can
+-- legitimately confirm requirements for multiple clients in one body
+-- (rare but possible -- a reply that names two clients).
+CREATE TABLE IF NOT EXISTS processed_replies (
+    reply_uid     TEXT NOT NULL,
+    client_name   TEXT NOT NULL,
+    processed_at  TEXT NOT NULL,
+    status        TEXT NOT NULL DEFAULT 'processed',
+    PRIMARY KEY (reply_uid, client_name)
+);
+
 -- Google Drive idempotency (replaces drive-processed.json).
 CREATE TABLE IF NOT EXISTS drive_processed (
     file_id       TEXT PRIMARY KEY,
@@ -660,6 +674,47 @@ def get_email_checkpoint(mailbox_key: str) -> dict | None:
     except Exception as e:
         logger.warning("memory.get_email_checkpoint failed: %s", e)
         return None
+
+
+def was_reply_processed(reply_uid: str, client_name: str) -> bool:
+    """True if poll_replies has already processed this (reply, client)
+    pair (regardless of classification outcome). Fail-open: on any
+    error, return False so the caller still processes -- it's safer
+    to spend a few extra Claude tokens than to silently skip a real
+    confirmation due to a DB hiccup."""
+    if not reply_uid or not client_name:
+        return False
+    try:
+        with _conn() as c:
+            row = c.execute(
+                "SELECT 1 FROM processed_replies "
+                "WHERE reply_uid = ? AND client_name = ? LIMIT 1",
+                (str(reply_uid), client_name),
+            ).fetchone()
+            return row is not None
+    except Exception as e:
+        logger.warning("memory.was_reply_processed failed: %s", e)
+        return False
+
+
+def mark_reply_processed(reply_uid: str, client_name: str,
+                         status: str = "processed") -> bool:
+    """Record that poll_replies has handled this reply for this client.
+    Idempotent: re-inserting the same (uid, client) is a no-op."""
+    if not reply_uid or not client_name:
+        return False
+    try:
+        with _conn() as c:
+            c.execute(
+                "INSERT OR IGNORE INTO processed_replies "
+                "(reply_uid, client_name, processed_at, status) "
+                "VALUES (?, ?, ?, ?)",
+                (str(reply_uid), client_name, _now(), status),
+            )
+        return True
+    except Exception as e:
+        logger.warning("memory.mark_reply_processed failed: %s", e)
+        return False
 
 
 def mark_drive_processed(file_id: str, name: str, kind: str,

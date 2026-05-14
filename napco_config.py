@@ -177,22 +177,22 @@ def claude_cli_path() -> str | None:
 # NAPCO Security (client) + AEL (us) working group around the
 # "Integrations Spreadsheet" engagement. Lower-cased; matching is
 # case-insensitive on the bare address (display names ignored).
-REQUIREMENT_ROSTER: tuple[str, ...] = (
+REQUIREMENT_ROSTER: dict[str, str] = {
     # NAPCO Security
-    "mcarrieri@napcosecurity.com",   # Michael Carrieri
-    "siva@napcosecurity.com",         # Thangarajah Sivapokaran
-    "rgoldsobel@napcosecurity.com",   # Richard Goldsobel
-    "safiroz@napcosecurity.com",      # Salman A. Firoz
-    "rzhu@napcosecurity.com",         # Robert Zhu
+    "mcarrieri@napcosecurity.com":  "Michael Carrieri",
+    "siva@napcosecurity.com":       "Thangarajah Sivapokaran",
+    "rgoldsobel@napcosecurity.com": "Richard Goldsobel",
+    "safiroz@napcosecurity.com":    "Salman A. Firoz",
+    "rzhu@napcosecurity.com":       "Robert Zhu",
     # AEL
-    "assad@ael-bd.com",               # Assaduz Zaman
-    "arzaman@ael-bd.com",             # Atikur Zaman
-    "arhabib@ael-bd.com",             # Ahsan Habib
-    "ihasan@ael-bd.com",              # Isruk Hasan
-    "khasan@ael-bd.com",              # Mohammad Kamrul Hasan (Titu)
-    "mferdows@ael-bd.com",            # Mostafa J Ferdows
-    "samin@ael-bd.com",               # Sheikh Amin
-)
+    "assad@ael-bd.com":              "Assaduz Zaman",
+    "arzaman@ael-bd.com":            "Atikur Zaman",
+    "arhabib@ael-bd.com":            "Ahsan Habib",
+    "ihasan@ael-bd.com":             "Isruk Hasan",
+    "khasan@ael-bd.com":             "Titu",
+    "mferdows@ael-bd.com":           "Mostafa J Ferdows",
+    "samin@ael-bd.com":              "Sheikh Amin",
+}
 
 
 def requirement_roster() -> set[str]:
@@ -202,7 +202,22 @@ def requirement_roster() -> set[str]:
     constant once it's a permanent change."""
     extra_raw = (os.environ.get("NUCLEUS_ROSTER_EXTRA") or "").strip()
     extras = {a.strip().lower() for a in extra_raw.split(",") if a.strip()}
-    return {a.lower() for a in REQUIREMENT_ROSTER} | extras
+    return {a.lower() for a in REQUIREMENT_ROSTER.keys()} | extras
+
+
+def roster_display_name(email: str) -> str | None:
+    """Return the display name registered for an email, or None if the
+    address isn't on the roster. Case-insensitive on the bare address."""
+    addr = (email or "").strip().lower()
+    if not addr:
+        return None
+    # Allow "Name <addr>" by extracting the bare address
+    if "<" in addr and ">" in addr:
+        addr = addr[addr.find("<") + 1:addr.find(">")].strip()
+    for k, v in REQUIREMENT_ROSTER.items():
+        if k.lower() == addr:
+            return v
+    return None
 
 
 def _msg_addresses(msg: email.message.Message) -> set[str]:
