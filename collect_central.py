@@ -310,11 +310,76 @@ def _transcribe_chunk(model, chunk_path: Path, offset_s: float,
     return out
 
 
+def _segs_to_body_lines(all_segs: list[dict],
+                        started: dt.datetime | None,
+                        source_label: str = "Bangla") -> list[str]:
+    """Render transcript segments as MEETING-section body lines.
+
+    Shared by both transcription paths (Groq + faster-whisper).
+    source_label drives the header line so a reviewer knows what the
+    session doc actually contains.
+    """
+    if not all_segs:
+        return ["(no speech detected on either track)"]
+    lines: list[str] = []
+    if source_label == "Bangla":
+        lines.append("Source language: Bangla (transcribed verbatim — Claude "
+                     "translates to English at identify time).")
+    else:
+        lines.append(f"Source language: {source_label} (translated at "
+                     f"capture time).")
+    lines.append("Markers: (uncertain) = low ASR confidence, double-check "
+                 "before relying on these lines.")
+    lines.append("")
+    uncertain_count = 0
+    for s in all_segs:
+        is_uncertain = bool(s.get("uncertain", False))
+        if is_uncertain:
+            uncertain_count += 1
+        marker = "  (uncertain)" if is_uncertain else ""
+        if started:
+            ts = (started + dt.timedelta(seconds=s["start"])).strftime("%H:%M:%S")
+            lines.append(f"[{ts}] {s['speaker']}{marker}: {s['text']}")
+        else:
+            lines.append(f"[+{int(s['start']):04d}s] {s['speaker']}{marker}: {s['text']}")
+    if uncertain_count:
+        lines.append("")
+        lines.append(f"({uncertain_count} of {len(all_segs)} segments "
+                     f"flagged uncertain — review before trusting those lines.)")
+    return lines
+
+
+def _try_groq_transcribe(mic: Path | None, speaker: Path | None,
+                         started: dt.datetime | None) -> list[str] | None:
+    """Try Groq for both tracks. Return body lines on success, None on
+    any failure (key missing, oversized file, Groq down, etc.) — caller
+    falls back to faster-whisper. ~30s per track on a typical call vs
+    ~10 min for CPU faster-whisper.
+    """
+    if not os.getenv("GROQ_API_KEY"):
+        return None
+    try:
+        from tools.transcribe_calls import _groq_translate  # lazy
+        mic_segs = _groq_translate(mic, label="You") if mic else []
+        spk_segs = _groq_translate(speaker, label="Other") if speaker else []
+        all_segs = sorted(mic_segs + spk_segs, key=lambda s: s["start"])
+        print(f"  transcribed via Groq ({len(all_segs)} segments, English)")
+        return _segs_to_body_lines(all_segs, started, source_label="English")
+    except Exception as e:
+        print(f"  Groq failed: {e}; falling back to faster-whisper")
+        return None
+
+
 def _transcribe_call(mic: Path | None, speaker: Path | None,
                      stamp: str) -> list[str]:
     """Return body lines for the MEETING section.
 
-    Two-pass design:
+    Two backends, Groq primary + faster-whisper fallback (mirrors the
+    pattern in tools/transcribe_calls.py). Groq's translations endpoint
+    returns English directly so the session doc carries English when
+    Groq succeeds, Bangla verbatim when faster-whisper handles it.
+
+    Faster-whisper path (fallback) — two-pass design:
       1. faster-whisper large-v3 transcribes each track to the SOURCE
          language (Bangla). Whisper's transcribe head is meaningfully
          stronger than its translate head on Bangla — translation gets
@@ -324,17 +389,16 @@ def _transcribe_call(mic: Path | None, speaker: Path | None,
       3. The verify_session prompt already instructs Claude to translate
          Bangla source material to English when extracting requirements.
 
-    Chunked parallel design (added 2026-05-11):
-      Each WAV is split into chunk_seconds-long pieces (default 300s
-      = 5 min) and the chunks are transcribed in a ThreadPoolExecutor.
-      faster-whisper is thread-safe; CTranslate2 releases the GIL on
-      CPU inference, so threads scale to ~cpu_count() workers without
-      the per-process model-loading penalty.
+    Faster-whisper chunked parallel design (2026-05-11): each WAV is
+    split into chunk_seconds-long pieces (default 300s = 5 min) and
+    the chunks are transcribed in a ThreadPoolExecutor. CTranslate2
+    releases the GIL on CPU inference, so threads scale to ~cpu_count()
+    workers without the per-process model-loading penalty.
 
-      A 1-hour call (2 tracks × 12 chunks = 24 jobs) on a 4-8 core
-      box transcribes in ~15-25 min instead of 2-4 hours.
+    A 1-hour call (2 tracks × 12 chunks = 24 jobs) on a 4-8 core box
+    transcribes in ~15-25 min via faster-whisper, ~1 min via Groq.
 
-    CPU-friendly tuning per chunk:
+    Faster-whisper tuning per chunk:
       - beam_size=1                       (fast)
       - condition_on_previous_text=True   (better continuity within chunk)
       - vad_filter=True                   (skip silence — big speedup)
@@ -343,7 +407,9 @@ def _transcribe_call(mic: Path | None, speaker: Path | None,
         lands on the lines that need verification
 
     Configurable via env:
-      NUCLEUS_TRANSCRIBE_CHUNK_S         chunk length in sec (default 300)
+      GROQ_API_KEY                       enables Groq primary (highly recommended)
+      GROQ_TEAMS_WHISPER_MODEL           Groq model override
+      NUCLEUS_TRANSCRIBE_CHUNK_S         faster-whisper chunk len (default 300)
       NUCLEUS_TRANSCRIBE_WORKERS         max parallel threads (default
                                           min(cpu_count, 4))
 
@@ -351,6 +417,17 @@ def _transcribe_call(mic: Path | None, speaker: Path | None,
     """
     if not mic and not speaker:
         return ["(both tracks missing)"]
+
+    try:
+        started = dt.datetime.strptime(stamp, "%Y%m%d-%H%M%S")
+    except ValueError:
+        started = None
+
+    groq_result = _try_groq_transcribe(mic, speaker, started)
+    if groq_result is not None:
+        return groq_result
+
+    # ── faster-whisper fallback ────────────────────────────────────
     try:
         from faster_whisper import WhisperModel  # lazy
     except ImportError:
@@ -368,10 +445,8 @@ def _transcribe_call(mic: Path | None, speaker: Path | None,
     except ValueError:
         max_workers = default_workers
 
-    try:
-        started = dt.datetime.strptime(stamp, "%Y%m%d-%H%M%S")
-    except ValueError:
-        started = None
+    # `started` was set above (before the Groq attempt) so both paths
+    # share it; no need to recompute here.
 
     # ── 1. Chunk both tracks ────────────────────────────────────
     tmp_dir = Path((mic or speaker).parent) / f"_chunks_{stamp}"
@@ -439,28 +514,7 @@ def _transcribe_call(mic: Path | None, speaker: Path | None,
     print(f"  transcription done in {elapsed:.1f}s wall-clock")
 
     all_segs.sort(key=lambda s: s["start"])
-
-    lines: list[str] = []
-    if not all_segs:
-        return ["(no speech detected on either track)"]
-    lines.append("Source language: Bangla (transcribed verbatim — Claude "
-                 "translates to English at identify time).")
-    lines.append("Markers: (uncertain) = low ASR confidence, double-check "
-                 "before relying on these lines.")
-    lines.append("")
-    uncertain_count = sum(1 for s in all_segs if s["uncertain"])
-    for s in all_segs:
-        marker = "  (uncertain)" if s["uncertain"] else ""
-        if started:
-            ts = (started + dt.timedelta(seconds=s["start"])).strftime("%H:%M:%S")
-            lines.append(f"[{ts}] {s['speaker']}{marker}: {s['text']}")
-        else:
-            lines.append(f"[+{int(s['start']):04d}s] {s['speaker']}{marker}: {s['text']}")
-    if uncertain_count:
-        lines.append("")
-        lines.append(f"({uncertain_count} of {len(all_segs)} segments "
-                     f"flagged uncertain — review before trusting those lines.)")
-    return lines
+    return _segs_to_body_lines(all_segs, started, source_label="Bangla")
 
 
 def _read_chat_docx_lines(path: Path) -> list[str]:
