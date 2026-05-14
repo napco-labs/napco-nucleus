@@ -130,7 +130,13 @@ def dev_name() -> str:
     raw = (os.environ.get("NUCLEUS_DEV_NAME") or "").strip()
     if raw:
         return raw
-    return (os.environ.get("USERNAME") or os.environ.get("USER") or "unknown").strip()
+    # Fallback: derive from OS username. Strip + lowercase so different
+    # PCs ($USERNAME may be "Kamrul.Hasan" / "kamrul.hasan" / etc.) end
+    # up in ONE folder on central, not three.
+    fallback = (os.environ.get("USERNAME")
+                or os.environ.get("USER")
+                or "unknown")
+    return fallback.strip().lower().replace(" ", "-") or "unknown"
 
 
 def central_dev_day_dir(day: str | None = None) -> Path | None:

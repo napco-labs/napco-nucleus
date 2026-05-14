@@ -182,7 +182,10 @@ def _resolve_in_project(project_key: str, rel_path: str):
         return None
     rel = (rel_path or ".").replace("\\", "/").lstrip("/")
     full = os.path.abspath(os.path.join(root, rel))
-    if not full.startswith(os.path.abspath(root)):
+    root_abs = os.path.abspath(root)
+    # Use the separator-terminated prefix to defeat path-prefix collision
+    # (e.g. root=C:\foo would otherwise pass for full=C:\foo-bar\evil).
+    if full != root_abs and not full.startswith(root_abs + os.sep):
         return None
     return full
 

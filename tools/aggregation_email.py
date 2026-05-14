@@ -64,7 +64,11 @@ def _safe_recipient(addr: str) -> str:
 
 _DRAFTS_ROOT = Path(__file__).parent.parent / "data" / "requirements" / "drafts"
 
-_DEFAULT_RECIPIENT = "hasan.celloscope@gmail.com"
+# No baked-in default recipient: forces every deployment to set
+# AGGREGATION_TO in .env (or pass `to` explicitly). The previous
+# hardcoded personal address was a rollout footgun -- a new dev PC
+# without that env set would draft to someone's personal Gmail.
+_DEFAULT_RECIPIENT = ""
 
 _DEFAULT_BODY = (
     "Hi,\n\n"
@@ -108,6 +112,12 @@ async def draft_aggregation_email_tool(args):
         or os.environ.get("AGGREGATION_TO")
         or _DEFAULT_RECIPIENT
     ).strip()
+    if not to_addr:
+        return _text({
+            "error": "no recipient: pass `to` arg or set AGGREGATION_TO "
+                     "in .env. There is no built-in default to prevent "
+                     "drafts being misrouted to a personal address."
+        })
 
     from_addr = (
         os.environ.get("SMTP_FROM")

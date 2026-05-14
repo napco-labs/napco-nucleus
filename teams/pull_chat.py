@@ -35,7 +35,7 @@ load_dotenv(Path(__file__).parent.parent / ".env", override=False)
 
 DEFAULT_OUT_DIR = Path(
     os.environ.get("CHAT_OUT_DIR")
-    or r"E:\Projects\NAPCO-Nucleus\data\requirements\inbox\chat"
+    or (Path(__file__).parent.parent / "data" / "requirements" / "inbox" / "chat")
 )
 
 # When --session is passed (default), the messages append to NN's
