@@ -1,0 +1,8 @@
+# Force LF line endings for Linux-side files regardless of OS-side
+# autocrlf settings. Shell scripts with CRLF break on Linux (bash
+# chokes on \r in the shebang) and dockerfiles/yaml prefer LF too.
+*.sh    text eol=lf
+*.bash  text eol=lf
+Dockerfile* text eol=lf
+*.yml   text eol=lf
+*.yaml  text eol=lf

@@ -1,0 +1,138 @@
+# NAPCO Nucleus central host (Linux) -- docker-compose stack.
+#
+# Sits alongside the existing OpenProject stack on 172.16.205.123.
+# Replaces the Windows .209 host's role: Samba share, transcription
+# worker, periodic stagers, daily Requirement Management draft, and
+# an optional self-hosted GHA runner.
+#
+# Bring up:    docker compose -f deploy/linux-central/docker-compose.yml up -d
+# Bring down:  docker compose -f deploy/linux-central/docker-compose.yml down
+# Logs:        docker compose -f deploy/linux-central/docker-compose.yml logs -f <service>
+#
+# The GHA runner is gated behind --profile runner so a smoke-test
+# deploy doesn't register a runner before the team's ready:
+#   docker compose --profile runner -f deploy/linux-central/docker-compose.yml up -d
+
+name: nucleus-central
+
+x-worker-base: &worker-base
+  build:
+    context: .
+    dockerfile: Dockerfile.worker
+  image: nucleus-worker:latest
+  restart: unless-stopped
+  env_file:
+    - .env
+  environment:
+    # Paths inside the container -- workers must use these, NOT the
+    # host paths. Bind mounts below remap host -> container.
+    - NUCLEUS_CENTRAL_PATH=/data/nucleus-central
+    - PYTHONPATH=/app
+  volumes:
+    # The repo, read-only. `git pull` on the host updates all workers
+    # without an image rebuild.
+    - ${REPO_PATH:-/home/ubuntu/napco-nucleus}:/app:ro
+    # The shared central data dir -- same path Samba serves.
+    - /srv/nucleus-central:/data/nucleus-central
+    # Faster-whisper model cache (fallback path; rarely fires when
+    # GROQ_API_KEY is set, but the model must persist when it does).
+    - whisper-models:/root/.cache/huggingface
+    # Claude Code Max-tier auth, bind-mounted read-only from the host
+    # ubuntu user. Workers that call the Claude Agent SDK pick this
+    # up automatically.
+    - ${CLAUDE_HOME:-/home/ubuntu/.claude}:/root/.claude:ro
+    - ${CLAUDE_JSON:-/home/ubuntu/.claude.json}:/root/.claude.json:ro
+  working_dir: /app
+
+services:
+
+  # ----------------------------------------------------------------
+  # Samba -- serves \\172.16.205.123\nucleus-central\ to dev PCs.
+  # Single shared user (per Phase-1 decision). Backed by the same
+  # /srv/nucleus-central host dir every worker uses.
+  # ----------------------------------------------------------------
+  samba:
+    image: dperson/samba:latest
+    container_name: nucleus-samba
+    restart: unless-stopped
+    network_mode: host  # SMB needs raw 139/445; bridge breaks NetBIOS discovery
+    environment:
+      - TZ=Asia/Dhaka
+      - USERID=1001  # host ubuntu uid so files on /srv/nucleus-central are co-owned
+      - GROUPID=1001
+    command: >
+      -u "${SAMBA_USER:-nucleus};${SAMBA_PASSWORD:?SAMBA_PASSWORD missing in .env}"
+      -s "nucleus-central;/data/nucleus-central;yes;no;no;${SAMBA_USER:-nucleus};${SAMBA_USER:-nucleus}"
+      -p
+    volumes:
+      - /srv/nucleus-central:/data/nucleus-central
+
+  # ----------------------------------------------------------------
+  # Transcribe worker -- ports the MVPACCESS 2-min Scheduled Task.
+  # Walks /data/nucleus-central/*/<date>/calls/ for completed
+  # sessions (signal: <session>.json present + <session>_transcript.md
+  # missing). Uses Groq primary, faster-whisper fallback.
+  # ----------------------------------------------------------------
+  transcribe:
+    <<: *worker-base
+    container_name: nucleus-transcribe
+    command: ["/usr/local/lib/nucleus-workers/transcribe-loop.sh"]
+
+  # ----------------------------------------------------------------
+  # Stage-email -- 15-min cadence. Captures Gmail content into central.
+  # ----------------------------------------------------------------
+  stage-email:
+    <<: *worker-base
+    container_name: nucleus-stage-email
+    command: ["/usr/local/lib/nucleus-workers/stage-email-loop.sh"]
+
+  # ----------------------------------------------------------------
+  # Stage-drive -- 15-min cadence. Captures Google Drive content
+  # (incl. Groq-transcribed Drive audio, separate from call audio).
+  # ----------------------------------------------------------------
+  stage-drive:
+    <<: *worker-base
+    container_name: nucleus-stage-drive
+    command: ["/usr/local/lib/nucleus-workers/stage-drive-loop.sh"]
+
+  # ----------------------------------------------------------------
+  # Daily Requirement Management draft -- fires once per BD day at
+  # 23:45 local (TZ=Asia/Dhaka, so the container's wall clock IS BD).
+  # Runs do_it_now.py for all clients over the last 24h.
+  # ----------------------------------------------------------------
+  daily-draft:
+    <<: *worker-base
+    container_name: nucleus-daily-draft
+    command: ["/usr/local/lib/nucleus-workers/daily-draft-loop.sh"]
+
+  # ----------------------------------------------------------------
+  # Self-hosted GitHub Actions runner. Org-scoped to napco-labs so
+  # any repo in the org can target it via runs-on: [self-hosted, linux].
+  # Gated behind --profile runner so default `up` doesn't register
+  # until the team is ready.
+  # ----------------------------------------------------------------
+  gha-runner:
+    image: myoung34/github-runner:latest
+    container_name: nucleus-gha-runner
+    restart: unless-stopped
+    profiles: ["runner"]
+    env_file:
+      - .env
+    environment:
+      - RUNNER_SCOPE=org
+      - ORG_NAME=${GHA_RUNNER_ORG:?GHA_RUNNER_ORG missing in .env}
+      - ACCESS_TOKEN=${GHA_RUNNER_TOKEN:?GHA_RUNNER_TOKEN missing in .env}
+      - RUNNER_NAME=nucleus-central-123
+      - LABELS=self-hosted,linux,nucleus-central
+      - EPHEMERAL=false
+    volumes:
+      # Give the runner docker access so CI jobs can build images and
+      # `docker compose up -d` deploys against this same host.
+      - /var/run/docker.sock:/var/run/docker.sock
+      - gha-runner-work:/_work
+
+volumes:
+  whisper-models:
+    name: nucleus-whisper-models
+  gha-runner-work:
+    name: nucleus-gha-runner-work

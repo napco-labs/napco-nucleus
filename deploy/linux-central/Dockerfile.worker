@@ -1,0 +1,54 @@
+# Single image for every Nucleus worker on the Linux central host.
+# Run different jobs by varying `command:` in docker-compose.yml.
+#
+# Build context: deploy/linux-central/
+# Build:         docker compose build worker-base
+FROM python:3.12-slim
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONIOENCODING=utf-8 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_NO_CACHE_DIR=1 \
+    DEBIAN_FRONTEND=noninteractive \
+    TZ=Asia/Dhaka
+
+# Runtime dependencies:
+#   ffmpeg            - faster-whisper needs it to decode WAV/MP3
+#   tesseract-ocr     - pytesseract binary (chat screenshot OCR)
+#   tesseract-ocr-ben - Bangla language data for tesseract
+#   tini              - PID 1 reaper so signals work cleanly
+#   git               - so workers can self-update from the repo if needed
+#   ca-certificates   - for HTTPS to Anthropic / Google
+#   tzdata            - for BD timezone-aware crons
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ffmpeg \
+        tesseract-ocr \
+        tesseract-ocr-ben \
+        tini \
+        git \
+        ca-certificates \
+        tzdata \
+    && ln -snf /usr/share/zoneinfo/$TZ /etc/localtime \
+    && echo $TZ > /etc/timezone \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Install Python deps in a separate layer so requirements changes don't
+# re-trigger the apt layer.
+COPY requirements-central.txt /tmp/requirements-central.txt
+RUN pip install -r /tmp/requirements-central.txt
+
+# Worker entry-point loop scripts.
+COPY workers/ /usr/local/lib/nucleus-workers/
+RUN chmod +x /usr/local/lib/nucleus-workers/*.sh
+
+# The repo itself is bind-mounted at /app at runtime (so a `git pull`
+# on the host updates every container without rebuild). We do NOT
+# COPY the repo into the image -- that would mean a rebuild per change.
+
+ENTRYPOINT ["/usr/bin/tini", "--"]
+
+# Default command keeps the container alive doing nothing useful;
+# every real worker overrides this in docker-compose.yml.
+CMD ["sleep", "infinity"]

@@ -1,0 +1,25 @@
+# Linux-side dependencies for the Nucleus central host.
+#
+# This is a SUBSET of the top-level requirements.txt with the
+# Windows-only packages removed:
+#   - PyAudioWPatch (WASAPI loopback recording — dev-side only)
+#   - pycaw (Teams audio-session detection — dev-side only)
+#   - ccl_chromium_reader (Teams IndexedDB on Windows — chat-push is dev-side)
+#
+# Keep in lockstep with requirements.txt for the shared packages.
+
+claude-agent-sdk>=0.1.0
+anyio>=4.0
+python-dotenv>=1.0.0
+requests>=2.31.0
+google-api-python-client>=2.100.0
+google-auth>=2.23.0
+pypdf>=4.0.0
+python-docx>=1.1.0
+faster-whisper>=1.2
+pdfplumber>=0.11
+reportlab>=4.0
+openpyxl>=3.1
+xlrd>=2.0.1
+pytesseract>=0.3.10
+Pillow>=10.0.0
