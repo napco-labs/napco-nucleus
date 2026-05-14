@@ -36,12 +36,16 @@ fi
 echo "=== recent errors (last 10 min, per worker) ==="
 # 10-min window so a quick container recreate clears stale pre-fix
 # noise. If you want a longer window for a postmortem, run:
-#   docker compose logs --since 1h transcribe | grep -i error
+#   docker compose logs --since 1h transcribe | grep -E 'Traceback|Error:'
+#
+# Strict pattern: real Python exceptions start with 'Traceback', or
+# have the form 'OSError:' / 'ValueError:' / 'Exception:' (capital E,
+# colon). 'errors=0' in a tally line is NOT a real error and was the
+# false-positive source in the prior loose grep.
 for svc in transcribe stage-email stage-drive daily-draft; do
     count=$(docker compose logs --since 10m "$svc" 2>&1 \
-        | grep -ciE 'error|exception|traceback' || true)
-    # Suppress the loops' own retry-line, which counts 'rc=' even on
-    # clean runs in the prior implementation.
+        | grep -cE 'Traceback \(most recent call last\)|^[^:]*Error: |^[^:]*Exception: | FAILED:| \[stderr\]' \
+        || true)
     if [ "${count:-0}" -gt 0 ]; then
         echo "  $svc: $count error/exception line(s) in the last 10 min"
         EXIT=2
