@@ -32,6 +32,14 @@ import time
 import wave
 from pathlib import Path
 
+
+def _atomic_replace_wav(src_tmp: Path, dst: Path) -> None:
+    """Atomically replace `dst` with `src_tmp`. On Windows os.replace is
+    atomic on the same volume; on POSIX it's atomic period. Either way,
+    a process death mid-write leaves dst untouched and src_tmp orphaned
+    (cleanable on next run) instead of a corrupt dst."""
+    os.replace(str(src_tmp), str(dst))
+
 import numpy as np
 import pyaudiowpatch as pyaudio
 
@@ -126,9 +134,21 @@ def _denoise_mic_wav(path: Path,
             spec = np.fft.rfft(samples[:, ch])
             out[:, ch] = np.fft.irfft(spec * mask, n=samples.shape[0])
         out = np.clip(out.reshape(-1), -32768, 32767).astype(np.int16)
-        with wave.open(str(path), "wb") as wf:
-            wf.setparams(params)
-            wf.writeframes(out.tobytes())
+        # Write to a sibling temp file then atomic-rename so a process
+        # death mid-write can't leave a corrupt or partially-truncated
+        # WAV in the canonical path.
+        tmp_path = path.with_suffix(path.suffix + ".denoise.tmp")
+        try:
+            with wave.open(str(tmp_path), "wb") as wf:
+                wf.setparams(params)
+                wf.writeframes(out.tobytes())
+            _atomic_replace_wav(tmp_path, path)
+        finally:
+            if tmp_path.exists():
+                try:
+                    tmp_path.unlink()
+                except OSError:
+                    pass
         print(f"  mic denoise: hpf<{hpf_cutoff_hz:.0f}Hz, "
               f"{notch_count} notches at multiples of {mains_hz:.0f}Hz "
               f"(width {notch_width_hz:.1f}Hz, up to {max_harmonic_hz:.0f}Hz)")
@@ -169,9 +189,20 @@ def _normalize_mic_wav(path: Path, target_dbfs: float = -1.0,
             return  # negligible
         gain_db = 20.0 * float(np.log10(scale))
         samples = np.clip(samples * scale, -32768, 32767).astype(np.int16)
-        with wave.open(str(path), "wb") as wf:
-            wf.setparams(params)
-            wf.writeframes(samples.tobytes())
+        # Temp-write + atomic-rename so a crash here can't corrupt the
+        # WAV that denoise just successfully produced.
+        tmp_path = path.with_suffix(path.suffix + ".normalize.tmp")
+        try:
+            with wave.open(str(tmp_path), "wb") as wf:
+                wf.setparams(params)
+                wf.writeframes(samples.tobytes())
+            _atomic_replace_wav(tmp_path, path)
+        finally:
+            if tmp_path.exists():
+                try:
+                    tmp_path.unlink()
+                except OSError:
+                    pass
         print(f"  mic normalize: peak {peak:.0f} -> "
               f"{int(peak * scale)}, gain {gain_db:+.1f} dB")
     except Exception as e:

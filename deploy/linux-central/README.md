@@ -89,7 +89,7 @@ Authenticate as the Samba user (`nucleus` + the `SAMBA_PASSWORD` from
 | Tail logs | `docker compose logs -f --tail 100 <service>` |
 | Inspect Samba auth | `docker compose exec samba pdbedit -L` |
 | Force a transcribe pass | `docker compose exec transcribe python -m tools.transcribe_calls` |
-| Force daily draft now | `docker compose exec daily-draft python do_it_now.py --client all --last-minutes 1440` |
+| Force daily draft now | `docker compose exec daily-draft python collect_central.py --client all --last-minutes 1440` |
 | Add GHA runner | Set `GHA_RUNNER_TOKEN` in `.env`, then `docker compose --profile runner up -d` |
 
 ## Rollback to .209

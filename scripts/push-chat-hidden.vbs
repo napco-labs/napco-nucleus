@@ -50,8 +50,14 @@ End If
 
 ' cmd /c wrapper so we can redirect stdout+stderr to the log file.
 ' Use `>>` (append) so multiple runs in a day accumulate.
+'
+' `set PYTHONIOENCODING=utf-8 &&` forces UTF-8 stdio in the child python
+' so Bangla / Arabic / CJK characters in chat content don't crash
+' print() on Windows' cp1252 default console encoding (which is what
+' a redirected stdout inherits).
 quoted_log = Chr(34) & logFile & Chr(34)
-cmdLine = "cmd /c " & Chr(34) & pyInvoke & " -m teams.push_chat" & args & _
+cmdLine = "cmd /c " & Chr(34) & "set PYTHONIOENCODING=utf-8 && " & _
+          pyInvoke & " -m teams.push_chat" & args & _
           " >> " & quoted_log & " 2>&1" & Chr(34)
 
 Set sh = CreateObject("WScript.Shell")

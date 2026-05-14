@@ -10,6 +10,12 @@ REM    scripts\central-pull.bat "Susmoy"              (today, client "Susmoy")
 REM    scripts\central-pull.bat "Susmoy" 2026-05-08
 
 cd /d "%~dp0\.."
+
+REM Force UTF-8 so transcripts / chat / email content with non-Latin
+REM characters (Bangla, Arabic, CJK) don't crash print() on Windows'
+REM cp1252 default console encoding.
+set PYTHONIOENCODING=utf-8
+
 if not exist ".venv\Scripts\python.exe" (
     REM No venv - try system python, then py launcher.
     where python.exe >nul 2>&1

@@ -20,6 +20,13 @@ echo ============================================================ >> "logs\voice
 echo [start-daemon.bat] %DATE% %TIME% -- launching voice_daemon >> "logs\voice_daemon.log"
 echo ============================================================ >> "logs\voice_daemon.log"
 
+REM Enable delayed expansion so `!ERRORLEVEL!` inside the if-block below
+REM reflects the exit code of the just-finished python invocation -- with
+REM `%ERRORLEVEL%` cmd would expand at parse time of the whole `(...)`
+REM block, capturing a stale value (typically 0) and reporting "OK" to
+REM Task Scheduler even when the daemon crashed.
+setlocal enabledelayedexpansion
+
 if not exist ".venv\Scripts\python.exe" (
     REM No venv on this machine - fall back to system python or, failing
     REM that, the Python Launcher. Fresh devs often have only py.exe on
@@ -30,10 +37,10 @@ if not exist ".venv\Scripts\python.exe" (
     ) else (
         python -u -m teams.voice_daemon >> "logs\voice_daemon.log" 2>&1
     )
-    echo [start-daemon.bat] %DATE% %TIME% -- voice_daemon exited rc=%ERRORLEVEL% >> "logs\voice_daemon.log"
-    exit /b %ERRORLEVEL%
+    echo [start-daemon.bat] %DATE% %TIME% -- voice_daemon exited rc=!ERRORLEVEL! >> "logs\voice_daemon.log"
+    exit /b !ERRORLEVEL!
 )
 call ".venv\Scripts\activate.bat"
 python -u -m teams.voice_daemon >> "logs\voice_daemon.log" 2>&1
-echo [start-daemon.bat] %DATE% %TIME% -- voice_daemon exited rc=%ERRORLEVEL% >> "logs\voice_daemon.log"
-exit /b %ERRORLEVEL%
+echo [start-daemon.bat] %DATE% %TIME% -- voice_daemon exited rc=!ERRORLEVEL! >> "logs\voice_daemon.log"
+exit /b !ERRORLEVEL!
