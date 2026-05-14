@@ -2,9 +2,14 @@
 
 Run every command below in **PowerShell** on your Windows dev PC.
 
-One thing to get from Titu before you start: the `.env` file.
+## What Titu sends you first
 
-(The Samba password is provided inline in Step 5 below.)
+Titu will DM you these two files privately (they contain secrets — never share them publicly):
+
+1. **`.env`** — save at `E:\Projects\NAPCO-Nucleus\.env` (after Step 1 clones the repo)
+2. **`google-credentials.json`** — save at `E:\Projects\NAPCO-Nucleus\google-credentials.json`
+
+The Samba password is provided inline in Step 5 below.
 
 ---
 
@@ -44,15 +49,16 @@ Then close and reopen PowerShell.
 
 ---
 
-## Step 4 — Save the `.env` file
+## Step 4 — Place the files Titu sent you + set your dev name
 
-Save the file Titu sent you at:
+Save the two files from the "What Titu sends you first" section above:
 
 ```
 E:\Projects\NAPCO-Nucleus\.env
+E:\Projects\NAPCO-Nucleus\google-credentials.json
 ```
 
-Open it in Notepad. Find this line:
+Open the `.env` file in Notepad. Find this line:
 
 ```
 NUCLEUS_DEV_NAME=Titu

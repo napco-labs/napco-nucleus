@@ -242,11 +242,20 @@ def build():
     flow.append(Paragraph(
         "Run every command below in <b>PowerShell</b> on your Windows dev PC.",
         intro))
+    flow.append(Paragraph("<b>What Titu sends you first</b>", body))
     flow.append(Paragraph(
-        "<b>One thing to get from Titu before you start: "
-        "the <font face=\"Courier\">.env</font> file.</b>", body))
+        "Titu will DM you these two files privately "
+        "(they contain secrets &mdash; never share them publicly):",
+        body))
     flow.append(Paragraph(
-        "<i>(The Samba password is provided inline in Step 5 below.)</i>",
+        "1. <font face=\"Courier\">.env</font> &mdash; save at "
+        "<font face=\"Courier\">E:\\Projects\\NAPCO-Nucleus\\.env</font> "
+        "(after Step 1 clones the repo)<br/>"
+        "2. <font face=\"Courier\">google-credentials.json</font> &mdash; save at "
+        "<font face=\"Courier\">E:\\Projects\\NAPCO-Nucleus\\google-credentials.json</font>",
+        body))
+    flow.append(Paragraph(
+        "<i>The Samba password is provided inline in Step 5 below.</i>",
         body))
 
     # ── Step 1: Clone ─────────────────────────────────────────────
@@ -281,10 +290,18 @@ def build():
 
     # ── Step 4: .env ──────────────────────────────────────────────
     flow.append(_space(0.18))
-    flow.append(_step_heading("Step 4", "Save the .env file"))
-    flow.append(Paragraph("Save the file Titu sent you at:", body))
-    flow.append(_code("E:\\Projects\\NAPCO-Nucleus\\.env", code))
-    flow.append(Paragraph("Open it in Notepad. Find this line:", body))
+    flow.append(_step_heading("Step 4",
+                              "Place the files Titu sent you + set your dev name"))
+    flow.append(Paragraph(
+        "Save the two files from the &quot;What Titu sends you first&quot; "
+        "section above:", body))
+    flow.append(_code(
+        "E:\\Projects\\NAPCO-Nucleus\\.env\n"
+        "E:\\Projects\\NAPCO-Nucleus\\google-credentials.json",
+        code))
+    flow.append(Paragraph(
+        "Open the <font face=\"Courier\">.env</font> file in Notepad. "
+        "Find this line:", body))
     flow.append(_code("NUCLEUS_DEV_NAME=Titu", code))
     flow.append(Paragraph(
         "Replace <font face=\"Courier\">Titu</font> with <b>your</b> name. "
