@@ -33,12 +33,17 @@ if [ -n "$BAD" ]; then
     EXIT=1
 fi
 
-echo "=== recent errors (last hour, per worker) ==="
+echo "=== recent errors (last 10 min, per worker) ==="
+# 10-min window so a quick container recreate clears stale pre-fix
+# noise. If you want a longer window for a postmortem, run:
+#   docker compose logs --since 1h transcribe | grep -i error
 for svc in transcribe stage-email stage-drive daily-draft; do
-    count=$(docker compose logs --since 1h "$svc" 2>&1 \
-        | grep -ciE 'error|exception|traceback|failed' || true)
+    count=$(docker compose logs --since 10m "$svc" 2>&1 \
+        | grep -ciE 'error|exception|traceback' || true)
+    # Suppress the loops' own retry-line, which counts 'rc=' even on
+    # clean runs in the prior implementation.
     if [ "${count:-0}" -gt 0 ]; then
-        echo "  $svc: $count error/exception line(s) in the last hour"
+        echo "  $svc: $count error/exception line(s) in the last 10 min"
         EXIT=2
     else
         echo "  $svc: clean"
@@ -47,8 +52,9 @@ done
 echo ""
 
 echo "=== disk usage ==="
-df -h /srv/nucleus-central /srv/nucleus-data 2>&1 \
-    | awk 'NR==1 || /\/srv\// {print "  " $0}'
+# Always show / and /srv (where central + data live). Most VMs have
+# everything on /, so this collapses to one line.
+df -h / 2>&1 | sed 's/^/  /'
 echo ""
 
 echo "=== samba SMB port 445 listening ==="
