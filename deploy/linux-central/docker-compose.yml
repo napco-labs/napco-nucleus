@@ -42,14 +42,17 @@ x-worker-base: &worker-base
     # Lives in a named volume so `docker compose down` keeps it,
     # `docker compose down -v` resets it on purpose.
     - nucleus-state:/state
-    # Writable overlay of data/requirements/ so daily-draft (which
-    # invokes collect_central.py -> agent.py -> docx_writer) can land
-    # the Requirements Verification artifacts. The rest of the repo
-    # stays RO via the /app:ro mount above. Seed this dir on first
-    # deploy from the repo's tracked data/requirements/ contents
-    # (drive-processed.json, proposed-tasks.json, state.json, the
-    # empty inbox/ subdirs).
-    - /srv/nucleus-data/requirements:/app/data/requirements
+    # Writable overlay of ALL of data/ so the pipeline can write
+    # wherever it wants under there. The repo stays RO via /app:ro
+    # above, but /app/data/ is this writable host dir. Seed this dir
+    # on first deploy from the repo's tracked data/ contents (templates,
+    # drive-processed.json, proposed-tasks.json, state.json, inbox/
+    # placeholders). After seeding it works as a transparent overlay:
+    #   - data/_locks/    (tools/_lock.py file locks)
+    #   - data/requirements/  (sessions/, archive/, Requirements Verification *.docx)
+    #   - data/templates/  (READ-only via seed; pipeline doesn't write here)
+    #   - any future data/ write target -- no compose change needed
+    - /srv/nucleus-data:/app/data
     # Faster-whisper model cache (fallback path; rarely fires when
     # GROQ_API_KEY is set, but the model must persist when it does).
     - whisper-models:/root/.cache/huggingface
