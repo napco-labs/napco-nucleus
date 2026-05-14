@@ -141,9 +141,21 @@ services:
       # blank-by-default; the runner container will fail-fast at
       # start time if the token is missing, which is the right
       # signal to fill .env before `--profile runner`.
+      #
+      # NOTE: RUNNER_TOKEN (not ACCESS_TOKEN). Two different paths in
+      # the myoung34/github-runner entrypoint:
+      #   - ACCESS_TOKEN: classic PAT with admin:org -- the image
+      #     uses it to call POST /orgs/{org}/actions/runners/registration-token
+      #     and auto-fetch a registration token on every (re)start.
+      #     Best for long-running runners with rotation.
+      #   - RUNNER_TOKEN: a pre-fetched registration token from
+      #     org settings UI / API. One-shot, expires in ~1h, but
+      #     once the runner is registered it's persistent.
+      # Our org's PAT policy likely restricts admin:org scopes, so
+      # the one-shot RUNNER_TOKEN path is the practical default.
       - RUNNER_SCOPE=org
       - ORG_NAME=${GHA_RUNNER_ORG:-}
-      - ACCESS_TOKEN=${GHA_RUNNER_TOKEN:-}
+      - RUNNER_TOKEN=${GHA_RUNNER_TOKEN:-}
       - RUNNER_NAME=nucleus-central-123
       - LABELS=self-hosted,linux,nucleus-central
       - EPHEMERAL=false
