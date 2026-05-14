@@ -10,9 +10,20 @@
 # Container TZ=Asia/Dhaka so `date` already speaks BD.
 # No cron daemon -- simple sleep-until-target loop.
 
-set -u
+set -uo pipefail
 TARGET_TIME="${DAILY_DRAFT_TARGET_TIME:-23:45}"
 LOOKBACK_MINUTES="${DAILY_DRAFT_LOOKBACK_MINUTES:-1440}"
+
+# Guard against malformed env overrides. `date -d "today <bad>"` returns
+# empty + nonzero; `sleep ""` then errors and the loop would spin.
+if ! date -d "today ${TARGET_TIME}" +%s >/dev/null 2>&1; then
+    echo "[daily-draft-loop] FATAL: DAILY_DRAFT_TARGET_TIME='${TARGET_TIME}' is not parseable by GNU date. Aborting." >&2
+    exit 2
+fi
+if ! [[ "$LOOKBACK_MINUTES" =~ ^[0-9]+$ ]]; then
+    echo "[daily-draft-loop] FATAL: DAILY_DRAFT_LOOKBACK_MINUTES='${LOOKBACK_MINUTES}' is not an integer. Aborting." >&2
+    exit 2
+fi
 
 trap 'echo "[daily-draft-loop] received SIGTERM, exiting"; exit 0' TERM INT
 

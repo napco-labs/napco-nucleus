@@ -276,6 +276,13 @@ def _stop_recording(state: dict, reason: str = "") -> None:
             print(f"[voice] recorder exited rc={proc.returncode}")
         except subprocess.TimeoutExpired:
             print("[voice] recorder didn't exit in 10s; leaving it.")
+        # INVARIANT (required by _audio_session_watcher's hard-cap branch):
+        # clearing call_started_at signals to the watcher that no recording
+        # is active. The watcher's hard-cap check skips re-firing because
+        # `started_at is not None` becomes False on the next poll. If a
+        # future refactor moves this assignment elsewhere or removes it,
+        # the watcher will hard-cap-stop in a loop on the next stuck
+        # Active session. See _audio_session_watcher for the read side.
         state["call_started_at"] = None
 
 

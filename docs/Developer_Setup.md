@@ -120,7 +120,7 @@ cd E:\Projects\NAPCO-Nucleus
 Make a Teams call (any short call). Wait 2 minutes. Then run in **PowerShell**:
 
 ```powershell
-$you  = (Select-String -Path E:\Projects\NAPCO-Nucleus\.env -Pattern '^NUCLEUS_DEV_NAME=').Line -replace 'NUCLEUS_DEV_NAME=',''
+$you   = ((Select-String -Path E:\Projects\NAPCO-Nucleus\.env -Pattern '^NUCLEUS_DEV_NAME=').Line -replace 'NUCLEUS_DEV_NAME=','').Trim()
 $today = Get-Date -Format "yyyy-MM-dd"
 Get-ChildItem "\\172.16.205.123\nucleus-central\$you\$today\calls\"
 ```

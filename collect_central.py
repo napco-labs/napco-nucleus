@@ -107,9 +107,20 @@ _ATTACHMENT_EXT_KIND = {
 }
 
 
-def _scan_central(central: Path, day: str, client: str) -> dict:
-    """Walk central/<dev>/<day>/ and bucket by source. Returns dict with
-    'calls', 'chats', and 'attachments' lists."""
+def _scan_central(central: Path, days, client: str) -> dict:
+    """Walk central/<dev>/<day>/ for each day and bucket by source.
+
+    `days` may be a single date string or a list of strings. The
+    auto-fire path passes [today, yesterday] so calls that straddled
+    midnight (started before midnight, finished after) and live in
+    yesterday's folder still get picked up. Memory dedup
+    (`requirements_seen`) prevents double-drafting on subsequent runs.
+
+    Returns dict with 'calls', 'chats', and 'attachments' lists.
+    """
+    if isinstance(days, str):
+        days = [days]
+
     calls: list[dict] = []
     chats: list[dict] = []
     attachments: list[dict] = []
@@ -120,51 +131,52 @@ def _scan_central(central: Path, day: str, client: str) -> dict:
     for dev_dir in sorted(central.iterdir()):
         if not dev_dir.is_dir():
             continue
-        day_dir = dev_dir / day
-        if not day_dir.exists():
-            continue
+        for day in days:
+            day_dir = dev_dir / day
+            if not day_dir.exists():
+                continue
 
-        calls_dir = day_dir / "calls"
-        if calls_dir.exists():
-            for meta_path in sorted(calls_dir.glob("*.json")):
-                try:
-                    metadata = json.loads(
-                        meta_path.read_text(encoding="utf-8-sig"))
-                except Exception as e:
-                    print(f"  WARN: skipping {meta_path}: {e}",
-                          file=sys.stderr)
-                    continue
-                if not _client_match(metadata, client):
-                    continue
-                stamp = metadata.get("session") or meta_path.stem
-                mic = calls_dir / f"{stamp}_mic.wav"
-                spk = calls_dir / f"{stamp}_speaker.wav"
-                calls.append({
-                    "dev": dev_dir.name,
-                    "stamp": stamp,
-                    "metadata": metadata,
-                    "mic_path": mic if mic.exists() else None,
-                    "speaker_path": spk if spk.exists() else None,
-                })
-
-        chat_dir = day_dir / "chat"
-        if chat_dir.exists():
-            for doc_path in sorted(chat_dir.glob("*.docx")):
-                chats.append({"dev": dev_dir.name, "path": doc_path})
-
-            att_dir = chat_dir / "attachments"
-            if att_dir.exists():
-                for f in sorted(att_dir.iterdir()):
-                    if not f.is_file() or f.name == "manifest.json":
+            calls_dir = day_dir / "calls"
+            if calls_dir.exists():
+                for meta_path in sorted(calls_dir.glob("*.json")):
+                    try:
+                        metadata = json.loads(
+                            meta_path.read_text(encoding="utf-8-sig"))
+                    except Exception as e:
+                        print(f"  WARN: skipping {meta_path}: {e}",
+                              file=sys.stderr)
                         continue
-                    kind = _ATTACHMENT_EXT_KIND.get(f.suffix.lower())
-                    if not kind:
-                        continue  # skip images, audio, video, archives, etc.
-                    attachments.append({
+                    if not _client_match(metadata, client):
+                        continue
+                    stamp = metadata.get("session") or meta_path.stem
+                    mic = calls_dir / f"{stamp}_mic.wav"
+                    spk = calls_dir / f"{stamp}_speaker.wav"
+                    calls.append({
                         "dev": dev_dir.name,
-                        "path": f,
-                        "kind": kind,
+                        "stamp": stamp,
+                        "metadata": metadata,
+                        "mic_path": mic if mic.exists() else None,
+                        "speaker_path": spk if spk.exists() else None,
                     })
+
+            chat_dir = day_dir / "chat"
+            if chat_dir.exists():
+                for doc_path in sorted(chat_dir.glob("*.docx")):
+                    chats.append({"dev": dev_dir.name, "path": doc_path})
+
+                att_dir = chat_dir / "attachments"
+                if att_dir.exists():
+                    for f in sorted(att_dir.iterdir()):
+                        if not f.is_file() or f.name == "manifest.json":
+                            continue
+                        kind = _ATTACHMENT_EXT_KIND.get(f.suffix.lower())
+                        if not kind:
+                            continue  # skip images, audio, video, archives, etc.
+                        attachments.append({
+                            "dev": dev_dir.name,
+                            "path": f,
+                            "kind": kind,
+                        })
 
     return {"calls": calls, "chats": chats, "attachments": attachments}
 
@@ -578,11 +590,24 @@ def main() -> int:
         return 2
     central = Path(central_raw)
 
-    day = args.day or dt.date.today().strftime("%Y-%m-%d")
+    if args.day:
+        # User specified an exact day -- honor it literally.
+        days_to_scan = [args.day]
+        day_label = args.day
+    else:
+        # Auto-fire path: also scan yesterday's folder to catch calls
+        # that started before midnight and ended after. Memory's
+        # requirements_seen handles dedup if a real requirement spans
+        # both scans on consecutive nightly runs.
+        today = dt.date.today()
+        yesterday = today - dt.timedelta(days=1)
+        days_to_scan = [today.strftime("%Y-%m-%d"),
+                        yesterday.strftime("%Y-%m-%d")]
+        day_label = f"{days_to_scan[0]} (+ yesterday for midnight straddles)"
 
-    print(f"\n*** collect_central: client={args.client!r}  day={day} ***")
+    print(f"\n*** collect_central: client={args.client!r}  day={day_label} ***")
     print(f"central: {central}")
-    bundle = _scan_central(central, day, args.client)
+    bundle = _scan_central(central, days_to_scan, args.client)
     n_calls = len(bundle["calls"])
     n_chats = len(bundle["chats"])
     n_atts = len(bundle["attachments"])
@@ -609,8 +634,11 @@ def main() -> int:
         return 0
 
     if args.reset:
+        # Use the primary day (today, or whatever --day specified) for the
+        # session label even when also scanning yesterday for straddles.
+        primary_day = days_to_scan[0]
         result = session_doc.reset(
-            label=f"central-{args.client.replace(' ', '-')}-{day}")
+            label=f"central-{args.client.replace(' ', '-')}-{primary_day}")
         print(f"\nSession reset: {result['session_path']} "
               f"(label '{result['new_label']}')")
 
