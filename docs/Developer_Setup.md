@@ -2,9 +2,9 @@
 
 Run every command below in **PowerShell** on your Windows dev PC.
 
-Two things to get from Titu before you start:
-1. The `.env` file
-2. The Samba password for `172.16.205.123`
+One thing to get from Titu before you start: the `.env` file.
+
+(The Samba password is provided inline in Step 5 below.)
 
 ---
 
@@ -70,10 +70,10 @@ Save. Close.
 
 ## Step 5 — Cache the Samba password
 
-Run in **PowerShell** (replace `<password>` with the one Titu gave you):
+Run in **PowerShell**:
 
 ```powershell
-cmdkey /add:172.16.205.123 /user:nucleus /pass:<password>
+cmdkey /add:172.16.205.123 /user:nucleus /pass:E7CqJOd1oHox7HTjxNp_osD_fSyUe59I
 ```
 
 Verify:
@@ -178,4 +178,4 @@ cmdkey /delete:172.16.205.123
 
 ## Contact
 
-Titu — `titucse@gmail.com`
+Titu — `khasan@ael-bd.com`

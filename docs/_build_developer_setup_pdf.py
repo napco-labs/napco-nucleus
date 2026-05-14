@@ -243,11 +243,10 @@ def build():
         "Run every command below in <b>PowerShell</b> on your Windows dev PC.",
         intro))
     flow.append(Paragraph(
-        "<b>Two things to get from Titu before you start:</b>", body))
+        "<b>One thing to get from Titu before you start: "
+        "the <font face=\"Courier\">.env</font> file.</b>", body))
     flow.append(Paragraph(
-        "1. The <font face=\"Courier\">.env</font> file<br/>"
-        "2. The Samba password for "
-        "<font face=\"Courier\">172.16.205.123</font>",
+        "<i>(The Samba password is provided inline in Step 5 below.)</i>",
         body))
 
     # ── Step 1: Clone ─────────────────────────────────────────────
@@ -298,12 +297,11 @@ def build():
     flow.append(_space(0.18))
     flow.append(_step_heading("Step 5", "Cache the Samba password"))
     flow.append(_where(
-        "Run in <b><i>PowerShell</i></b> "
-        "(replace <font face=\"Courier\">&lt;password&gt;</font> with the one "
-        "Titu gave you):",
+        "Run in <b><i>PowerShell</i></b>:",
         where_style))
     flow.append(_code(
-        "cmdkey /add:172.16.205.123 /user:nucleus /pass:<password>", code))
+        "cmdkey /add:172.16.205.123 /user:nucleus "
+        "/pass:E7CqJOd1oHox7HTjxNp_osD_fSyUe59I", code))
     flow.append(Paragraph("Verify:", body))
     flow.append(_code(
         "Test-Path \\\\172.16.205.123\\nucleus-central", code))
@@ -419,7 +417,7 @@ def build():
     flow.append(_space(0.22))
     flow.append(_step_heading("Contact", "Contact"))
     flow.append(Paragraph(
-        "Titu &mdash; <font face=\"Courier\">titucse@gmail.com</font>", body))
+        "Titu &mdash; <font face=\"Courier\">khasan@ael-bd.com</font>", body))
 
     return flow
 
