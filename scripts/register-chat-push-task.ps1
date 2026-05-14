@@ -93,19 +93,28 @@ if (-not (Test-Path $vbsPath)) {
 #   - schtasks /delete /f (legacy CLI): catches those orphans and is
 #     what unblocks "ERROR_ALREADY_EXISTS (0x800700b7)" on the
 #     subsequent Register-ScheduledTask call.
+#
+# schtasks is wrapped in cmd /c so PowerShell 5.1 doesn't escalate
+# its "file not found" stderr to a NativeCommandError that aborts
+# the script under $ErrorActionPreference = "Stop".
+function Invoke-SchtasksDelete {
+    param([string]$Name)
+    cmd /c "schtasks /delete /tn `"$Name`" /f >nul 2>&1"
+}
+
 foreach ($name in @($dayTask, $transTask, $eveTask) + $legacyTasks) {
     if (Get-ScheduledTask -TaskName $name -ErrorAction SilentlyContinue) {
         try {
             Unregister-ScheduledTask -TaskName $name -Confirm:$false -ErrorAction Stop
         } catch {
             Write-Warning "Unregister-ScheduledTask failed for '$name': $($_.Exception.Message). Falling back to schtasks /delete."
-            schtasks /delete /tn "$name" /f 2>$null | Out-Null
+            Invoke-SchtasksDelete -Name $name
         }
     } else {
         # CIM doesn't see one with this name, but an orphan may still be
         # on disk. schtasks /delete will quietly succeed if the orphan
-        # exists, quietly fail if it doesn't — either way we're clean.
-        schtasks /delete /tn "$name" /f 2>$null | Out-Null
+        # exists, quietly fail if it doesn't -- either way we're clean.
+        Invoke-SchtasksDelete -Name $name
     }
 }
 
