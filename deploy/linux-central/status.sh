@@ -1,0 +1,81 @@
+#!/bin/bash
+# status.sh -- 30-second health check for the Nucleus stack on .123.
+#
+# Surfaces:
+#   * container state (Up / Restarting / Exited)
+#   * recent error/exception lines per worker (last hour)
+#   * disk usage on the data dirs
+#   * SMB port 445 listening (Samba up)
+#   * last successful run timestamp per worker (cheap proxy for "alive")
+#
+# Returns exit code 0 if everything looks healthy, 1 if any container
+# is Restarting / Exited, 2 if any worker had crashes in the last hour.
+#
+# Usage:
+#   cd /home/ubuntu/napco-nucleus/deploy/linux-central
+#   ./status.sh
+
+set -uo pipefail
+cd "$(dirname "$0")"
+
+EXIT=0
+
+echo "=== container state ==="
+docker compose --profile runner ps
+echo ""
+
+# Flag anything not Up
+BAD=$(docker compose --profile runner ps --format '{{.Service}} {{.State}}' 2>/dev/null | awk '$2!="running"' | head -5)
+if [ -n "$BAD" ]; then
+    echo "[WARN] containers not running:"
+    echo "$BAD" | sed 's/^/  /'
+    echo ""
+    EXIT=1
+fi
+
+echo "=== recent errors (last hour, per worker) ==="
+for svc in transcribe stage-email stage-drive daily-draft; do
+    count=$(docker compose logs --since 1h "$svc" 2>&1 \
+        | grep -ciE 'error|exception|traceback|failed' || true)
+    if [ "${count:-0}" -gt 0 ]; then
+        echo "  $svc: $count error/exception line(s) in the last hour"
+        EXIT=2
+    else
+        echo "  $svc: clean"
+    fi
+done
+echo ""
+
+echo "=== disk usage ==="
+df -h /srv/nucleus-central /srv/nucleus-data 2>&1 \
+    | awk 'NR==1 || /\/srv\// {print "  " $0}'
+echo ""
+
+echo "=== samba SMB port 445 listening ==="
+if ss -tln 2>/dev/null | grep -q ':445'; then
+    echo "  YES (port 445 has a listener)"
+else
+    echo "  NO (samba is not serving SMB)"
+    EXIT=1
+fi
+echo ""
+
+echo "=== last successful tick per worker (heuristic) ==="
+for svc in transcribe stage-email stage-drive daily-draft; do
+    last=$(docker compose logs --tail 50 "$svc" 2>&1 \
+        | grep -E "tick |firing |done:|matched " \
+        | tail -1 || true)
+    if [ -n "$last" ]; then
+        echo "  $svc: $last"
+    else
+        echo "  $svc: (no recent tick line in last 50 log lines)"
+    fi
+done
+echo ""
+
+case "$EXIT" in
+    0) echo "[OK] stack looks healthy" ;;
+    1) echo "[BAD] one or more containers are not running" ;;
+    2) echo "[WARN] containers running but workers had recent errors" ;;
+esac
+exit "$EXIT"
