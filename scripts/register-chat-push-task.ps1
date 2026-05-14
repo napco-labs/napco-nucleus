@@ -75,15 +75,11 @@ if ($Unregister) {
 
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $repoRoot = Split-Path -Parent $scriptDir
+$vbsPath = Join-Path $scriptDir "push-chat-hidden.vbs"
 
-# Resolve a usable python — venv preferred, system py as fallback.
-$venvPython = Join-Path $repoRoot ".venv\Scripts\python.exe"
-if (Test-Path $venvPython) {
-    $pyExe = $venvPython
-    $pyArgPrefix = ""
-} else {
-    $pyExe = "py"
-    $pyArgPrefix = "-3 "
+if (-not (Test-Path $vbsPath)) {
+    Write-Error "Cannot find $vbsPath. Aborting."
+    return
 }
 
 # Drop ALL prior chat-push entries (new + legacy single-window setup)
@@ -130,10 +126,12 @@ function Register-ChatPush {
         $anchor = $anchor.AddDays(1)
     }
 
-    $argString = $pyArgPrefix + "-m teams.push_chat --last-minutes $LastMinutes"
+    # Hidden launcher: wscript.exe runs push-chat-hidden.vbs which spawns
+    # `python -m teams.push_chat --last-minutes <N>` with a hidden window
+    # and tees output to logs\chat_push.log.
     $action = New-ScheduledTaskAction `
-        -Execute $pyExe `
-        -Argument $argString `
+        -Execute "wscript.exe" `
+        -Argument ('"{0}" --last-minutes {1}' -f $vbsPath, $LastMinutes) `
         -WorkingDirectory $repoRoot
 
     $dailyTrigger = New-ScheduledTaskTrigger -Daily -At $anchor
