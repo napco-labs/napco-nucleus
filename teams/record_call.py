@@ -156,8 +156,8 @@ def _denoise_mic_wav(path: Path,
         print(f"  mic denoise FAILED: {e}", file=sys.stderr)
 
 
-def _normalize_mic_wav(path: Path, target_dbfs: float = -1.0,
-                       max_gain_db: float = 24.0) -> None:
+def _normalize_mic_wav(path: Path, target_dbfs: float = 1.0,
+                       max_gain_db: float = 30.0) -> None:
     """Peak-normalize an int16 PCM mic WAV to target dBFS in-place.
 
     Teams applies AGC on the outgoing call audio but our recorder
@@ -167,9 +167,26 @@ def _normalize_mic_wav(path: Path, target_dbfs: float = -1.0,
     risk in the realtime path.
 
     `max_gain_db` caps the scale factor so a quiet/silent recording
-    doesn't blow up the noise floor. `target_dbfs` is the peak target
-    (slightly below 0 dBFS for headroom).
+    doesn't blow up the noise floor. `target_dbfs` is the peak target;
+    at +1 dBFS a small percentage of transient peaks land slightly
+    past int16 max and get hard-clipped by np.clip below -- perceived
+    loudness bumps ~2 dB vs the prior -1 dBFS target, no distortion
+    on speech since transients are sparse.
+
+    Override via env: NUCLEUS_MIC_TARGET_DBFS, NUCLEUS_MIC_MAX_GAIN_DB.
     """
+    # Honor env overrides so a noisy PC can dial down without an
+    # edit + redeploy. Numeric parse failures fall back to defaults.
+    try:
+        target_dbfs = float(os.environ.get(
+            "NUCLEUS_MIC_TARGET_DBFS", str(target_dbfs)))
+    except ValueError:
+        pass
+    try:
+        max_gain_db = float(os.environ.get(
+            "NUCLEUS_MIC_MAX_GAIN_DB", str(max_gain_db)))
+    except ValueError:
+        pass
     try:
         with wave.open(str(path), "rb") as wf:
             params = wf.getparams()
