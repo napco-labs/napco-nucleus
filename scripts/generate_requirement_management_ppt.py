@@ -287,14 +287,14 @@ def slide_channels(prs):
     channels = [
         ("Teams chat",
          "Read from each dev's local Teams cache. No API, no token.",
-         "Every 15 min during BD 18:00-01:00 + 18:00 backfill (1080 min).",
+         "Day every 2 hr, Transition 17:30, Evening every 30 min. 24x7 with overnight gap.",
          CORAL),
         ("Teams calls",
          "Voice daemon records mic + speaker as separate tracks.",
-         "On \"stop\" / \"Allah Hafez\". Gated to BD 18:00-01:00.",
+         "Auto on Teams audio-session edges, 24x7. Phrase trigger armed as fallback.",
          TEAL),
         ("Email",
-         "IMAP poll of khasan@ael-bd.com on the agent host.",
+         "IMAP poll of khasan@ael-bd.com on the central host.",
          "Auto-staged to central every 15 min, 24x7. UID-checkpointed.",
          GOLD),
         ("Google Drive",
@@ -315,14 +315,16 @@ def slide_channels(prs):
 
     set_speaker_notes(s, (
         "All four channels stage to central in the background -- nothing "
-        "to remember. Chat + calls on each dev's PC are gated to the BD "
-        "evening window (18:00-01:00); a once-daily 18:00 backfill "
-        "sweeps any daytime chat so nothing is lost. Email + Drive run "
-        "24x7 from the agent host (offset by 5 min to avoid API "
-        "contention). Dev machines never hold Gmail or Drive "
-        "credentials -- those live on the agent host. The Requirement "
-        "Management workflow reads from the central store when I'm "
-        "ready to draft."
+        "to remember. Chat push runs on three BD-local schedules (Day "
+        "every 2 hr 10:00-17:00, Transition once at 17:30, Evening every "
+        "30 min 18:00-24:00) with an overnight gap that can be swept "
+        "manually if needed. Teams calls record automatically the moment "
+        "Teams opens its audio session -- no phrases to remember, though "
+        "the verbal-trigger fallback is still armed. Email + Drive run "
+        "24x7 from the central host (offset by 5 min to avoid API "
+        "contention). Dev machines never hold Gmail or Drive credentials "
+        "-- those live on the central host. The Requirement Management "
+        "workflow reads from the central store when I'm ready to draft."
     ))
 
 
@@ -335,11 +337,11 @@ def slide_dev_setup(prs):
         ("2", "Run scripts\\setup.bat",
          "Python, venv, deps, .env. No App Password needed."),
         ("3", "Confirm one line in .env",
-         "NUCLEUS_CENTRAL_PATH=\\\\172.16.205.209\\nucleus-central"),
-        ("4", "Register the 15-min chat-push",
-         ".\\scripts\\register-chat-push-task.ps1"),
-        ("5", "Start the voice daemon",
-         "Double-click scripts\\start-daemon.bat"),
+         "NUCLEUS_CENTRAL_PATH=\\\\172.16.205.123\\nucleus-central"),
+        ("4", "Register the chat-push tasks (Day / Transition / Evening)",
+         ".\\scripts\\register-chat-push-task.ps1  (admin PowerShell)"),
+        ("5", "Install the voice daemon (autostarts at logon)",
+         "Double-click scripts\\install-voice-daemon.bat"),
     ]
     y = Inches(1.55)
     row_h = Inches(0.95)
@@ -359,10 +361,13 @@ def slide_dev_setup(prs):
              size=12, color=MUTED)
 
     set_speaker_notes(s, (
-        "I have a PDF that goes through every step in detail. The two "
-        "things to keep an eye on: register the cron with admin "
-        "PowerShell -- it's a one-line script -- and leave the voice "
-        "daemon running. Otherwise calls won't get captured."
+        "The Developer Setup PDF in docs/ goes through every step in "
+        "detail. The two things to remember: run the chat-push "
+        "registration in admin PowerShell so the three scheduled tasks "
+        "land, and use install-voice-daemon.bat -- it registers a "
+        "Scheduled Task that re-launches the daemon at every logon and "
+        "restarts it on crash. Recordings happen automatically the "
+        "moment Teams opens an audio session; no buttons, no phrases."
     ))
 
 
@@ -372,10 +377,9 @@ def slide_daily(prs):
 
     rows = [
         ("Get your chat / attachments to central",
-         "Nothing -- the 15-minute cron handles it"),
+         "Nothing -- the chat-push tasks (Day / Transition / Evening) handle it"),
         ("Record a Teams call",
-         "Say \"Start recording\" when the call begins, "
-         "\"Stop\" when it ends"),
+         "Nothing -- recording auto-starts when Teams opens its audio session"),
         ("Include a file from Teams chat",
          "Click \"Download\" on the attachment so it lands in ~/Downloads"),
         ("Update to the latest code",
@@ -397,9 +401,11 @@ def slide_daily(prs):
 
     set_speaker_notes(s, (
         "I want everyone to internalise: you don't run any command "
-        "during the day. Your machine pushes chat every 15 minutes; the "
-        "voice daemon listens for the start / stop phrases; downloads "
-        "land in ~/Downloads automatically when you click. That's it."
+        "during the day. Your machine pushes chat on its three BD-time "
+        "schedules; the voice daemon auto-records the second Teams "
+        "opens an audio session -- nothing to say, nothing to press; "
+        "downloads land in ~/Downloads automatically when you click. "
+        "That's it."
     ))
 
 
@@ -444,7 +450,7 @@ def slide_titu_command(prs):
 
 def slide_architecture(prs):
     s = base_slide(prs, "Where the work happens",
-                   "Per-dev push + agent-host central pull + LLM identify.")
+                   "Per-dev push + Linux central pull + LLM identify.")
 
     # Three columns
     col_w = Inches(3.85)
@@ -454,26 +460,26 @@ def slide_architecture(prs):
 
     add_box(s, xs[0], y, col_w, col_h, "Dev machines (x N)", [
         "Read local Teams IndexedDB",
-        "15-min cron pushes chat + attachments",
-        "Voice daemon records calls",
-        "Writes to \\\\172.16.205.209\\nucleus-central",
+        "Chat-push tasks (Day / Transition / Evening)",
+        "Voice daemon auto-records Teams calls",
+        "Writes to \\\\172.16.205.123\\nucleus-central",
         "No secrets. No API keys.",
     ], accent=NAVY)
 
-    add_box(s, xs[1], y, col_w, col_h, "Agent host (MVPACCESS)", [
-        "Pulls email from Gmail (IMAP)",
-        "Pulls files from Google Drive",
-        "Walks the central share daily",
-        "Transcribes calls with Whisper large-v3",
-        "Aggregates into one .docx session",
+    add_box(s, xs[1], y, col_w, col_h, "Central host (.123, Linux)", [
+        "docker-compose: 6 services, always on",
+        "Pulls email (IMAP) + Drive every 15 min",
+        "Auto-transcribes new calls (~2 min lag)",
+        "Groq whisper-large-v3 with chunking;",
+        "faster-whisper fallback",
     ], accent=TEAL)
 
     add_box(s, xs[2], y, col_w, col_h, "LLM identify + draft", [
-        "Claude Max -- local CLI on MVPACCESS",
+        "Claude CLI in nucleus-daily-draft container",
+        "Auto-fires 23:45 BD daily; on-demand too",
         "Extracts deduped requirement list",
         "Writes Requirements Verification .docx",
-        "Builds verification email .eml",
-        "IMAP APPEND to [Gmail]/Drafts",
+        "IMAP APPEND to Titu's [Gmail]/Drafts",
     ], accent=CORAL)
 
     add_arrow(s, xs[0] + col_w + Inches(0.02), y + col_h / 2,
@@ -484,10 +490,14 @@ def slide_architecture(prs):
               color=MUTED, width_pt=2.5)
 
     set_speaker_notes(s, (
-        "Three responsibilities, three machines / processes. Dev "
-        "machines push -- only push. Agent host pulls and aggregates. "
-        "LLM identifies and drafts. Each layer has the smallest "
-        "permissions it needs."
+        "Three responsibilities. Dev machines push -- only push -- to "
+        "the central Samba share on .123. The Linux central host runs "
+        "a docker-compose stack that pulls email + Drive on its own "
+        "cadence and transcribes new calls within ~2 minutes of arrival. "
+        "The LLM identify + draft step runs once daily at 23:45 BD "
+        "inside a container, and also on demand whenever I trigger it. "
+        "Each layer holds the smallest permissions it needs -- dev PCs "
+        "have no Gmail or Drive credentials at all."
     ))
 
 
@@ -536,9 +546,9 @@ def slide_out_of_scope(prs):
                    "Setting boundaries clearly.")
     items = [
         ("Auto-send emails",
-         "Every outbound email leaves my mailbox with my explicit click."),
-        ("Auto-poll Teams / Email / Drive",
-         "The 15-min cron is a chat-push only; the identify pipeline runs on command."),
+         "Every outbound email leaves my mailbox with my explicit click. This is the hard boundary."),
+        ("Auto-edit the requirements doc",
+         "The .docx draft is final until I edit it. The LLM does not rewrite it on its own."),
         ("Push to OpenProject",
          "OpenProject ingest is manual today; auto only when we hit >=80% monthly accuracy."),
         ("Replace client conversations",
@@ -558,8 +568,14 @@ def slide_out_of_scope(prs):
 
     set_speaker_notes(s, (
         "Worth being explicit about boundaries so expectations are right. "
-        "This system isn't trying to replace anyone or anything. It is "
-        "a capture aid that I drive."
+        "Capture is fully automated -- chat, calls, email, and Drive all "
+        "stage themselves. Identify + draft also runs on its own once "
+        "daily at 23:45 BD. The one thing that stays manual is the send "
+        "click: every email that goes to a client leaves my mailbox "
+        "because I clicked Send. That's the human-in-the-loop boundary, "
+        "and it stays there until the requirements doc is >=80% accurate "
+        "month after month. This is a capture aid that I drive at the "
+        "final step."
     ))
 
 
