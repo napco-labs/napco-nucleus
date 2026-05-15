@@ -65,6 +65,8 @@ logger = logging.getLogger(__name__)
 GROQ_URL = "https://api.groq.com/openai/v1/audio/translations"
 GROQ_MODEL_DEFAULT = "whisper-large-v3"  # turbo can't translate; do not change
 GROQ_MAX_BYTES = 25 * 1024 * 1024
+# Headroom under the 25 MB cap for the WAV header + multipart envelope.
+GROQ_CHUNK_HEADROOM_BYTES = 1 * 1024 * 1024
 
 
 def _central_root() -> Path | None:
@@ -116,23 +118,54 @@ def _scan(root: Path, days: int) -> list[tuple[Path, str]]:
 
 # ─── Groq backend ───────────────────────────────────────────────────
 
-def _groq_translate(wav_path: Path, label: str) -> list[dict]:
-    """POST a WAV to Groq's translations endpoint, return segments.
+def _split_wav_by_size(wav_path: Path, max_bytes: int,
+                       out_dir: Path) -> list[tuple[Path, float]]:
+    """Slice a WAV into chunks each strictly smaller than max_bytes.
 
-    Each segment: {start: float, end: float, text: str, speaker: label}.
-    Raises on any non-200 response so the caller can fall back.
+    Returns [(chunk_path, start_offset_seconds), ...] in order. Each
+    chunk is a valid standalone WAV with its own header. Caller is
+    responsible for cleaning up chunk_path's parent directory.
+    """
+    import wave
+    chunks: list[tuple[Path, float]] = []
+    with wave.open(str(wav_path), "rb") as w:
+        n_channels = w.getnchannels()
+        sample_width = w.getsampwidth()
+        framerate = w.getframerate()
+        total_frames = w.getnframes()
+        bytes_per_frame = n_channels * sample_width
+        target_data_bytes = max(bytes_per_frame,
+                                max_bytes - GROQ_CHUNK_HEADROOM_BYTES)
+        frames_per_chunk = max(1, target_data_bytes // bytes_per_frame)
+        idx = 0
+        pos = 0
+        while pos < total_frames:
+            n = min(frames_per_chunk, total_frames - pos)
+            w.setpos(pos)
+            raw = w.readframes(n)
+            chunk_path = out_dir / f"{wav_path.stem}.chunk{idx:02d}.wav"
+            with wave.open(str(chunk_path), "wb") as out:
+                out.setnchannels(n_channels)
+                out.setsampwidth(sample_width)
+                out.setframerate(framerate)
+                out.writeframes(raw)
+            chunks.append((chunk_path, pos / float(framerate)))
+            pos += n
+            idx += 1
+    return chunks
+
+
+def _groq_translate_one(wav_path: Path, label: str,
+                        time_offset_s: float = 0.0) -> list[dict]:
+    """POST a single ≤25 MB WAV to Groq. Adds time_offset_s to every
+    segment timestamp so chunked uploads stitch back into a continuous
+    transcript timeline.
     """
     import requests  # lazy — drive_ingester already pulls this in
     api_key = os.getenv("GROQ_API_KEY")
     if not api_key:
         raise RuntimeError("GROQ_API_KEY not set")
     model = os.getenv("GROQ_TEAMS_WHISPER_MODEL") or GROQ_MODEL_DEFAULT
-
-    size = wav_path.stat().st_size
-    if size > GROQ_MAX_BYTES:
-        raise ValueError(
-            f"{wav_path.name} is {size / 1e6:.1f} MB, exceeds Groq "
-            f"{GROQ_MAX_BYTES / 1e6:.0f} MB limit")
 
     with open(wav_path, "rb") as f:
         files = {"file": (wav_path.name, f, "audio/wav")}
@@ -152,12 +185,44 @@ def _groq_translate(wav_path: Path, label: str) -> list[dict]:
         if not text:
             continue
         out.append({
-            "start": float(s.get("start", 0.0)),
-            "end": float(s.get("end", 0.0)),
+            "start": float(s.get("start", 0.0)) + time_offset_s,
+            "end": float(s.get("end", 0.0)) + time_offset_s,
             "text": text,
             "speaker": label,
         })
     return out
+
+
+def _groq_translate(wav_path: Path, label: str) -> list[dict]:
+    """POST a WAV to Groq's translations endpoint, return segments.
+
+    Files over the Groq per-call 25 MB cap are split into ≤24 MB
+    chunks, sent one-at-a-time, and re-stitched on the receiving side
+    with adjusted timestamps. A 60-minute mic.wav (~115 MB at 16 kHz
+    mono 16-bit) becomes ~5 sequential uploads.
+
+    Each segment: {start: float, end: float, text: str, speaker: label}.
+    Raises on any non-200 response so the caller can fall back to
+    faster-whisper for the whole session.
+    """
+    size = wav_path.stat().st_size
+    if size <= GROQ_MAX_BYTES - GROQ_CHUNK_HEADROOM_BYTES:
+        return _groq_translate_one(wav_path, label, time_offset_s=0.0)
+
+    import shutil
+    import tempfile
+    tmp = Path(tempfile.mkdtemp(prefix="nucleus_groq_chunks_"))
+    try:
+        chunks = _split_wav_by_size(wav_path, GROQ_MAX_BYTES, tmp)
+        print(f"  [groq-chunk] {wav_path.name} {size / 1e6:.1f} MB "
+              f"-> {len(chunks)} chunk(s)")
+        all_segs: list[dict] = []
+        for chunk_path, offset in chunks:
+            all_segs.extend(_groq_translate_one(
+                chunk_path, label, time_offset_s=offset))
+        return all_segs
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
 
 
 def _transcribe_session_via_groq(session: str, calls_dir: Path,
