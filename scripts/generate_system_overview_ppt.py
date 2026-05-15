@@ -208,9 +208,9 @@ def slide_title(prs):
         "of a day and -- with one human review step -- produces a single "
         "verification email back to the client confirming what we heard. "
         "It runs hands-off; developers do not change their workflow. "
-        "The central host moved from the Windows MVPACCESS box to a "
-        "Linux docker stack on .123 on 2026-05-14. The deck explains "
-        "the whole pipeline end-to-end."
+        "The central host moved from a Windows box to a Linux docker "
+        "stack on 2026-05-14. The deck explains the whole pipeline "
+        "end-to-end."
     ))
 
 
@@ -480,7 +480,7 @@ def slide_central_server(prs):
              size=14, color=MUTED, align=PP_ALIGN.CENTER)
 
     set_speaker_notes(s, (
-        "The central server is the Ubuntu 24.04 box at 172.16.205.123. "
+        "The central server is the Ubuntu 24.04 box on the AEL network. "
         "Implementation detail: it's a single docker-compose stack of "
         "six containers -- nucleus-samba (serves the shared folder over "
         "SMB on port 445), nucleus-transcribe (the call-to-text loop), "
@@ -715,13 +715,13 @@ def slide_what_it_costs(prs):
         "token, so the daily verify_session pass doesn't show up as a "
         "per-run charge. Audio transcription goes through Groq's free "
         "tier -- 8 hours of audio per day, which is well above our "
-        "actual call volume. The central server is 172.16.205.123, the "
-        "Linux box that already hosts our OpenProject instance; Nucleus "
-        "runs as a docker-compose stack alongside it on the same host, "
-        "so there is no new VM, no new cloud subscription, no new "
+        "actual call volume. The central server is the same Linux box "
+        "that already hosts our OpenProject instance; Nucleus runs as "
+        "a docker-compose stack alongside it on the same host, so "
+        "there is no new VM, no new cloud subscription, no new "
         "hardware. The GitHub Actions runner that builds and deploys "
-        "the stack is self-hosted on the same .123 box, so we don't "
-        "pay GitHub for runner minutes or artifact storage. Heads up "
+        "the stack is self-hosted on that same box, so we don't pay "
+        "GitHub for runner minutes or artifact storage. Heads up "
         "on an older number that may surface: a prior version of this "
         "deck quoted '~6 cents per run' as the Claude cost. That "
         "figure came from a snapshot where Nucleus was billed against "
