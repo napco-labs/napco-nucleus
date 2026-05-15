@@ -208,9 +208,9 @@ def slide_title(prs):
         "of a day and -- with one human review step -- produces a single "
         "verification email back to the client confirming what we heard. "
         "It runs hands-off; developers do not change their workflow. "
-        "Today is 2026-05-14, the day the central host moved from the "
-        "Windows MVPACCESS box to a Linux docker stack on .123. The deck "
-        "explains the whole pipeline end-to-end."
+        "The central host moved from the Windows MVPACCESS box to a "
+        "Linux docker stack on .123 on 2026-05-14. The deck explains "
+        "the whole pipeline end-to-end."
     ))
 
 
@@ -492,8 +492,8 @@ def slide_central_server(prs):
         "reloads every worker without an image rebuild. State that "
         "must survive `compose down` lives in a named docker volume "
         "(the sqlite memory database) and on the host filesystem (the "
-        "shared central tree). Today (2026-05-14) is the day this box "
-        "took over from the old Windows MVPACCESS agent host."
+        "shared central tree). This box took over from the old Windows "
+        "MVPACCESS agent host on 2026-05-14."
     ))
 
 
@@ -547,8 +547,9 @@ def slide_what_ai_does(prs):
         "Verification .docx with one entry per requirement (each with "
         "a source pointer back to the call timestamp / chat / email) "
         "and a .eml draft in Gmail Drafts ready for human review. "
-        "Cost target is around 6 cents per run thanks to tight scoping "
-        "and prompt caching."
+        "Marginal cost per run is $0 -- the Claude pass runs on the "
+        "team's existing Max-tier subscription rather than per-token "
+        "API billing."
     ))
 
 
@@ -733,7 +734,7 @@ def slide_what_it_costs(prs):
 
 def slide_where_we_are(prs):
     s = base_slide(prs, "Where we are today",
-                   "Live as of 2026-05-14.")
+                   "Live since 2026-05-14.")
 
     # Top status row
     statuses = [
@@ -771,8 +772,8 @@ def slide_where_we_are(prs):
             ], accent=GREEN, title_size=18, body_size=14)
 
     set_speaker_notes(s, (
-        "Status snapshot for today, 2026-05-14. Everything that was "
-        "supposed to be running on the Linux central host today IS "
+        "Status snapshot as of 2026-05-14, the cutover day. Everything "
+        "that was supposed to be running on the Linux central host IS "
         "running. The six containers are nucleus-samba, "
         "nucleus-transcribe, nucleus-stage-email, nucleus-stage-drive, "
         "nucleus-daily-draft, and nucleus-gha-runner. The four "
@@ -834,6 +835,35 @@ def slide_whats_next(prs):
     ))
 
 
+def slide_questions(prs):
+    s = prs.slide_layouts[6]
+    s = prs.slides.add_slide(s)
+    add_rect(s, Inches(0), Inches(0), SLIDE_W, SLIDE_H, fill_color=NAVY)
+
+    tf = add_textbox(s, Inches(0.9), Inches(2.6), Inches(11.5), Inches(2.0),
+                     anchor=MSO_ANCHOR.MIDDLE)
+    set_text(tf, "Questions?", size=88, bold=True, color=WHITE,
+             align=PP_ALIGN.CENTER)
+
+    tf2 = add_textbox(s, Inches(0.9), Inches(4.6), Inches(11.5), Inches(0.8),
+                      anchor=MSO_ANCHOR.MIDDLE)
+    set_text(tf2, "Thank you.",
+             size=24, color=RGBColor(0xC8, 0xD2, 0xE0),
+             align=PP_ALIGN.CENTER)
+
+    tf3 = add_textbox(s, Inches(0.9), Inches(6.7), Inches(11.5), Inches(0.5))
+    set_text(tf3, "Adaptive Enterprise / NAPCO labs",
+             size=12, color=RGBColor(0x9C, 0xAB, 0xBE),
+             align=PP_ALIGN.CENTER)
+
+    set_speaker_notes(s, (
+        "Open the floor. If there's time, offer a live walkthrough -- "
+        "show the verification email sitting in Gmail Drafts, or run "
+        "`python -m tools.healthcheck` on the central host to display "
+        "the live status of all six containers."
+    ))
+
+
 # -- build ----------------------------------------------------------
 
 def build():
@@ -853,6 +883,7 @@ def build():
     slide_what_it_costs(prs)
     slide_where_we_are(prs)
     slide_whats_next(prs)
+    slide_questions(prs)
 
     OUT.parent.mkdir(parents=True, exist_ok=True)
     prs.save(str(OUT))
