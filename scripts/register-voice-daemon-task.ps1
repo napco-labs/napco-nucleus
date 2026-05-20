@@ -102,7 +102,13 @@ $action = New-ScheduledTaskAction `
     -Argument ('"{0}"' -f $vbsPath) `
     -WorkingDirectory $repoRoot
 
-$trigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
+# Use domain-qualified name if on a domain, plain username otherwise
+$domainUser = if ($env:USERDOMAIN -and $env:USERDOMAIN -ne $env:COMPUTERNAME) {
+    "$env:USERDOMAIN\$env:USERNAME"
+} else {
+    $env:USERNAME
+}
+$trigger = New-ScheduledTaskTrigger -AtLogOn -User $domainUser
 
 # Long-running listener: no execution time limit, restart on crash,
 # never two instances at once, run even on battery.
@@ -131,7 +137,7 @@ try {
 }
 
 Write-Host "Registered: $taskName"
-Write-Host "  Trigger:  At logon of $env:USERNAME"
+Write-Host "  Trigger:  At logon of $domainUser"
 Write-Host "  Action:   wscript.exe `"$vbsPath`""
 Write-Host "             -> hidden cmd -> $batPath"
 Write-Host "             -> python -u -m teams.voice_daemon"

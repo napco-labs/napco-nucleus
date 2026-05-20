@@ -91,6 +91,7 @@ Register-ScheduledTask `
     -Settings $settings `
     -Description "Auto-transcribe new calls landing on NUCLEUS_CENTRAL_PATH. Runs every $IntervalMinutes min, 24x7. Skips this tick if another instance is already running." `
     -RunLevel Limited `
+    -ErrorAction Stop `
     | Out-Null
 
 Write-Host "Registered: $taskName  every $IntervalMinutes min  first run $start"

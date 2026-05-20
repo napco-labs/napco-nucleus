@@ -1,91 +1,63 @@
 # NAPCO Nucleus — Developer Setup
 
-Run every command below in **PowerShell** on your Windows dev PC.
-Total time: ~25 min, mostly waiting for `pip install`.
-
-## Three things Titu DMs you first
-
-Never share these on group chat — they contain secrets.
-
-1. **`.env`** — save inside your repo folder (`$NN\.env`) after Step 1.
-2. **`google-credentials.json`** — save inside your repo folder (`$NN\google-credentials.json`).
-3. **This PDF.**
-
-The Samba password is inline in Step 5.
+Total time: ~15 min. Titu will DM you `.env` and `google-credentials.json` — never share these on group chat.
 
 ---
 
-## Step 1 — Clone the repo
-
-Pick install location. Set `$NN` to that path — every later step uses it.
+## Step 1 — Install Git
 
 ```powershell
-$NN = "E:\Projects\NAPCO-Nucleus"     # change if you want it elsewhere
+winget install --id Git.Git -e --source winget
+```
+
+---
+
+## Step 2 — Install Python 3.12
+
+```powershell
+winget install --id Python.Python.3.12 -e --source winget
+```
+
+---
+
+## Step 3 — Clone the repo
+
+```powershell
+$NN = "E:\Projects\NAPCO-Nucleus"
+[Environment]::SetEnvironmentVariable("NN", $NN, "User")
 mkdir (Split-Path $NN -Parent) -Force | Out-Null
 git clone https://github.com/napco-labs/napco-nucleus.git $NN
 Set-Location $NN
 ```
 
-> `$NN` lives only in this PowerShell session. If you open a new shell later, set it again at the top. To persist across sessions: `[Environment]::SetEnvironmentVariable("NN", $NN, "User")` — then use `$env:NN` from any future shell.
-
----
-
-## Step 2 — Install Python packages
-
-```powershell
-Set-Location $NN
-python -m pip install -r requirements.txt
-```
-
----
-
-## Step 3 — Install Tesseract OCR
-
-```powershell
-winget install UB-Mannheim.TesseractOCR
-```
-
-Close and reopen PowerShell (re-set `$NN` after reopen).
-
 ---
 
 ## Step 4 — Place files + set your dev name
 
-Save the two files Titu sent you into your repo folder:
-- `$NN\.env`
-- `$NN\google-credentials.json`
+Copy `.env` and `google-credentials.json` (from Titu) into `$NN`.
 
-Open `.env` in Notepad. Find this line:
+Open `$NN\.env` in Notepad. Change this line to your name:
 ```
 NUCLEUS_DEV_NAME=Titu
 ```
-Replace `Titu` with **your** name. Use one exactly:
-```
-Assad   Rocky   Ferdows   Titu   Atik   Isruk   Amin
-```
-Save. Close.
+Valid names: `Assad   Rocky   Ferdows   Titu   Atik   Isruk   Amin`
 
 ---
 
-## Step 5 — Cache Samba password (**critical**)
-
-**Use REGULAR PowerShell, NOT admin.** The credential is stored per-user and must be in your normal session.
+## Step 5 — Install Python packages
 
 ```powershell
-cmdkey /add:172.16.205.123 /user:nucleus /pass:E7CqJOd1oHox7HTjxNp_osD_fSyUe59I
-Test-Path \\172.16.205.123\nucleus-central
+Set-Location $env:NN
+python -m pip install -r requirements.txt
 ```
-
-`Test-Path` **must print `True`**. If it prints `False`, your calls won't upload to central — stop and ping Titu.
 
 ---
 
 ## Step 6 — Install voice daemon
 
 ```powershell
-Set-Location $NN
-.\scripts\register-voice-daemon-task.ps1
-Start-ScheduledTask -TaskName 'NAPCO Nucleus - Voice Daemon'
+Set-Location $env:NN
+.\scripts\install-voice-daemon.bat
 ```
 
 ---
@@ -93,32 +65,13 @@ Start-ScheduledTask -TaskName 'NAPCO Nucleus - Voice Daemon'
 ## Step 7 — Install chat-push tasks
 
 ```powershell
-Set-Location $NN
+Set-Location $env:NN
 .\scripts\register-chat-push-task.ps1
 ```
 
 ---
 
-## Step 8 — Enable remote ops (admin one-time)
-
-So Titu can manage your PC from his desk without you needing to be at the keyboard. Open **admin PowerShell** (right-click PowerShell → Run as administrator):
-
-```powershell
-Enable-PSRemoting -Force
-Add-LocalGroupMember -Group "Remote Management Users" -Member "AEL\khasan"
-```
-
-If `Enable-PSRemoting` errors about network profile being "Public", use this instead:
-```powershell
-Enable-PSRemoting -Force -SkipNetworkProfileCheck
-Add-LocalGroupMember -Group "Remote Management Users" -Member "AEL\khasan"
-```
-
-If `Add-LocalGroupMember` says "User already member", that's fine — already granted.
-
----
-
-## Step 9 — Test
+## Step 8 — Test
 
 Make any Teams call (at least 20 seconds). Wait 2 minutes. Then:
 
@@ -128,7 +81,7 @@ $today = Get-Date -Format "yyyy-MM-dd"
 Get-ChildItem "\\172.16.205.123\nucleus-central\$you\$today\calls\"
 ```
 
-You should see `*_mic.wav`, `*_speaker.wav`, `*.json`, `*_transcript.md`.
+You should see `*_mic.wav`, `*_speaker.wav`, `*.json`.
 
 **Setup complete.** Tell Titu you're done.
 
@@ -141,17 +94,16 @@ You should see `*_mic.wav`, `*_speaker.wav`, `*.json`, `*_transcript.md`.
 Get-Content "$NN\logs\voice_daemon.log" -Tail 50
 ```
 
-**`scripts disabled on this system` in Step 6 or 7:**
+**`scripts disabled on this system` error:**
 ```powershell
-powershell.exe -ExecutionPolicy Bypass -File "$NN\scripts\register-voice-daemon-task.ps1"
+powershell.exe -ExecutionPolicy Bypass -File "$NN\scripts\install-voice-daemon.bat"
 ```
 
-**`Test-Path` returned `False` in Step 5:**
+**Calls not appearing on central:**
 ```powershell
 ping 172.16.205.123
-cmdkey /list:172.16.205.123
 ```
-If cmdkey doesn't show a `nucleus` user, re-run Step 5 in a **non-admin** PowerShell.
+If the ping fails, you're not on the office network. Connect to VPN or come to the office.
 
 **Mic missing from recordings:**
 Teams → Settings → Devices → set Microphone to your Windows default input.
@@ -168,8 +120,6 @@ Stop-ScheduledTask -TaskName 'NAPCO Nucleus - Voice Daemon'
 Start-ScheduledTask -TaskName 'NAPCO Nucleus - Voice Daemon'
 ```
 
-(Or just ask Titu to push the update remotely.)
-
 ---
 
 ## Uninstall
@@ -178,7 +128,6 @@ Start-ScheduledTask -TaskName 'NAPCO Nucleus - Voice Daemon'
 Set-Location $NN
 .\scripts\register-voice-daemon-task.ps1 -Unregister
 .\scripts\register-chat-push-task.ps1 -Unregister
-cmdkey /delete:172.16.205.123
 ```
 
 ---
@@ -192,11 +141,26 @@ Titu — `khasan@ael-bd.com`
 
 # APPENDIX — Titu's remote-ops cheat sheet
 
-> _**Not for the dev to run.** This is Titu's reference for managing dev PCs remotely once they've completed Step 8._
+> _**Not for the dev to run.** This is Titu's reference for managing dev PCs remotely once Step 8 (WinRM) is done._
+
+## One-time WinRM setup on each dev PC (admin, done by Titu)
+
+Open **admin PowerShell** on the dev's PC (right-click → Run as administrator):
+
+```powershell
+Enable-PSRemoting -Force
+Add-LocalGroupMember -Group "Remote Management Users" -Member "AEL\khasan"
+```
+
+If `Enable-PSRemoting` errors about "Public" network:
+```powershell
+Enable-PSRemoting -Force -SkipNetworkProfileCheck
+Add-LocalGroupMember -Group "Remote Management Users" -Member "AEL\khasan"
+```
 
 ## One-time setup on Titu's PC
 
-Already done on `.71`. For reference if Titu ever reinstalls: **admin PowerShell**:
+Already done on `.71`. For reference if ever reinstalled — **admin PowerShell**:
 ```powershell
 Start-Service WinRM
 Set-Service WinRM -StartupType Automatic
@@ -211,13 +175,13 @@ $pwd_at = ConvertTo-SecureString '606549' -AsPlainText -Force
 $cred_at = New-Object PSCredential('AEL\khasan', $pwd_at)
 ```
 
-## Dev PC IP registry (fill in as you onboard)
+## Dev PC IP registry
 
 | Dev | IP | NUCLEUS_DEV_NAME | Repo path |
 |---|---|---|---|
 | Titu (yours) | `172.16.205.71` | `Titu` | `E:\Projects\NAPCO-Nucleus` |
 | Atik | `172.16.205.108` | `Atik` | `F:\Titu vai\napco-nucleus` |
-| Rocky | ? | `Rocky` | ? |
+| Rocky | `172.16.205.195` | `Rocky` | `D:\POC Projects\napco-nucleus` |
 | Ferdows | ? | `Ferdows` | ? |
 | Amin | ? | `Amin` | ? |
 | Isruk | ? | `Isruk` | ? |
@@ -225,12 +189,12 @@ $cred_at = New-Object PSCredential('AEL\khasan', $pwd_at)
 
 ## Remote operations
 
-Replace `<IP>` with the target PC's IP from the table above. Replace `<repo>` with the dev's repo path.
+Replace `<IP>` with the target PC's IP. Replace `<repo>` with the dev's repo path.
 
-**Probe a dev PC (sanity check):**
+**Probe a dev PC:**
 ```powershell
 Invoke-Command -ComputerName <IP> -Credential $cred_at -ScriptBlock {
-    hostname; whoami; "OS: $((Get-CimInstance Win32_OperatingSystem).Caption)"
+    hostname; whoami
 }
 ```
 
@@ -241,7 +205,7 @@ Invoke-Command -ComputerName <IP> -Credential $cred_at -ScriptBlock {
 }
 ```
 
-**Check Scheduled Task state (`schtasks` — `Get-ScheduledTask` needs admin remotely):**
+**Check Scheduled Task state:**
 ```powershell
 Invoke-Command -ComputerName <IP> -Credential $cred_at -ScriptBlock {
     schtasks /query /tn "NAPCO Nucleus - Voice Daemon" /fo LIST
@@ -249,7 +213,7 @@ Invoke-Command -ComputerName <IP> -Credential $cred_at -ScriptBlock {
 }
 ```
 
-**Apply `git pull` + restart their daemon:**
+**Apply `git pull` + restart daemon:**
 ```powershell
 Invoke-Command -ComputerName <IP> -Credential $cred_at -ScriptBlock {
     Set-Location "<repo>"
@@ -259,14 +223,14 @@ Invoke-Command -ComputerName <IP> -Credential $cred_at -ScriptBlock {
 }
 ```
 
-**Recover stuck WAVs to central** (when the dev's `cmdkey` wasn't set up correctly — `cmdkey` can't be done via WinRM, but `New-PSDrive` with explicit cred works):
+**Recover stuck WAVs to central:**
 ```powershell
 Invoke-Command -ComputerName <IP> -Credential $cred_at -ScriptBlock {
     $smb_pwd = ConvertTo-SecureString 'E7CqJOd1oHox7HTjxNp_osD_fSyUe59I' -AsPlainText -Force
     $smb_cred = New-Object PSCredential('nucleus', $smb_pwd)
     New-PSDrive -Name NN -PSProvider FileSystem -Root '\\172.16.205.123\nucleus-central' -Credential $smb_cred | Out-Null
     $today = Get-Date -Format "yyyy-MM-dd"
-    $dest = "NN:\<DEV_NAME>\$today\calls"     # replace <DEV_NAME>
+    $dest = "NN:\<DEV_NAME>\$today\calls"
     New-Item -ItemType Directory -Force -Path $dest -ErrorAction SilentlyContinue | Out-Null
     Get-ChildItem '<repo>\data\teams\calls\*' -ErrorAction SilentlyContinue | Copy-Item -Destination $dest -Force
     Get-ChildItem $dest | Select-Object Name, Length
@@ -274,11 +238,10 @@ Invoke-Command -ComputerName <IP> -Credential $cred_at -ScriptBlock {
 }
 ```
 
-**Open an interactive remote shell** (good for debugging):
+**Open an interactive remote shell:**
 ```powershell
 Enter-PSSession -ComputerName <IP> -Credential $cred_at
-# prompt becomes [<IP>]: PS> — type commands; runs on their PC
-# 'exit' when done
+# prompt becomes [<IP>]: PS> — type 'exit' when done
 ```
 
 ## Central host (.123) operations
@@ -290,17 +253,17 @@ ssh ubuntu@172.16.205.123                    # password: ayusuf
 cd /home/ubuntu/napco-nucleus/deploy/linux-central
 ./status.sh
 
-# Trigger daily-draft on demand (instead of waiting for BD 23:45)
+# Trigger daily-draft on demand
 docker compose exec daily-draft python collect_central.py --client all --last-minutes 1440
 
-# Safe redeploy (after pushing a fix to main)
-./deploy.sh           # core stack only
-./deploy.sh --runner  # also recreates the GHA runner container
+# Safe redeploy after pushing a fix to main
+./deploy.sh
+./deploy.sh --runner   # also recreates the GHA runner container
 
-# Tail one worker
+# Tail a worker
 docker compose logs -f --tail 100 transcribe
 ```
 
 ## Daily-draft email destination
 
-Drafts land in **`khasan@ael-bd.com`** Gmail Drafts folder (configured via `VERIFICATION_TO` in `.env` on `.123`). Subject pattern: `Requirements Verification - YYYY-MM-DD`.
+Drafts land in **`khasan@ael-bd.com`** Gmail Drafts folder. Subject pattern: `Requirements Verification - YYYY-MM-DD`.

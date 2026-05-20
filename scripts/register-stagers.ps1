@@ -101,6 +101,7 @@ for ($i = 0; $i -lt $tasks.Count; $i++) {
         -Settings $settings `
         -Description "Stage $($t.Module) output to NUCLEUS_CENTRAL_PATH every $IntervalMinutes min." `
         -RunLevel Limited `
+        -ErrorAction Stop `
         | Out-Null
 
     Write-Host "Registered: $($t.Name)  every $IntervalMinutes min  first run $start"
