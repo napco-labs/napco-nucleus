@@ -293,6 +293,8 @@ def _write_metadata_and_upload(
     if central_dir is None:
         print("  central upload: skipped (NUCLEUS_CENTRAL_PATH not set)")
         return
+    from teams._central import ensure_smb_auth
+    ensure_smb_auth(os.environ.get("NUCLEUS_CENTRAL_PATH", ""))
     try:
         central_dir.mkdir(parents=True, exist_ok=True)
         for src in (mic_path, spk_path, meta_path):

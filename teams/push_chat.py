@@ -331,6 +331,8 @@ def main() -> int:
         print("[push_chat] central upload: skipped "
               "(NUCLEUS_CENTRAL_PATH not set)")
         return 0
+    from teams._central import ensure_smb_auth
+    ensure_smb_auth(os.environ.get("NUCLEUS_CENTRAL_PATH", ""))
     try:
         central_dir.mkdir(parents=True, exist_ok=True)
         dst = central_dir / name
