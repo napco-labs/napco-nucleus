@@ -155,6 +155,15 @@ function Register-ChatPush {
         -StartWhenAvailable `
         -ExecutionTimeLimit (New-TimeSpan -Minutes 10)
 
+    # Inline belt-and-suspenders cleanup right before Register. The
+    # outer top-of-script cleanup at line 105 should already have
+    # wiped this name, but we've seen sporadic cases (parens in task
+    # name + cmd /c quoting subtleties) where Evening specifically
+    # survived cleanup and Register-ScheduledTask hit "Cannot create
+    # a file when that file already exists". Use schtasks directly
+    # (not via cmd /c) so PowerShell handles the quoting cleanly.
+    & schtasks.exe /Delete /TN $Name /F 2>$null | Out-Null
+
     try {
         Register-ScheduledTask `
             -TaskName $Name `
@@ -166,7 +175,11 @@ function Register-ChatPush {
             -ErrorAction Stop `
             | Out-Null
     } catch {
-        Write-Error "FAILED to register '$Name': $($_.Exception.Message)"
+        # Write to host AND throw a non-terminating error so the
+        # script-level supervisor sees it but the loop continues to
+        # register the next task in the sequence (Day -> Evening ->
+        # Transition order; one failure shouldn't drop the others).
+        Write-Host ("FAILED to register {0}: {1}" -f $Name, $_.Exception.Message) -ForegroundColor Red
         return
     }
 
