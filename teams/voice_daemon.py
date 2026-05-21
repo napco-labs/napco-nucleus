@@ -133,11 +133,17 @@ TEAMS_PROC_NAMES = {"ms-teams.exe", "teams.exe", "msteams.exe"}
 def _teams_in_call() -> tuple[bool, str]:
     """Return (is_active, reason) using Windows Audio Session API.
 
-    Active includes the ringtone phase — Teams renders the incoming-call
-    ringtone through its own audio session, so a teammate saying the
-    start phrase while the call is still ringing will trigger the
-    recorder before the call is even answered (capturing the full
-    "Assalamualaikum" greeting).
+    Accepts BOTH state Active (1) AND state Inactive (0) for ms-teams.exe
+    audio sessions. Teams keeps its audio session open for the entire call
+    lifecycle (ring → setup → speaking → silence between speakers); the
+    state only goes to Expired (2) when the call truly ends. Restricting
+    to Active=1 used to miss the first ~14 minutes of client-initiated
+    calls where the dev sat in the meeting room before the client spoke
+    (Teams reported Inactive until audio actually flowed). We never want
+    a single word missed, so anything other than Expired counts.
+
+    Process scope stays locked to ms-teams.exe / teams.exe / msteams.exe
+    (see [[nn-recording-scope]] — do not widen without Titu's greenlight).
 
     Fail-closed: if we can't query audio sessions for any reason,
     return (False, error) so the gate stays on. Pass --allow-any-call
@@ -151,6 +157,11 @@ def _teams_in_call() -> tuple[bool, str]:
         sessions = AudioUtilities.GetAllSessions()
     except Exception as e:
         return (False, f"GetAllSessions failed: {e}")
+    # State 0 = Inactive (session open, no audio flowing yet — common
+    #            during ring / pre-speak / mid-call silence),
+    # State 1 = Active   (audio streaming both ways),
+    # State 2 = Expired  (call is genuinely over). We accept 0 and 1.
+    ACCEPTED_STATES = (0, 1)
     for s in sessions:
         if not s.Process:
             continue
@@ -158,9 +169,10 @@ def _teams_in_call() -> tuple[bool, str]:
             name = (s.Process.name() or "").lower()
         except Exception:
             continue
-        if name in TEAMS_PROC_NAMES and s.State == 1:
-            return (True, f"{name} state=Active")
-    return (False, "no Teams session in Active state")
+        if name in TEAMS_PROC_NAMES and s.State in ACCEPTED_STATES:
+            state_label = "Active" if s.State == 1 else "Inactive"
+            return (True, f"{name} state={state_label}")
+    return (False, "no Teams session in Active or Inactive state")
 
 
 def _normalize(s: str) -> str:
