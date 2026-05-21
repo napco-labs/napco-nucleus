@@ -7,7 +7,7 @@ at every user logon.
   Task name : "NAPCO Nucleus - Self-Heal at Logon"
   Trigger   : At logon (current user), 60s delay so the voice-daemon
               task fires first and the network is settled.
-  Action    : wscript scripts\fix-nucleus-hidden.vbs
+  Action    : wscript scripts\fix-nucleus-runner.vbs
               -> cmd /c scripts\fix-nucleus.bat --quiet
               -> logs\fix-nucleus.log
   RunLevel  : Limited (no admin needed -- runs in the user's own context)
@@ -46,7 +46,7 @@ if ($Unregister) {
 
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $repoRoot = Split-Path -Parent $scriptDir
-$vbsPath = Join-Path $scriptDir "fix-nucleus-hidden.vbs"
+$vbsPath = Join-Path $scriptDir "fix-nucleus-runner.vbs"
 
 if (-not (Test-Path $vbsPath)) {
     Write-Error "Cannot find $vbsPath. Aborting."

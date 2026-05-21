@@ -1,17 +1,17 @@
-' fix-nucleus-hidden.vbs
+' fix-nucleus-runner.vbs
 '
-' At-logon launcher for the Self-Heal scheduled task. Runs
-' scripts\fix-nucleus.bat --quiet with NO visible console so the dev
-' isn't interrupted at every login. All output lands in
-' logs\fix-nucleus.log -- tail it from the repo with:
+' Background launcher used by the "Self-Heal at Logon" Scheduled Task.
+' Runs scripts\fix-nucleus.bat --quiet so the dev isn't interrupted at
+' every login. All output lands in <repo>\logs\fix-nucleus.log -- tail
+' it from the repo with:
 '   Get-Content logs\fix-nucleus.log -Wait -Tail 50
 '
 ' Repo location resolution order:
-'   1. %NN% (set by fix-nucleus.bat on first run via setx)
-'   2. Parent of this script's folder (works if dev keeps the repo
-'      intact and the VBS is invoked from inside scripts\)
+'   1. %NN%  (set by fix-nucleus.bat on first run via setx)
+'   2. Parent of this script's folder (works as long as the VBS stays
+'      at <repo>\scripts\fix-nucleus-runner.vbs)
 '
-' WshShell.Run intWindowStyle:  0 = hidden  (what we want)
+' WshShell.Run intWindowStyle:  0 = no console window
 ' Final True = wait for cmd to exit so Task Scheduler tracks the run.
 
 Set fs = CreateObject("Scripting.FileSystemObject")
@@ -24,7 +24,7 @@ nn = sh.ExpandEnvironmentStrings("%NN%")
 On Error Goto 0
 If nn = "%NN%" Then nn = ""
 
-' Fallback: script lives at <repo>\scripts\fix-nucleus-hidden.vbs
+' Fallback: script lives at <repo>\scripts\fix-nucleus-runner.vbs
 If nn = "" Or Not fs.FolderExists(nn) Then
     nn = fs.GetParentFolderName(fs.GetParentFolderName(WScript.ScriptFullName))
 End If
