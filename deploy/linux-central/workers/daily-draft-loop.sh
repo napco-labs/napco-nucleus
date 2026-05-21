@@ -46,14 +46,24 @@ while true; do
     rc=$?
     echo "[daily-draft-loop] collect_central.py exited rc=$rc"
 
-    # Roll-up email — independent of collect_central's rc so a Claude
-    # auth blip or an empty-day still ships the session doc to the
-    # working group. Skip silently when NUCLEUS_ROLLUP_TO is unset
-    # (mail/daily_rollup.py returns 2 in that case, which we ignore).
+    # Roll-up email — only fire when collect_central succeeded, so a
+    # Claude auth lapse or pipeline crash doesn't ship a stale / empty
+    # email to the working group. The original design fired roll-up
+    # unconditionally; that meant a 401 from Claude (which left the
+    # Requirements Verification doc un-updated) still produced an email
+    # claiming it was today's report. After 2026-05-21 we require a
+    # clean pipeline rc before delivering.
+    #
+    # NUCLEUS_ROLLUP_TO unset is still a silent skip (no recipients
+    # configured for this deployment).
     if [ -n "${NUCLEUS_ROLLUP_TO:-}" ]; then
-        echo "[daily-draft-loop] firing roll-up email"
-        python -m mail.daily_rollup
-        echo "[daily-draft-loop] daily_rollup exited rc=$?"
+        if [ "$rc" -eq 0 ]; then
+            echo "[daily-draft-loop] firing roll-up email"
+            python -m mail.daily_rollup
+            echo "[daily-draft-loop] daily_rollup exited rc=$?"
+        else
+            echo "[daily-draft-loop] SKIPPING roll-up email -- collect_central.py rc=$rc (non-zero). Fix the upstream failure before relying on tonight's email."
+        fi
     fi
 
     # Sleep past the target by 60s so the next iteration's

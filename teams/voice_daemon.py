@@ -478,7 +478,20 @@ def main() -> int:
 
     try:
         while True:
-            data = stream.read(FRAME_SAMPLES, exception_on_overflow=False)
+            # Same OSError -9999 family of failures that killed the
+            # recorder on 2026-05-21 can hit here too (the wake-word
+            # listener owns its own input stream). Tolerate transient
+            # device hiccups by skipping the bad frame and continuing
+            # to listen, instead of letting the daemon die.
+            try:
+                data = stream.read(FRAME_SAMPLES, exception_on_overflow=False)
+            except OSError as e:
+                print(f"[voice] wake-word stream.read failed ({e!r}); "
+                      f"skipping frame and continuing.", file=sys.stderr)
+                # Brief back-off so a persistent device error doesn't
+                # tight-loop and spam the log.
+                time.sleep(0.5)
+                continue
             samples = np.frombuffer(data, dtype=np.int16)
             rms = float(np.sqrt(np.mean(samples.astype(np.float32) ** 2)))
 

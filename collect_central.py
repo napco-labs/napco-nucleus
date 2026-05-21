@@ -648,22 +648,34 @@ def main() -> int:
     # once here regardless of --client.
     if args.pull_email:
         print(f"\n=== EMAIL — last {args.last_minutes} min ===")
-        rc = subprocess.call(
-            [sys.executable, "-m", "mail.pull_email",
-             "--last-minutes", str(args.last_minutes)],
-            cwd=str(_HERE),
-        )
+        try:
+            rc = subprocess.call(
+                [sys.executable, "-m", "mail.pull_email",
+                 "--last-minutes", str(args.last_minutes)],
+                cwd=str(_HERE),
+                timeout=600,
+            )
+        except subprocess.TimeoutExpired:
+            print("  ! email pull exceeded 600s — abandoning, continuing",
+                  file=sys.stderr)
+            rc = 124
         if rc != 0:
             print(f"  ! email pull exit code {rc} — continuing",
                   file=sys.stderr)
 
     if args.pull_drive:
         print(f"\n=== GOOGLE DRIVE — last {args.last_minutes} min ===")
-        rc = subprocess.call(
-            [sys.executable, "-m", "drive.pull_drive",
-             "--last-minutes", str(args.last_minutes)],
-            cwd=str(_HERE),
-        )
+        try:
+            rc = subprocess.call(
+                [sys.executable, "-m", "drive.pull_drive",
+                 "--last-minutes", str(args.last_minutes)],
+                cwd=str(_HERE),
+                timeout=600,
+            )
+        except subprocess.TimeoutExpired:
+            print("  ! drive pull exceeded 600s — abandoning, continuing",
+                  file=sys.stderr)
+            rc = 124
         if rc != 0:
             print(f"  ! drive pull exit code {rc} — continuing",
                   file=sys.stderr)
@@ -762,11 +774,28 @@ def main() -> int:
         return 2
 
     print("\n=== running verify_session (identify + draft) ===")
-    rc = subprocess.call(
-        [sys.executable, "agent.py", "--task", "verify_session"],
-        cwd=str(_HERE),
-    )
+    try:
+        rc = subprocess.call(
+            [sys.executable, "agent.py", "--task", "verify_session"],
+            cwd=str(_HERE),
+            # 30 min cap on the Claude pass. A healthy run is 1-3 min;
+            # a network hang or model stall must not pin the daily
+            # cron forever (we got bitten by exactly this when the
+            # Max OAuth token expired and the SDK retried for hours).
+            timeout=1800,
+        )
+    except subprocess.TimeoutExpired:
+        print("\nverify_session exceeded 30 min wall clock — aborting.",
+              file=sys.stderr)
+        return 124
     print(f"\nverify_session exit code: {rc}")
+    # Propagate Claude failures (auth, network, model error). Previously
+    # we returned rc unconditionally, but agent.py:236 returns 0 even on
+    # API 401 -- the failure was invisible to the supervising loop until
+    # 2026-05-21 morning, when we saw a week of empty Gmail Drafts.
+    # Until that exit-code bug in agent.py is fixed too, we still trust
+    # rc here; the daily-draft loop's new "skip rollup on non-zero rc"
+    # guard catches the empty-output case from the other side.
     return rc
 
 
