@@ -133,85 +133,49 @@ TEAMS_PROC_NAMES = {"ms-teams.exe", "teams.exe", "msteams.exe"}
 
 
 def _teams_in_call() -> tuple[bool, str]:
-    """Return (is_running, reason) using Windows process-presence as the
-    primary trigger, with audio-session state as supplemental info.
+    """Return (is_active, reason) using Windows Audio Session API.
 
-    Why process-presence instead of audio-session state:
-        Client-initiated calls were losing the first ~14 minutes because
-        Teams does not always open an audio session immediately when the
-        dev joins a meeting room. The dev sits there, no audio session
-        exists yet, so the old audio-session-only gate stayed shut. By
-        the time the client speaks and Teams opens its session, the
-        opening minutes are already gone.
+    The trigger fires when Teams has an audio session in state Inactive (0)
+    OR Active (1). That covers the full call lifecycle: ringing (Teams opens
+    the session to play the ringtone), dialing out, in-call, mid-call silence
+    between speakers. State Expired (2) and "no Teams session at all" are
+    treated as NOT in a call — chat-only Teams use does not create an audio
+    session, so the gate stays shut and we don't record idle Teams.
 
-        Process-presence is the most reliable signal that a call *could
-        be happening* — Teams keeps the same process alive across call
-        lifecycle (ring -> setup -> speaking -> silence -> end). We
-        accept the tradeoff that Teams running for non-call reasons
-        (chat, status idle) also triggers recording; those WAVs are
-        mostly silent and cheap to transcribe.
+    Restricting to state Active=1 (the old behavior) used to miss the first
+    14+ minutes of client-initiated calls where the dev sat with the meeting
+    room open but no audio flowed yet (state Inactive). Now we accept that.
 
     Process scope stays locked to ms-teams.exe / teams.exe / msteams.exe
     (see [[nn-recording-scope]] — do not widen without Titu's greenlight).
 
-    Fail-closed: if we can't query processes for any reason, return
+    Fail-closed: if we can't query audio sessions for any reason, return
     (False, error) so the gate stays on. Pass --allow-any-call to bypass.
-    """
-    # Cheap: one tasklist call lists all processes; we string-search.
-    try:
-        result = subprocess.run(
-            ["tasklist", "/NH", "/FO", "CSV"],
-            capture_output=True,
-            text=True,
-            timeout=5,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-        )
-    except Exception as e:
-        return (False, f"tasklist failed: {e}")
-    if result.returncode != 0:
-        return (False, f"tasklist rc={result.returncode}: {result.stderr[:120]}")
-    haystack = result.stdout.lower()
-    running_proc: str | None = None
-    for proc in TEAMS_PROC_NAMES:
-        # tasklist CSV rows start with quoted process name, so the lookup
-        # is robust to other processes that happen to contain "teams" in
-        # their command line.
-        if f'"{proc}"' in haystack:
-            running_proc = proc
-            break
-    if not running_proc:
-        return (False, "no Teams process running")
-    # Best-effort audio-session state for the diagnostic reason. Doesn't
-    # gate the decision — we already know Teams is running.
-    audio_state = _teams_audio_session_state(running_proc)
-    if audio_state is not None:
-        return (True, f"{running_proc} running (audio session: {audio_state})")
-    return (True, f"{running_proc} running")
-
-
-def _teams_audio_session_state(proc_name: str) -> str | None:
-    """Diagnostic helper — returns 'Active'/'Inactive'/'Expired'/None for the
-    most relevant Teams audio session, or None if no session / pycaw fails.
-
-    Used only in log messages so we can still see (from the log) whether
-    the Teams audio session was in Active vs Inactive when recording started.
     """
     try:
         from pycaw.pycaw import AudioUtilities  # lazy
+    except Exception as e:
+        return (False, f"pycaw import failed: {e}")
+    try:
         sessions = AudioUtilities.GetAllSessions()
-    except Exception:
-        return None
+    except Exception as e:
+        return (False, f"GetAllSessions failed: {e}")
+    # State 0 = Inactive (session open, no audio flowing yet — common during
+    #            ring, dialing, mid-call silence between speakers),
+    # State 1 = Active   (audio streaming),
+    # State 2 = Expired  (session is dormant / call genuinely over). Reject 2.
+    ACCEPTED_STATES = (0, 1)
     state_labels = {0: "Inactive", 1: "Active", 2: "Expired"}
     for s in sessions:
+        if not s.Process:
+            continue
         try:
-            if not s.Process:
-                continue
             name = (s.Process.name() or "").lower()
         except Exception:
             continue
-        if name == proc_name:
-            return state_labels.get(int(s.State), f"unknown({s.State})")
-    return None
+        if name in TEAMS_PROC_NAMES and s.State in ACCEPTED_STATES:
+            return (True, f"{name} state={state_labels[s.State]}")
+    return (False, "no Teams audio session (Active or Inactive)")
 
 
 def _normalize(s: str) -> str:
