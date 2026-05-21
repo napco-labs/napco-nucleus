@@ -28,9 +28,11 @@ Teams-only gate
     if any recording is in progress, the stop phrase always halts it.
     Pass --allow-any-call to disable the gate (phrase mode only).
 
-Hard cap (--max-call-seconds, default 3600)
+Hard cap (--max-call-seconds, default 7200)
     Any single recording is auto-stopped after this many seconds even
     if the call continues. Guards against a stuck audio-session state.
+    Default raised from 60min -> 2h on 2026-05-21 so 90-min discoveries
+    don't get truncated.
 
 Phrase list lives in `data/teams/voice_phrases.json`. Edit that file
 to add or remove phrases — no code change needed. Default ships with
@@ -131,48 +133,85 @@ TEAMS_PROC_NAMES = {"ms-teams.exe", "teams.exe", "msteams.exe"}
 
 
 def _teams_in_call() -> tuple[bool, str]:
-    """Return (is_active, reason) using Windows Audio Session API.
+    """Return (is_running, reason) using Windows process-presence as the
+    primary trigger, with audio-session state as supplemental info.
 
-    Accepts BOTH state Active (1) AND state Inactive (0) for ms-teams.exe
-    audio sessions. Teams keeps its audio session open for the entire call
-    lifecycle (ring → setup → speaking → silence between speakers); the
-    state only goes to Expired (2) when the call truly ends. Restricting
-    to Active=1 used to miss the first ~14 minutes of client-initiated
-    calls where the dev sat in the meeting room before the client spoke
-    (Teams reported Inactive until audio actually flowed). We never want
-    a single word missed, so anything other than Expired counts.
+    Why process-presence instead of audio-session state:
+        Client-initiated calls were losing the first ~14 minutes because
+        Teams does not always open an audio session immediately when the
+        dev joins a meeting room. The dev sits there, no audio session
+        exists yet, so the old audio-session-only gate stayed shut. By
+        the time the client speaks and Teams opens its session, the
+        opening minutes are already gone.
+
+        Process-presence is the most reliable signal that a call *could
+        be happening* — Teams keeps the same process alive across call
+        lifecycle (ring -> setup -> speaking -> silence -> end). We
+        accept the tradeoff that Teams running for non-call reasons
+        (chat, status idle) also triggers recording; those WAVs are
+        mostly silent and cheap to transcribe.
 
     Process scope stays locked to ms-teams.exe / teams.exe / msteams.exe
     (see [[nn-recording-scope]] — do not widen without Titu's greenlight).
 
-    Fail-closed: if we can't query audio sessions for any reason,
-    return (False, error) so the gate stays on. Pass --allow-any-call
-    to bypass.
+    Fail-closed: if we can't query processes for any reason, return
+    (False, error) so the gate stays on. Pass --allow-any-call to bypass.
+    """
+    # Cheap: one tasklist call lists all processes; we string-search.
+    try:
+        result = subprocess.run(
+            ["tasklist", "/NH", "/FO", "CSV"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+    except Exception as e:
+        return (False, f"tasklist failed: {e}")
+    if result.returncode != 0:
+        return (False, f"tasklist rc={result.returncode}: {result.stderr[:120]}")
+    haystack = result.stdout.lower()
+    running_proc: str | None = None
+    for proc in TEAMS_PROC_NAMES:
+        # tasklist CSV rows start with quoted process name, so the lookup
+        # is robust to other processes that happen to contain "teams" in
+        # their command line.
+        if f'"{proc}"' in haystack:
+            running_proc = proc
+            break
+    if not running_proc:
+        return (False, "no Teams process running")
+    # Best-effort audio-session state for the diagnostic reason. Doesn't
+    # gate the decision — we already know Teams is running.
+    audio_state = _teams_audio_session_state(running_proc)
+    if audio_state is not None:
+        return (True, f"{running_proc} running (audio session: {audio_state})")
+    return (True, f"{running_proc} running")
+
+
+def _teams_audio_session_state(proc_name: str) -> str | None:
+    """Diagnostic helper — returns 'Active'/'Inactive'/'Expired'/None for the
+    most relevant Teams audio session, or None if no session / pycaw fails.
+
+    Used only in log messages so we can still see (from the log) whether
+    the Teams audio session was in Active vs Inactive when recording started.
     """
     try:
         from pycaw.pycaw import AudioUtilities  # lazy
-    except Exception as e:
-        return (False, f"pycaw import failed: {e}")
-    try:
         sessions = AudioUtilities.GetAllSessions()
-    except Exception as e:
-        return (False, f"GetAllSessions failed: {e}")
-    # State 0 = Inactive (session open, no audio flowing yet — common
-    #            during ring / pre-speak / mid-call silence),
-    # State 1 = Active   (audio streaming both ways),
-    # State 2 = Expired  (call is genuinely over). We accept 0 and 1.
-    ACCEPTED_STATES = (0, 1)
+    except Exception:
+        return None
+    state_labels = {0: "Inactive", 1: "Active", 2: "Expired"}
     for s in sessions:
-        if not s.Process:
-            continue
         try:
+            if not s.Process:
+                continue
             name = (s.Process.name() or "").lower()
         except Exception:
             continue
-        if name in TEAMS_PROC_NAMES and s.State in ACCEPTED_STATES:
-            state_label = "Active" if s.State == 1 else "Inactive"
-            return (True, f"{name} state={state_label}")
-    return (False, "no Teams session in Active or Inactive state")
+        if name == proc_name:
+            return state_labels.get(int(s.State), f"unknown({s.State})")
+    return None
 
 
 def _normalize(s: str) -> str:
@@ -301,7 +340,7 @@ def _stop_recording(state: dict, reason: str = "") -> None:
 def _audio_session_watcher(state: dict, stop_evt: threading.Event,
                            poll_interval_s: float = 2.0,
                            stop_debounce: int = 2,
-                           max_call_seconds: int = 3600) -> None:
+                           max_call_seconds: int = 7200) -> None:
     """Background thread: drive start/stop purely from Teams audio-session state.
 
     Rising edge (off->on)  : start recording immediately (capture from t=0).
@@ -429,9 +468,9 @@ def main() -> int:
     )
     ap.add_argument(
         "--max-call-seconds", type=int,
-        default=int(os.environ.get("NUCLEUS_MAX_CALL_SECONDS", "3600")),
-        help="Hard cap per recording (auto mode). Default 3600s (1h). "
-             "Env: NUCLEUS_MAX_CALL_SECONDS.",
+        default=int(os.environ.get("NUCLEUS_MAX_CALL_SECONDS", "7200")),
+        help="Hard cap per recording (auto mode). Default 7200s (2h) — long "
+             "client discoveries don't get truncated. Env: NUCLEUS_MAX_CALL_SECONDS.",
     )
     args = ap.parse_args()
 
