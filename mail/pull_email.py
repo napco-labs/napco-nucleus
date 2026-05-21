@@ -295,10 +295,17 @@ def main() -> int:
     # with --ignore-roster for one-off pulls.
     skipped_offlist = 0
     if not args.ignore_roster:
+        # Exclude the mailbox owner from the roster — otherwise every
+        # incoming email trivially passes (the recipient themself is in
+        # To/Cc). This is what was letting Firebase / Miro / BrowserStack
+        # notifications through to the session doc.
+        self_addr = (os.environ.get("REQ_IMAP_USER") or "").strip().lower()
+        exclude_self = {self_addr} if self_addr else set()
         kept: list[dict] = []
         for e in emails:
             msg = e.get("_msg")
-            if msg is not None and not email_passes_roster_filter(msg):
+            if msg is not None and not email_passes_roster_filter(
+                    msg, exclude=exclude_self):
                 skipped_offlist += 1
                 continue
             kept.append(e)

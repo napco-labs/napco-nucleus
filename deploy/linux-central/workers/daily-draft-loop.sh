@@ -46,6 +46,16 @@ while true; do
     rc=$?
     echo "[daily-draft-loop] collect_central.py exited rc=$rc"
 
+    # Roll-up email — independent of collect_central's rc so a Claude
+    # auth blip or an empty-day still ships the session doc to the
+    # working group. Skip silently when NUCLEUS_ROLLUP_TO is unset
+    # (mail/daily_rollup.py returns 2 in that case, which we ignore).
+    if [ -n "${NUCLEUS_ROLLUP_TO:-}" ]; then
+        echo "[daily-draft-loop] firing roll-up email"
+        python -m mail.daily_rollup
+        echo "[daily-draft-loop] daily_rollup exited rc=$?"
+    fi
+
     # Sleep past the target by 60s so the next iteration's
     # "today $TIME" doesn't re-fire immediately.
     sleep 60 &

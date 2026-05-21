@@ -68,6 +68,19 @@ GROQ_MAX_BYTES = 25 * 1024 * 1024
 # Headroom under the 25 MB cap for the WAV header + multipart envelope.
 GROQ_CHUNK_HEADROOM_BYTES = 1 * 1024 * 1024
 
+# Domain prompt — primes Whisper for NN's vocabulary so technical proper
+# nouns, product names, and team names land cleanly instead of as
+# phonetic guesses. The /translations endpoint expects the prompt in
+# English (output language). Override via NUCLEUS_TRANSCRIBE_PROMPT env
+# var if a deployment needs different vocabulary (e.g. another client's
+# product lineup).
+GROQ_DEFAULT_PROMPT = (
+    "MS Arcules DVR, MVP Access, NAPCO Security, HTS, OpenProject. "
+    "Titu, Atik, Rocky, Isruk, Mahmed, Sheikh Amin, Salman, Assad, "
+    "Ahsan Habib, Mostafa, Michael Carrieri, Siva, Richard Goldsobel, "
+    "Robert Zhu."
+)
+
 
 def _central_root() -> Path | None:
     raw = (os.environ.get("NUCLEUS_CENTRAL_PATH") or "").strip()
@@ -167,9 +180,20 @@ def _groq_translate_one(wav_path: Path, label: str,
         raise RuntimeError("GROQ_API_KEY not set")
     model = os.getenv("GROQ_TEAMS_WHISPER_MODEL") or GROQ_MODEL_DEFAULT
 
+    prompt = (os.getenv("NUCLEUS_TRANSCRIBE_PROMPT") or
+              GROQ_DEFAULT_PROMPT).strip()
     with open(wav_path, "rb") as f:
         files = {"file": (wav_path.name, f, "audio/wav")}
-        data = {"model": model, "response_format": "verbose_json"}
+        data = {
+            "model": model,
+            "response_format": "verbose_json",
+            # temperature=0 keeps decoding deterministic — same input,
+            # same transcript on every retry. Whisper's default 0 is
+            # already fine, set explicitly so callers can't drift.
+            "temperature": "0",
+        }
+        if prompt:
+            data["prompt"] = prompt
         headers = {"Authorization": f"Bearer {api_key}"}
         r = requests.post(GROQ_URL, headers=headers, files=files,
                           data=data, timeout=300)

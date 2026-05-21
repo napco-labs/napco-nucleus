@@ -235,9 +235,21 @@ def _msg_addresses(msg: email.message.Message) -> set[str]:
     return out
 
 
-def email_passes_roster_filter(msg: email.message.Message) -> bool:
-    """True iff at least one roster address appears in From/To/Cc/Bcc."""
-    return bool(_msg_addresses(msg) & requirement_roster())
+def email_passes_roster_filter(
+        msg: email.message.Message,
+        *,
+        exclude: set[str] | None = None) -> bool:
+    """True iff at least one roster address appears in From/To/Cc/Bcc,
+    *not counting* anything in ``exclude`` (lower-cased).
+
+    The mailbox owner's own address must always be excluded — otherwise
+    every incoming message trivially has one roster member (the recipient
+    themselves) in the To/Cc headers, and marketing / notification mail
+    leaks through. Callers should pass ``exclude={REQ_IMAP_USER}``.
+    """
+    addrs = _msg_addresses(msg)
+    roster = requirement_roster() - {a.lower() for a in (exclude or set())}
+    return bool(addrs & roster)
 
 
 # ─── OpenProject + Drive + IMAP env sanity ─────────────────────────
