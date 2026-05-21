@@ -73,14 +73,34 @@ def record(p: pyaudio.PyAudio, dev: dict, path: Path, stop: threading.Event, lab
         input_device_index=dev["index"],
     )
     print(f"  [{label:7}] {path.name}  {rate}Hz {channels}ch  {dev['name']!r}")
-    with wave.open(str(path), "wb") as wf:
-        wf.setnchannels(channels)
-        wf.setsampwidth(p.get_sample_size(pyaudio.paInt16))
-        wf.setframerate(rate)
-        while not stop.is_set():
-            wf.writeframes(stream.read(CHUNK, exception_on_overflow=False))
-    stream.stop_stream()
-    stream.close()
+    try:
+        with wave.open(str(path), "wb") as wf:
+            wf.setnchannels(channels)
+            wf.setsampwidth(p.get_sample_size(pyaudio.paInt16))
+            wf.setframerate(rate)
+            while not stop.is_set():
+                # Swallow PortAudio host errors (e.g. errno -9999 when a
+                # USB headset glitches mid-call, or the OS revokes the
+                # device handle) so a sick mic stream doesn't take the
+                # speaker side down with it. The main loop tolerates one
+                # track dying — see _start_recording's "any alive" guard.
+                try:
+                    data = stream.read(CHUNK, exception_on_overflow=False)
+                except OSError as e:
+                    print(f"  [{label:7}] stream.read failed ({e!r}); "
+                          f"ending this track. The other side keeps "
+                          f"recording.", file=sys.stderr)
+                    break
+                wf.writeframes(data)
+    finally:
+        try:
+            stream.stop_stream()
+        except Exception:
+            pass
+        try:
+            stream.close()
+        except Exception:
+            pass
 
 
 def _denoise_mic_wav(path: Path,
@@ -356,7 +376,11 @@ def main() -> int:
             t.start()
 
         try:
-            while all(t.is_alive() for t in threads):
+            # Keep recording as long as AT LEAST ONE track is still alive.
+            # Previously this was `all(...)` which meant a single failed
+            # stream killed the whole session (see record() OSError guard
+            # for the failure mode this protects against).
+            while any(t.is_alive() for t in threads):
                 if STOP_FILE.exists():
                     print("\nStop sentinel detected — stopping...")
                     STOP_FILE.unlink()
