@@ -296,7 +296,16 @@ def main() -> int:
                 continue
             if not e:
                 continue
-            r = _stage_one(e, dry_run=args.dry_run)
+            # Per-message _stage_one guard. _stage_one writes to the
+            # Samba share \\172.16.205.123\nucleus-central\... so an
+            # unreachable share / disk error would previously kill the
+            # loop AND skip the checkpoint update, causing next run to
+            # re-fetch every email in the window (duplication).
+            try:
+                r = _stage_one(e, dry_run=args.dry_run)
+            except Exception as exc:
+                r = {"uid": uid, "status": "error",
+                     "error": f"{type(exc).__name__}: {exc}"}
             results.append(r)
             try:
                 max_uid_seen = max(max_uid_seen, int(uid))
@@ -307,13 +316,20 @@ def main() -> int:
         # current UIDVALIDITY -- if we just reset on a UIDVALIDITY
         # change, this is what makes the next run see the new value
         # as "stored" and not loop into another reset.
+        # Guarded so a transient sqlite failure here doesn't drop a
+        # traceback past the IMAP logout in finally:.
         if not args.dry_run and max_uid_seen > (since_uid or 0):
-            memory.set_email_checkpoint(
-                mailbox_key=key,
-                uidvalidity=server_uidvalidity or checkpoint.get("uidvalidity"),
-                last_uid=str(max_uid_seen),
-            )
-            print(f"  updated checkpoint -> last_uid={max_uid_seen}")
+            try:
+                memory.set_email_checkpoint(
+                    mailbox_key=key,
+                    uidvalidity=server_uidvalidity or checkpoint.get("uidvalidity"),
+                    last_uid=str(max_uid_seen),
+                )
+                print(f"  updated checkpoint -> last_uid={max_uid_seen}")
+            except Exception as exc:
+                print(f"  ! checkpoint write failed: {type(exc).__name__}: "
+                      f"{exc} -- next run may re-stage some emails",
+                      file=sys.stderr)
     finally:
         try:
             m.logout()

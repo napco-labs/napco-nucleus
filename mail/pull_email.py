@@ -127,43 +127,57 @@ def fetch_emails_in_window(*, sender: str | None, subject: str | None,
         if typ != "OK":
             raise RuntimeError(f"IMAP SEARCH failed: {typ}")
         uids = (data[0] or b"").split()
+        skipped_errors = 0
         for uid_b in uids:
             uid = uid_b.decode()
-            typ, msg_data = m.uid("FETCH", uid, "(RFC822)")
-            if typ != "OK" or not msg_data or not msg_data[0]:
-                continue
-            raw = msg_data[0][1]
-            if not isinstance(raw, bytes):
-                continue
-            msg = email.message_from_bytes(raw)
-
-            from_hdr = ri._decode(msg.get("From"))
-            from_addr = ri._extract_from_address(from_hdr)
-            subj = ri._decode(msg.get("Subject")) or "(no subject)"
-            date_hdr = msg.get("Date") or ""
+            # Per-message guard. One malformed message, mid-fetch IMAP
+            # disconnect, or an exception inside body/attachment parsing
+            # used to abort the whole loop and silently drop every
+            # remaining UID. Isolate failures to the bad message.
             try:
-                received = email.utils.parsedate_to_datetime(date_hdr)
-            except Exception:
-                received = None
-            received_local = (received.astimezone() if received else None)
-
-            # Client-side absolute-datetime filter
-            if received_local:
-                naive_local = received_local.replace(tzinfo=None)
-                if not (start_dt <= naive_local <= end_dt):
+                typ, msg_data = m.uid("FETCH", uid, "(RFC822)")
+                if typ != "OK" or not msg_data or not msg_data[0]:
                     continue
+                raw = msg_data[0][1]
+                if not isinstance(raw, bytes):
+                    continue
+                msg = email.message_from_bytes(raw)
 
-            body = ri._body_text(msg)
-            attachments = ri._extract_attachments(msg)
-            out.append({
-                "uid": uid,
-                "from": from_addr,
-                "subject": subj,
-                "received": received_local.strftime("%Y-%m-%d %H:%M") if received_local else "(no date)",
-                "body": body,
-                "attachments": attachments,
-                "_msg": msg,
-            })
+                from_hdr = ri._decode(msg.get("From"))
+                from_addr = ri._extract_from_address(from_hdr)
+                subj = ri._decode(msg.get("Subject")) or "(no subject)"
+                date_hdr = msg.get("Date") or ""
+                try:
+                    received = email.utils.parsedate_to_datetime(date_hdr)
+                except Exception:
+                    received = None
+                received_local = (received.astimezone() if received else None)
+
+                # Client-side absolute-datetime filter
+                if received_local:
+                    naive_local = received_local.replace(tzinfo=None)
+                    if not (start_dt <= naive_local <= end_dt):
+                        continue
+
+                body = ri._body_text(msg)
+                attachments = ri._extract_attachments(msg)
+                out.append({
+                    "uid": uid,
+                    "from": from_addr,
+                    "subject": subj,
+                    "received": received_local.strftime("%Y-%m-%d %H:%M") if received_local else "(no date)",
+                    "body": body,
+                    "attachments": attachments,
+                    "_msg": msg,
+                })
+            except Exception as e:
+                skipped_errors += 1
+                print(f"  ! UID {uid}: {type(e).__name__}: {e} -- skipping",
+                      file=sys.stderr)
+                continue
+        if skipped_errors:
+            print(f"  ! {skipped_errors} message(s) skipped due to errors "
+                  f"during fetch/parse.", file=sys.stderr)
     finally:
         try:
             m.logout()

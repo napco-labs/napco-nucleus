@@ -343,7 +343,11 @@ def main() -> int:
         print(f"[push_chat] central upload FAILED: {e}", file=sys.stderr)
         print(f"[push_chat] local copy preserved at {local_path}",
               file=sys.stderr)
-        return 0
+        # Return non-zero so the Task Scheduler tick records the
+        # failure. Previously we returned 0, making a stuck Samba share
+        # invisible to the scheduler -- chat docs would pile up locally
+        # while the supervisor reported success every tick.
+        return 1
 
     if resolved:
         try:
