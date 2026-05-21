@@ -116,8 +116,8 @@ if errorlevel 1 (
 )
 echo.
 
-REM ── 5/7 self-heal at-logon task (only installs once; idempotent) ──
-echo [5/7] Re-registering self-heal at-logon task...
+REM ── 5/8 self-heal at-logon task (only installs once; idempotent) ──
+echo [5/8] Re-registering self-heal at-logon task...
 powershell -NoProfile -ExecutionPolicy Bypass -File "%NN%\scripts\register-self-heal-task.ps1"
 if errorlevel 1 (
     echo       WARN: self-heal task registration failed.
@@ -125,14 +125,23 @@ if errorlevel 1 (
 )
 echo.
 
-REM ── 6/7 start voice daemon now ─────────────────────────────
-echo [6/7] Starting voice daemon now (no need to log out)...
+REM ── 6/8 voice watchdog (every 5 min crash detector) ────────
+echo [6/8] Re-registering voice watchdog task...
+powershell -NoProfile -ExecutionPolicy Bypass -File "%NN%\scripts\register-voice-watchdog-task.ps1"
+if errorlevel 1 (
+    echo       WARN: voice watchdog task registration failed.
+    set /a FAIL_COUNT+=1
+)
+echo.
+
+REM ── 7/8 start voice daemon now ─────────────────────────────
+echo [7/8] Starting voice daemon now (no need to log out)...
 powershell -NoProfile -Command "Start-ScheduledTask -TaskName 'NAPCO Nucleus - Voice Daemon'; Start-Sleep -Seconds 2; $proc = Get-Process pythonw, python -ErrorAction SilentlyContinue; if ($proc) { 'OK: python is running (' + $proc.Count + ' proc).' } else { Write-Warning 'voice daemon did not appear -- check logs\voice_daemon.log' }"
 echo.
 
-REM ── 7/7 chat backfill (interactive only; auto-run skips) ───
+REM ── 8/8 chat backfill (interactive only; auto-run skips) ───
 if "%QUIET%"=="0" (
-    echo [7/7] Pushing the last 4 hours of chat to central as a backfill...
+    echo [8/8] Pushing the last 4 hours of chat to central as a backfill...
     python -m teams.push_chat --last-minutes 240
     if errorlevel 1 (
         echo       WARN: chat backfill failed -- scheduled tasks will
@@ -141,7 +150,7 @@ if "%QUIET%"=="0" (
     )
     echo.
 ) else (
-    echo [7/7] Skipping 4h chat backfill in --quiet mode (scheduled tasks handle it).
+    echo [8/8] Skipping 4h chat backfill in --quiet mode (scheduled tasks handle it).
     echo.
 )
 

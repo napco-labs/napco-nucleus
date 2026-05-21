@@ -42,6 +42,7 @@ import argparse
 import datetime as dt
 import logging
 import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -249,6 +250,111 @@ def _groq_translate(wav_path: Path, label: str) -> list[dict]:
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def _post_correct_segments(segments: list[dict]) -> list[dict]:
+    """Ask Claude to fix obvious ASR errors using NN domain vocabulary.
+
+    Sends the transcript as numbered lines, asks Claude to return the
+    same number of lines with corrected text. Strictly fails open --
+    any parse drift or CLI failure returns the original segments
+    unchanged so a bad post-correction never blocks transcription.
+
+    Opt-out: NUCLEUS_TRANSCRIBE_POSTCORRECT=0 in .env.
+    """
+    if os.environ.get("NUCLEUS_TRANSCRIBE_POSTCORRECT", "1") == "0":
+        return segments
+    if not segments:
+        return segments
+
+    cli = (os.environ.get("CLAUDE_CLI_PATH")
+           or os.path.expanduser("~/.local/bin/claude"))
+    if not os.path.exists(cli):
+        # On dev PCs the CLI lives at %USERPROFILE%\.local\bin\claude.exe;
+        # on .123 (the only place transcribe runs in prod) it's the
+        # path above. Either way, skip silently if not present.
+        return segments
+
+    # Numbered render keeps the one-to-one mapping cheap to parse.
+    rendered = "\n".join(
+        f"{i+1}|{s['speaker']}|{s['text']}"
+        for i, s in enumerate(segments)
+    )
+    prompt = (
+        "You are cleaning up automatic speech-recognition (ASR) output "
+        "from Whisper. Below are numbered transcript lines from a "
+        "software-development call at NAPCO Nucleus / AEL-BD (the team "
+        "builds the MS Arcules DVR integration, MVP Access, OpenProject "
+        "and related tools). Speakers often mix English and Bengali.\n\n"
+        "Your job: fix obvious mishearings of proper nouns, product "
+        "names and technical jargon using the domain context below. "
+        "Do NOT invent content, do NOT rephrase the meaning, do NOT "
+        "merge or split lines. If a line is already correct, return "
+        "it unchanged.\n\n"
+        "Known vocabulary: MS Arcules DVR, MVP Access, NAPCO Security, "
+        "HTS, OpenProject, Nucleus. Team: Titu, Atik (Atikur), Rocky, "
+        "Isruk, Mahmed, Sheikh Amin, Salman, Assad, Ahsan Habib, "
+        "Mostafa, Michael Carrieri, Siva, Richard Goldsobel, Robert "
+        "Zhu. Tech: stored procedure, changeset, drop-down, integration "
+        "page, partition field, conversation thread.\n\n"
+        "Output rules: return EXACTLY the same number of lines, each "
+        "in the format `<n>|<speaker>|<corrected text>`. No prose, no "
+        "markdown, no explanations. Just the lines.\n\n"
+        "Lines to clean:\n" + rendered
+    )
+
+    try:
+        r = subprocess.run(
+            [cli, "--print", "--max-turns", "1", prompt],
+            capture_output=True, text=True, timeout=120,
+            encoding="utf-8", errors="replace",
+        )
+    except (subprocess.TimeoutExpired, OSError) as e:
+        print(f"  [postcorrect] CLI call failed ({type(e).__name__}: {e}); "
+              f"using original segments.", file=sys.stderr)
+        return segments
+
+    if r.returncode != 0:
+        print(f"  [postcorrect] CLI rc={r.returncode}; using original "
+              f"segments.\n  stderr: {(r.stderr or '')[:200]}",
+              file=sys.stderr)
+        return segments
+
+    parsed: list[dict] = []
+    expected = len(segments)
+    for raw in (r.stdout or "").splitlines():
+        line = raw.strip()
+        if not line or "|" not in line:
+            continue
+        parts = line.split("|", 2)
+        if len(parts) != 3:
+            continue
+        try:
+            idx = int(parts[0]) - 1
+        except ValueError:
+            continue
+        if idx < 0 or idx >= expected:
+            continue
+        new_text = parts[2].strip()
+        if not new_text:
+            continue
+        parsed.append({"_idx": idx, "_text": new_text})
+
+    if len(parsed) != expected:
+        print(f"  [postcorrect] parse mismatch ({len(parsed)} of "
+              f"{expected} lines returned); using original segments.",
+              file=sys.stderr)
+        return segments
+
+    out = []
+    by_idx = {p["_idx"]: p["_text"] for p in parsed}
+    for i, s in enumerate(segments):
+        if i in by_idx:
+            out.append({**s, "text": by_idx[i]})
+        else:
+            out.append(s)
+    print(f"  [postcorrect] Claude cleaned {expected} segment(s).")
+    return out
+
+
 def _transcribe_session_via_groq(session: str, calls_dir: Path,
                                   output_dir: Path) -> Path:
     """Transcribe one session via Groq, write transcript .md next to
@@ -263,6 +369,7 @@ def _transcribe_session_via_groq(session: str, calls_dir: Path,
     mic_segs = _groq_translate(mic, label="You")
     spk_segs = _groq_translate(spk, label="Other")
     all_segs = sorted(mic_segs + spk_segs, key=lambda s: s["start"])
+    all_segs = _post_correct_segments(all_segs)
 
     try:
         started = dt.datetime.strptime(session, "%Y%m%d-%H%M%S")
