@@ -66,9 +66,10 @@ if (Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue) {
     Invoke-SchtasksDelete -Name $taskName
 }
 
+$vbsPath = Join-Path $scriptDir "watchdog-hidden.vbs"
 $action = New-ScheduledTaskAction `
-    -Execute "powershell.exe" `
-    -Argument ('-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "{0}"' -f $ps1Path) `
+    -Execute "wscript.exe" `
+    -Argument ('"' + $vbsPath + '"') `
     -WorkingDirectory $repoRoot
 
 $domainUser = if ($env:USERDOMAIN -and $env:USERDOMAIN -ne $env:COMPUTERNAME) {
