@@ -56,11 +56,16 @@ x-worker-base: &worker-base
     # Faster-whisper model cache (fallback path; rarely fires when
     # GROQ_API_KEY is set, but the model must persist when it does).
     - whisper-models:/root/.cache/huggingface
-    # Claude Code Max-tier auth, bind-mounted read-only from the host
-    # ubuntu user. Workers that call the Claude Agent SDK pick this
-    # up automatically.
-    - ${CLAUDE_HOME:-/home/ubuntu/.claude}:/root/.claude:ro
-    - ${CLAUDE_JSON:-/home/ubuntu/.claude.json}:/root/.claude.json:ro
+    # Claude Code Max-tier auth, bind-mounted RW from the host
+    # ubuntu user so the Agent SDK can spill tool outputs to
+    # ~/.claude/projects/, create session-env dirs, and refresh
+    # OAuth tokens in ~/.claude.json. The :ro mount used here
+    # until 2026-05-22 silently broke verify_session for ~1 week
+    # (agent.py returned 0 on EROFS, so the supervising loop didn't
+    # notice the empty drafts). Workers that call the Claude Agent
+    # SDK pick these up automatically.
+    - ${CLAUDE_HOME:-/home/ubuntu/.claude}:/root/.claude
+    - ${CLAUDE_JSON:-/home/ubuntu/.claude.json}:/root/.claude.json
   working_dir: /app
 
 services:
