@@ -180,6 +180,9 @@ services:
       # `docker compose up -d` deploys against this same host.
       - /var/run/docker.sock:/var/run/docker.sock
       - gha-runner-work:/_work
+      # Expose the repo so workflow steps can `cd` to it and run git pull.
+      # The path must match what the workflow hard-codes (/home/ubuntu/napco-nucleus).
+      - ${REPO_PATH:-/home/ubuntu/napco-nucleus}:/home/ubuntu/napco-nucleus
 
 volumes:
   whisper-models:
