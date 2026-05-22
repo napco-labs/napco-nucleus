@@ -1,38 +1,45 @@
 name: Requirement Management
 
-# The one and only NAPCO Nucleus pipeline workflow. Click "Run
-# workflow" in the Actions tab to do the whole job end-to-end on
-# MVPACCESS:
+# On-demand fire of the Nucleus end-to-end pipeline. Click "Run
+# workflow" in the Actions tab to do the whole job:
 #
 #   1. Pull email from the configured inbox (last N minutes)
 #   2. Pull Google Drive files (last N minutes)
 #   3. Walk the central share for chat docs + attachments + call
-#      recordings every developer has pushed today
-#   4. Transcribe any new call recordings (chunked parallel Whisper)
+#      recordings every developer has pushed in the window
+#   4. Transcribe any new call recordings
 #   5. Build the unified pull-session .docx
 #   6. Identify distinct client requirements (LLM)
 #   7. Draft the verification email into [Gmail]/Drafts
 #
 # Audio + chat capture happens on each developer's machine (voice
-# daemon + chat-push cron). By the time you click "Run workflow"
-# here, both are already on central — this workflow only does the
+# daemon + chat-push cron). By the time you click "Run workflow",
+# both are already on central -- this workflow only does the
 # central-side work.
 #
-# For the local "force everything from my PC right now" alternative,
-# double-click scripts\do-it-now.bat instead.
+# Topology (2026-05-22): central host is the Ubuntu box at
+# 172.16.205.123, services live in docker compose. The pipeline runs
+# inside the `nucleus-daily-draft` container so it shares the same
+# env, IMAP creds, Groq key, and Claude auth as the nightly auto-fire.
+#
+# Runner: self-hosted Linux on .123 (`nucleus-gha-runner` container,
+# label `nucleus-central`). If the runner is offline see
+# `scripts/refresh-gha-runner.sh` -- typically the registration
+# token has expired (myoung34/github-runner one-shot tokens last ~1h
+# unless ACCESS_TOKEN PAT auto-rotation is configured).
 
 on:
   workflow_dispatch:
     inputs:
+      last_minutes:
+        description: 'Time window in minutes (email + Drive + chat lookback)'
+        required: true
+        default: '1440'
+        type: string
       client:
         description: 'Client filter (substring against metadata.client_name; "all" for unfiltered)'
         required: true
         default: 'all'
-        type: string
-      last_minutes:
-        description: 'Time window in minutes (email + Drive + chat lookback)'
-        required: true
-        default: '2880'
         type: string
       day:
         description: 'Central scan day (YYYY-MM-DD). Empty = today.'
@@ -40,7 +47,7 @@ on:
         default: ''
         type: string
       dry_run:
-        description: 'Skip the local push + identify step (just collect + transcribe)'
+        description: 'Skip the identify+draft step (just collect + transcribe)'
         required: false
         default: 'false'
         type: choice
@@ -55,31 +62,44 @@ concurrency:
 
 jobs:
   run:
-    runs-on: [self-hosted, Windows]
+    runs-on: [self-hosted, linux, nucleus-central]
     timeout-minutes: 60
 
-    defaults:
-      run:
-        shell: pwsh
-        working-directory: 'C:\napco-nucleus'
-
     steps:
-      - name: Pull latest code
-        run: git pull origin main
-
-      - name: Run pipeline
+      - name: Show fire context
         run: |
-          $args = @('--client', '${{ inputs.client }}', '--last-minutes', '${{ inputs.last_minutes }}')
-          if ('${{ inputs.day }}' -ne '') { $args += @('--day', '${{ inputs.day }}') }
-          if ('${{ inputs.dry_run }}' -eq 'true') { $args += '--no-identify' }
-          Write-Host "Running: py -3 collect_central.py $args"
-          py -3 collect_central.py @args
+          echo "client=${{ inputs.client }}"
+          echo "last_minutes=${{ inputs.last_minutes }}"
+          echo "day=${{ inputs.day }}"
+          echo "dry_run=${{ inputs.dry_run }}"
+          echo "host=$(hostname)"
+          echo "date=$(date -Iseconds)"
+          docker ps --filter name=nucleus-daily-draft --format '{{.Names}} {{.Status}}'
+
+      - name: Pull latest code on host
+        run: |
+          cd /home/ubuntu/napco-nucleus
+          git fetch --quiet origin main
+          git reset --hard origin/main
+
+      - name: Run pipeline inside daily-draft container
+        run: |
+          set -euo pipefail
+          args=(--client "${{ inputs.client }}" --last-minutes "${{ inputs.last_minutes }}")
+          if [ -n "${{ inputs.day }}" ]; then
+            args+=(--day "${{ inputs.day }}")
+          fi
+          if [ "${{ inputs.dry_run }}" = "true" ]; then
+            args+=(--no-identify)
+          fi
+          echo "Running: docker exec nucleus-daily-draft python collect_central.py ${args[*]}"
+          docker exec nucleus-daily-draft python collect_central.py "${args[@]}"
 
       - name: Upload session doc on failure
         if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: session-doc-on-failure
-          path: 'C:\napco-nucleus\data\requirements\sessions\current.docx'
+          path: /srv/nucleus-data/requirements/sessions/current.docx
           if-no-files-found: ignore
           retention-days: 7
