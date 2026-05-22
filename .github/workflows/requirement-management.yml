@@ -78,6 +78,7 @@ jobs:
 
       - name: Pull latest code on host
         run: |
+          git config --global --add safe.directory /home/ubuntu/napco-nucleus
           cd /home/ubuntu/napco-nucleus
           git fetch --quiet origin main
           git reset --hard origin/main
