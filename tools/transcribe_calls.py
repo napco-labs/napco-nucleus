@@ -199,6 +199,23 @@ def _groq_translate_one(wav_path: Path, label: str,
         r = requests.post(GROQ_URL, headers=headers, files=files,
                           data=data, timeout=300)
 
+    # 429 rate-limit: Groq says "retry in Xs" — honour that instead of
+    # immediately falling back to faster-whisper (which is heavy on RAM).
+    for _attempt in range(3):
+        if r.status_code != 429:
+            break
+        import re as _re
+        import time as _time
+        m = _re.search(r"try again in (\d+(?:\.\d+)?)s", r.text)
+        wait = float(m.group(1)) + 1.0 if m else 5.0
+        print(f"  [groq-429] rate-limited; retrying in {wait:.0f}s "
+              f"(attempt {_attempt+1}/3)...")
+        _time.sleep(wait)
+        with open(wav_path, "rb") as f:
+            files2 = {"file": (wav_path.name, f, "audio/wav")}
+            r = requests.post(GROQ_URL, headers=headers, files=files2,
+                              data=data, timeout=300)
+
     if r.status_code != 200:
         raise RuntimeError(
             f"Groq {r.status_code}: {r.text[:300]}")

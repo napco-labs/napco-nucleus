@@ -134,7 +134,10 @@ services:
     <<: *worker-base
     container_name: nucleus-daily-draft
     command: ["/usr/local/lib/nucleus-workers/daily-draft-loop.sh"]
-    mem_limit: 5g
+    # 5g was too tight: Rocky's 317 MB call → 7 faster-whisper chunks
+    # × 4 threads → OOM (exit 137) on 2026-05-22. 10g gives headroom
+    # for large-file fallback while still cgroup-isolating any runaway.
+    mem_limit: 10g
     mem_reservation: 512m
 
   # ----------------------------------------------------------------
