@@ -20,6 +20,7 @@ Env vars:
                          REQ_IMAP_USER if available, else "nucleus@local")
     SMTP_FROM_NAME       optional display name (e.g. "NAPCO Nucleus")
     VERIFICATION_TO      default recipient (e.g. titucse@gmail.com)
+    VERIFICATION_CC      optional default Cc list (comma-separated)
     REQ_IMAP_HOST/PORT/USER/PASSWORD   used by the IMAP draft push
     IMAP_DRAFTS_FOLDER   optional override (auto-detected via \\Drafts flag)
 """
@@ -204,16 +205,19 @@ def _greeting_name(client_name: str | None) -> str:
     "their mail client, reviews, and sends manually. Args: `docx_path` "
     "(REQUIRED — verification doc path), `session_docx_path` (optional "
     "— raw pull-session .docx for the second attachment), `to` "
-    "(optional — defaults to VERIFICATION_TO env), `subject` (optional "
-    "— defaults to 'Requirements Verification - <date>'), `body` "
-    "(optional — when omitted, looks up a per-client template from "
-    "data/templates/draft_<slug>.md based on `client_name`, falling "
-    "back to draft_default.md, then a hard-coded body), `client_name` "
-    "(optional — drives template selection; pass the canonical client "
-    "name from step 1.5). From: SMTP_FROM env. Returns {drafted, "
-    "draft_path, to, from, subject, attachments, template} or {error}.",
+    "(optional — defaults to VERIFICATION_TO env), `cc` (optional — "
+    "comma-separated; defaults to VERIFICATION_CC env), `subject` "
+    "(optional — defaults to 'Requirements Verification - <date>'), "
+    "`body` (optional — when omitted, looks up a per-client template "
+    "from data/templates/draft_<slug>.md based on `client_name`, "
+    "falling back to draft_default.md, then a hard-coded body), "
+    "`client_name` (optional — drives template selection; pass the "
+    "canonical client name from step 1.5). From: SMTP_FROM env. "
+    "Returns {drafted, draft_path, to, cc, from, subject, attachments, "
+    "template} or {error}.",
     {"docx_path": str, "session_docx_path": str,
-     "to": str, "subject": str, "body": str, "client_name": str},
+     "to": str, "cc": str, "subject": str, "body": str,
+     "client_name": str},
 )
 async def draft_verification_email_tool(args):
     docx_path = (args.get("docx_path") or "").strip()
@@ -241,6 +245,10 @@ async def draft_verification_email_tool(args):
     if not to_addr:
         return _text({"error": "Recipient missing — set VERIFICATION_TO env or pass `to`."})
 
+    cc_raw = (args.get("cc") or os.environ.get("VERIFICATION_CC") or "").strip()
+    cc_list = [a.strip() for a in cc_raw.split(",") if a.strip()] if cc_raw else []
+    cc_addr = ", ".join(cc_list)
+
     from_addr = (
         os.environ.get("SMTP_FROM")
         or os.environ.get("REQ_IMAP_USER")
@@ -265,6 +273,8 @@ async def draft_verification_email_tool(args):
     msg = EmailMessage()
     msg["From"] = sender
     msg["To"] = to_addr
+    if cc_addr:
+        msg["Cc"] = cc_addr
     msg["Subject"] = subject
     msg["Date"] = formatdate(localtime=True)
     msg["Message-ID"] = make_msgid(domain="napco-nucleus.local")
@@ -296,13 +306,15 @@ async def draft_verification_email_tool(args):
         memory.log_activity(
             task_name="requirement-collection:draft_verification",
             result="dry_run",
-            technical_details={"to": to_addr, "from": from_addr, "subject": subject,
+            technical_details={"to": to_addr, "cc": cc_addr, "from": from_addr,
+                               "subject": subject,
                                "attachments": attachment_names, "dry_run": True},
         )
         return _text({
             "drafted": False,
             "dry_run": True,
             "to": to_addr,
+            "cc": cc_addr,
             "from": from_addr,
             "subject": subject,
             "attachments": attachment_names,
@@ -321,11 +333,12 @@ async def draft_verification_email_tool(args):
         memory.log_activity(
             task_name="requirement-collection:draft_verification",
             result=f"error:{type(e).__name__}",
-            technical_details={"to": to_addr, "from": from_addr, "subject": subject,
+            technical_details={"to": to_addr, "cc": cc_addr, "from": from_addr,
+                               "subject": subject,
                                "attachments": attachment_names, "error": str(e)},
         )
         return _text({"error": f"{type(e).__name__}: {e}",
-                      "to": to_addr, "from": from_addr})
+                      "to": to_addr, "cc": cc_addr, "from": from_addr})
 
     rel = draft_path.relative_to(Path(__file__).parent.parent).as_posix()
 
@@ -337,7 +350,8 @@ async def draft_verification_email_tool(args):
     memory.log_activity(
         task_name="requirement-collection:draft_verification",
         result="drafted" + ("+imap" if imap_result["appended"] else ""),
-        technical_details={"to": to_addr, "from": from_addr, "subject": subject,
+        technical_details={"to": to_addr, "cc": cc_addr, "from": from_addr,
+                           "subject": subject,
                            "attachments": attachment_names, "draft_path": rel,
                            "client_name": client_name,
                            "template": tpl_used,
@@ -363,6 +377,7 @@ async def draft_verification_email_tool(args):
         "imap_replaced": imap_result.get("replaced", 0),
         "imap_error": imap_result["error"],
         "to": to_addr,
+        "cc": cc_addr,
         "from": from_addr,
         "subject": subject,
         "attachments": attachment_names,

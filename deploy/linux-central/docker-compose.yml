@@ -116,13 +116,21 @@ services:
 
   # ----------------------------------------------------------------
   # Daily Requirement Management draft -- fires once per BD day at
-  # 23:45 local (TZ=Asia/Dhaka, so the container's wall clock IS BD).
-  # Runs do_it_now.py for all clients over the last 24h.
+  # the time set by DAILY_DRAFT_TARGET_TIME (TZ=Asia/Dhaka, so the
+  # container's wall clock IS BD).
+  # Runs collect_central.py for all clients over the last 24h.
+  #
+  # mem_limit: a runaway python ate 5.2 GB inside this container on
+  # 2026-05-21 and tripped the host's global OOM-killer. Cap it so
+  # any future runaway is cgroup-killed in isolation -- normal runs
+  # peak well under 1 GB.
   # ----------------------------------------------------------------
   daily-draft:
     <<: *worker-base
     container_name: nucleus-daily-draft
     command: ["/usr/local/lib/nucleus-workers/daily-draft-loop.sh"]
+    mem_limit: 3g
+    mem_reservation: 512m
 
   # ----------------------------------------------------------------
   # Self-hosted GitHub Actions runner. Org-scoped to napco-labs so

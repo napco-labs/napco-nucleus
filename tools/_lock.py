@@ -4,9 +4,18 @@ session-doc writes.
 
 Atomic-mkdir lock: lock acquisition is creating a directory (atomic
 on every OS). Releasing is removing it. A stale lock from a crashed
-process is auto-cleared after `stale_after_s` (default 30 min) using
-the dir's mtime as the heartbeat. The lock writes a small `holder.txt`
+process is auto-cleared either when the recorded holder PID is dead
+(same host only, instant detection) or after `stale_after_s` mtime
+fallback (default 30 min). The lock writes a small `holder.txt`
 inside for diagnostics ("who's holding this and since when?").
+
+PID-liveness check matters: a SIGKILL (e.g. OOM-killer) skips the
+finally-block that would normally rmdir the lock, so the directory
+lingers. Without the liveness check, the next scheduled run could
+race the 30-min mtime threshold and abort -- which is exactly what
+happened on 2026-05-21 when a runaway python ate 5.2 GB inside the
+daily-draft container, got OOM-killed at 22:04, and stalled the
+22:30 cron with a 28-minute-old corpse lock.
 
 Usage:
     from tools._lock import file_lock
@@ -28,6 +37,7 @@ from __future__ import annotations
 import datetime as dt
 import logging
 import os
+import re
 import socket
 import sys
 import time
@@ -37,6 +47,8 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 _LOCK_ROOT = Path(__file__).parent.parent / "data" / "_locks"
+
+_HOLDER_RE = re.compile(r"pid=(?P<pid>\d+)\s+host=(?P<host>\S+)")
 
 
 def _lock_dir(name: str) -> Path:
@@ -48,7 +60,49 @@ def _holder_info() -> str:
             f"started={dt.datetime.now().isoformat(timespec='seconds')}")
 
 
+def _parse_holder(lock_dir: Path) -> tuple[int, str] | None:
+    """Return (pid, host) recorded in holder.txt, or None if not parseable."""
+    try:
+        raw = (lock_dir / "holder.txt").read_text(encoding="utf-8")
+    except OSError:
+        return None
+    m = _HOLDER_RE.search(raw)
+    if not m:
+        return None
+    try:
+        return int(m.group("pid")), m.group("host")
+    except (TypeError, ValueError):
+        return None
+
+
+def _holder_dead(lock_dir: Path) -> bool:
+    """True iff holder was recorded on THIS host AND its PID is no
+    longer alive. Returns False on cross-host locks (can't peek into
+    another machine's process table) or when holder.txt is missing."""
+    parsed = _parse_holder(lock_dir)
+    if parsed is None:
+        return False
+    pid, host = parsed
+    if host != socket.gethostname():
+        # Different machine -- we can't observe its process table.
+        # Defer to the mtime fallback.
+        return False
+    try:
+        # Signal 0 is the standard "is this pid alive" probe.
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return True
+    except PermissionError:
+        # Process exists but we lack signal rights -- treat as alive.
+        return False
+    except OSError:
+        return False
+    return False
+
+
 def _stale(lock_dir: Path, stale_after_s: int) -> bool:
+    if _holder_dead(lock_dir):
+        return True
     try:
         age = time.time() - lock_dir.stat().st_mtime
     except OSError:
@@ -86,9 +140,11 @@ def file_lock(name: str, *, block: bool = True, poll_s: float = 0.5,
         except FileExistsError:
             # Someone else holds it. Stale?
             if _stale(lock_dir, stale_after_s):
+                reason = ("holder PID dead" if _holder_dead(lock_dir)
+                          else f"age > {stale_after_s}s")
                 logger.warning(
-                    "file_lock(%s): breaking stale lock (age > %ds)",
-                    name, stale_after_s)
+                    "file_lock(%s): breaking stale lock (%s)",
+                    name, reason)
                 # Best-effort cleanup
                 try:
                     holder_file.unlink(missing_ok=True)
