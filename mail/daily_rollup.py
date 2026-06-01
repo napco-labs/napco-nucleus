@@ -100,13 +100,14 @@ def _build_message(day: str, to_addrs: list[str], cc_addrs: list[str],
         f"emails, Teams chats and calls in the last 24 hours.")
     lines.append("")
     if reqs:
-        lines.append(f"Items identified today ({len(reqs)}):")
+        lines.append(f"Requirements identified today ({len(reqs)}):")
         for r in reqs:
             lines.append(f"  {r['n']}. [{r['ps']}] {r['title']}")
     else:
-        lines.append("No new client requirements were identified today. "
-                     "Most of yesterday's captured audio was internal "
-                     "debugging; nothing reached the client-requirement bar.")
+        lines.append("No new client requirements were identified from "
+                     "today's calls and communications. This may mean "
+                     "discussions were internal, or calls had no "
+                     "actionable items for the client.")
     lines.append("")
     lines.append(
         "The attached document contains the full text, sources and "
