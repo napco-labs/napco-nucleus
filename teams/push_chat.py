@@ -196,6 +196,75 @@ def _build_docx(out_path: Path,
     doc.save(str(out_path))
 
 
+def _seed_registry_from_indexeddb() -> int:
+    """Scan Teams IndexedDB and insert every group chat into chat_registry.
+
+    Called automatically on first push_chat run when the registry is empty.
+    Returns the number of chats seeded.
+    """
+    try:
+        from ccl_chromium_reader import ccl_chromium_indexeddb
+    except ImportError:
+        print("[push_chat] ccl_chromium_reader not installed — cannot seed",
+              file=sys.stderr)
+        return 0
+
+    leveldb = reader.LEVELDB_PATH
+    if not leveldb.exists():
+        return 0
+
+    try:
+        db = ccl_chromium_indexeddb.WrappedIndexDB(str(leveldb))
+    except Exception as e:
+        print(f"[push_chat] IndexedDB open failed: {e}", file=sys.stderr)
+        return 0
+
+    # Load participant display names
+    profiles: dict[str, str] = {}
+    for info in db.database_ids:
+        if info.name and info.name.startswith("Teams:profiles:"):
+            try:
+                for rec in db[info.dbid_no]["profiles"].iterate_records():
+                    v = rec.value
+                    if isinstance(v, dict):
+                        mri = v.get("mri") or v.get("id")
+                        name = v.get("displayName") or v.get("givenName") or ""
+                        if mri and name:
+                            profiles[mri] = name
+            except Exception:
+                pass
+            break
+
+    # Collect all group chats from conversation-manager
+    seeded = 0
+    for info in db.database_ids:
+        if info.name and info.name.startswith("Teams:conversation-manager:"):
+            try:
+                for rec in db[info.dbid_no]["conversations"].iterate_records():
+                    v = rec.value
+                    if not isinstance(v, dict):
+                        continue
+                    cid = v.get("id") or ""
+                    if "thread.v2" not in cid:
+                        continue
+                    last_ms = v.get("lastMessageTimeUtc")
+                    title = v.get("cachedDeduplicationKey") or v.get("title") or None
+                    store.upsert_chat(
+                        conversation_id=cid,
+                        title=title,
+                        fmt="group",
+                        last_activity_ms=last_ms,
+                        participants=[],
+                        msg_count=0,
+                    )
+                    seeded += 1
+            except Exception as e:
+                print(f"[push_chat] seed error: {e}", file=sys.stderr)
+            break
+
+    return seeded
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(
         description=__doc__,
@@ -224,9 +293,16 @@ def main() -> int:
 
     rows = store.list_chat_registry(order="activity")
     if not rows:
-        print("[push_chat] chat registry empty. "
-              "Run `python -m teams.list_chats` first.", file=sys.stderr)
-        return 2
+        # Registry empty on first run — auto-seed from Teams IndexedDB so
+        # the scheduled task works without any manual setup step.
+        print("[push_chat] registry empty — auto-seeding from Teams IndexedDB...")
+        seeded = _seed_registry_from_indexeddb()
+        if seeded == 0:
+            print("[push_chat] no chats found in IndexedDB. "
+                  "Is Teams installed and has the user signed in?", file=sys.stderr)
+            return 2
+        print(f"[push_chat] seeded {seeded} chat(s) into registry")
+        rows = store.list_chat_registry(order="activity")
     # store.list_chat_registry returns sqlite3.Row; flatten to plain dicts
     # so .get() works downstream (Row only supports __getitem__).
     chat_lookup: dict[str, dict] = {
