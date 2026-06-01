@@ -132,40 +132,37 @@ _NORM_RE = re.compile(r"[^\w\s]+")
 TEAMS_PROC_NAMES = {"ms-teams.exe", "teams.exe", "msteams.exe"}
 
 
-def _teams_in_call() -> tuple[bool, str]:
-    """Return (is_active, reason) using Windows Audio Session API.
+def _teams_audio_state() -> tuple[int, str]:
+    """Return (best_state, reason) for the current Teams audio session.
 
-    The trigger fires when Teams has an audio session in state Inactive (0)
-    OR Active (1). That covers the full call lifecycle: ringing (Teams opens
-    the session to play the ringtone), dialing out, in-call, mid-call silence
-    between speakers. State Expired (2) and "no Teams session at all" are
-    treated as NOT in a call — chat-only Teams use does not create an audio
-    session, so the gate stays shut and we don't record idle Teams.
+    best_state values:
+        1  = Active   — audio is actively streaming (real call in progress)
+        0  = Inactive — session open but no audio flowing (ring, dial, silence)
+       -1  = None     — no Teams audio session at all
 
-    Restricting to state Active=1 (the old behavior) used to miss the first
-    14+ minutes of client-initiated calls where the dev sat with the meeting
-    room open but no audio flowed yet (state Inactive). Now we accept that.
+    Two callers use this with different thresholds:
+        _teams_call_started() — requires state 1 (Active) to START recording.
+            Prevents ringing / notification sounds from triggering a recording.
+        _teams_in_call()      — accepts state 0 or 1 to KEEP recording.
+            Prevents mid-call silences from stopping an in-progress recording.
 
     Process scope stays locked to ms-teams.exe / teams.exe / msteams.exe
     (see [[nn-recording-scope]] — do not widen without Titu's greenlight).
 
-    Fail-closed: if we can't query audio sessions for any reason, return
-    (False, error) so the gate stays on. Pass --allow-any-call to bypass.
+    Fail-closed: returns (-1, error) on any exception so both callers
+    treat the state as "not in call" and the gate stays shut.
     """
     try:
         from pycaw.pycaw import AudioUtilities  # lazy
     except Exception as e:
-        return (False, f"pycaw import failed: {e}")
+        return (-1, f"pycaw import failed: {e}")
     try:
         sessions = AudioUtilities.GetAllSessions()
     except Exception as e:
-        return (False, f"GetAllSessions failed: {e}")
-    # State 0 = Inactive (session open, no audio flowing yet — common during
-    #            ring, dialing, mid-call silence between speakers),
-    # State 1 = Active   (audio streaming),
-    # State 2 = Expired  (session is dormant / call genuinely over). Reject 2.
-    ACCEPTED_STATES = (0, 1)
+        return (-1, f"GetAllSessions failed: {e}")
     state_labels = {0: "Inactive", 1: "Active", 2: "Expired"}
+    best = -1
+    best_reason = "no Teams audio session"
     for s in sessions:
         if not s.Process:
             continue
@@ -173,9 +170,33 @@ def _teams_in_call() -> tuple[bool, str]:
             name = (s.Process.name() or "").lower()
         except Exception:
             continue
-        if name in TEAMS_PROC_NAMES and s.State in ACCEPTED_STATES:
-            return (True, f"{name} state={state_labels[s.State]}")
-    return (False, "no Teams audio session (Active or Inactive)")
+        if name in TEAMS_PROC_NAMES and s.State in (0, 1):
+            if s.State > best:
+                best = s.State
+                best_reason = f"{name} state={state_labels[s.State]}"
+    return (best, best_reason)
+
+
+def _teams_call_started() -> tuple[bool, str]:
+    """True only when Teams audio is ACTIVE (state 1) — real audio flowing.
+
+    Used for the rising-edge START trigger. Requiring Active prevents
+    ringing, notification sounds, and background Teams processes from
+    starting a recording when no actual call is in progress.
+    """
+    state, reason = _teams_audio_state()
+    return (state == 1, reason)
+
+
+def _teams_in_call() -> tuple[bool, str]:
+    """True when Teams audio is Active OR Inactive (states 1 or 0).
+
+    Used for the KEEP-ALIVE check once recording has started. Accepting
+    Inactive prevents mid-call silences (when neither party is speaking)
+    from triggering the stop debounce and cutting the recording short.
+    """
+    state, reason = _teams_audio_state()
+    return (state >= 0, reason)
 
 
 def _normalize(s: str) -> str:
@@ -251,12 +272,12 @@ def _start_recording(state: dict) -> None:
             print("[voice] already recording, ignoring start.")
             return
         if not state.get("allow_any_call", False):
-            ok, reason = _teams_in_call()
+            ok, reason = _teams_call_started()
             if not ok:
                 print(f"[voice] start gated: {reason}. "
                       f"Pass --allow-any-call to disable the gate.")
                 return
-            print(f"[voice] Teams gate OK: {reason}")
+            print(f"[voice] Teams gate OK (Active audio): {reason}")
             excluded, exc_reason = _excluded_active_call()
             if excluded:
                 print(f"[voice] start gated: {exc_reason}. "
@@ -307,13 +328,14 @@ def _audio_session_watcher(state: dict, stop_evt: threading.Event,
                            max_call_seconds: int = 7200) -> None:
     """Background thread: drive start/stop purely from Teams audio-session state.
 
-    Rising edge (off->on)  : start recording immediately (capture from t=0).
-    Falling edge debounced : stop after `stop_debounce` consecutive off polls
-                             so brief mid-call session blips don't end the
-                             recording prematurely.
-    Hard cap               : if a single recording exceeds max_call_seconds,
-                             stop it. Does not auto-resume — safety guard
-                             against a stuck Active state in pycaw.
+    Rising edge  : fires only when Teams audio is ACTIVE (state 1) — real
+                   audio flowing. Ringing, notifications, and background
+                   Teams processes (state Inactive=0) do NOT start a recording.
+    Keep-alive   : accepts Active OR Inactive so mid-call silences between
+                   speakers don't trigger the stop debounce.
+    Falling edge : stop after `stop_debounce` consecutive polls where Teams
+                   has no audio session at all (state Expired/gone).
+    Hard cap     : stop after max_call_seconds regardless, guards stuck state.
     """
     print(f"[voice] auto watcher: poll={poll_interval_s}s, "
           f"stop_debounce={stop_debounce} polls, "
@@ -322,14 +344,22 @@ def _audio_session_watcher(state: dict, stop_evt: threading.Event,
     off_streak = 0
     while not stop_evt.is_set():
         try:
-            active, reason = _teams_in_call()
+            # START gate: Active only (real audio flowing)
+            can_start, start_reason = _teams_call_started()
+            # KEEP-ALIVE gate: Active or Inactive (call is live, even if silent)
+            in_call, reason = _teams_in_call()
         except Exception as e:
-            print(f"[voice] watcher: _teams_in_call errored: {e}")
-            active = False
+            print(f"[voice] watcher: state check errored: {e}")
+            can_start = False
+            in_call = False
             reason = f"watcher exception: {e}"
+            start_reason = reason
 
-        if active and not last_active:
-            print(f"[voice] watcher: rising edge — {reason}")
+        # Use can_start for rising edge, in_call for keep-alive/falling edge
+        active = in_call
+
+        if can_start and not last_active:
+            print(f"[voice] watcher: rising edge (Active audio) — {start_reason}")
             _start_recording(state)
             off_streak = 0
         elif active:
