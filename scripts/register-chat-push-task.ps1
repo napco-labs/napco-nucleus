@@ -160,9 +160,9 @@ function Register-ChatPush {
     # wiped this name, but we've seen sporadic cases (parens in task
     # name + cmd /c quoting subtleties) where Evening specifically
     # survived cleanup and Register-ScheduledTask hit "Cannot create
-    # a file when that file already exists". Use schtasks directly
-    # (not via cmd /c) so PowerShell handles the quoting cleanly.
-    & schtasks.exe /Delete /TN $Name /F 2>$null | Out-Null
+    # a file when that file already exists". Use cmd /c to avoid
+    # PS5.1 NativeCommandError when the task doesn't exist yet.
+    Invoke-SchtasksDelete -Name $Name
 
     try {
         Register-ScheduledTask `

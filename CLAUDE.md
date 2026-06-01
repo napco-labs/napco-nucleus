@@ -49,7 +49,8 @@ This drops a sentinel file the recorder polls every ~0.5s. The recorder closes t
 
 | Developer says | You run |
 |---|---|
-| "push my chat now" / "send chat to central" | `scripts\push-chat.bat` (last 15 min) — Scheduled Task names are now split: `'NAPCO Nucleus - Chat Push (Day)'` and `'NAPCO Nucleus - Chat Push (Evening)'`. |
+| "push my chat now" / "send chat to central" | `py -3 -m teams.push_chat --last-minutes 15` |
+| "send now" / "pipeline now" / "run pipeline" | Force full pipeline + email immediately: (1) push latest chat, (2) trigger pipeline on .123 only if call transcripts exist, (3) send email. Run these in order: `py -3 -m teams.push_chat --last-minutes 60` then SSH to .123: `ssh ubuntu@172.16.205.123 "cd /home/ubuntu/napco-nucleus && touch /srv/nucleus-central/.pipeline_trigger"` — the draft-loop picks it up within 2 min. If no transcript exists yet, tell the user: transcription is still running, check back later. |
 | "verify install" / "check setup" | `py -3 -m tools.healthcheck` |
 | "run it right now for X" / "do it right now X" | `py -3 do_it_now.py --client "X" --last-minutes 60` (defer to wider window if X is a multi-day client) |
 | "review the draft" / "review session" | `py -3 -m tools.review_session` |
@@ -64,7 +65,7 @@ This drops a sentinel file the recorder polls every ~0.5s. The recorder closes t
 - **Goal**: turn multi-channel client communications (Teams chat, Teams audio, email + attachments, Google Drive files) into a verified requirements doc + a Gmail draft to the client.
 - **Topology** (since 2026-05-14 migration): each dev's machine captures and pushes; the **central host** is `172.16.205.123` (Ubuntu Linux, docker-compose stack) — six containers handle Samba share, transcribe loop, email + Drive stagers, the daily-draft Claude pass, and a GHA runner. The old MVPACCESS box (`.209`) is retired from Nucleus duty but kept alive for unrelated work.
 - **Central share**: `\\172.16.205.123\nucleus-central\<dev>\<date>\` — chat .docx, attachments, call .wav + metadata.
-- **Daily auto-fire** at 23:45 BD inside `nucleus-daily-draft` container runs `collect_central.py --client all --last-minutes 1440` (NOT `do_it_now.py` — that one SSHes to self).
+- **Pipeline trigger**: event-driven — fires automatically after each call is transcribed (no fixed clock time). `nucleus-transcribe` writes `/data/nucleus-central/.pipeline_trigger` on completion; `nucleus-daily-draft` polls every 2 min and runs `collect_central.py --client all` + sends email. RULE: never sends without call transcript data — 90% of requirements come from calls. Manual trigger: say "send now" (see commands above).
 - **Call recording trigger**: default is **automatic on Teams audio-session edge** (no phrase needed). Verbal phrases ("Assalamualaikum" / "Allah Hafez" / "nucleus start"...) remain armed as fallback, including the typed commands in the section above.
 - **Recording scope**: MS Teams ONLY (`ms-teams.exe`, `teams.exe`, `msteams.exe`). Never widen to Zoom / Google Meet / etc. without explicit user greenlight.
 - **Memory DB**: `nucleus_memory.db` (SQLite) holds `requirements_seen`, `activity_logs`, `requirement_reviews`, etc. On `.123` it's a named docker volume at `/state/`; on dev machines it's in `data/`.
