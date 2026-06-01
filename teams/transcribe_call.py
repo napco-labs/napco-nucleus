@@ -39,12 +39,10 @@ COMPUTE_TYPE = "int8"
 # Domain-specific primer — helps Whisper recognise NAPCO/AEL names and
 # mixed Bangla-English technical vocabulary before it sees any audio.
 INITIAL_PROMPT = (
-    "Requirements discussion between NAPCO Security and AEL team. "
-    "Participants: Titu, Assad, Rocky, Ferdows, Atik, Isruk, Amin, "
+    "NAPCO Security, MVP Access, AEL, Dashboard, OpenProject, HTS, DVR, Arcules. "
+    "Titu, Assad, Rocky, Ferdows, Atik, Isruk, Amin, "
     "Michael Carrieri, Salman Firoz, Richard Goldsobel, Robert Zhu, Siva. "
-    "Topics: MVP Access, Dashboard, requirements, features, sprint, deadline, "
-    "approval, verification, backlog, user story, deployment, staging, bugfix. "
-    "Conversation mixes Bangla and English freely."
+    "requirements, sprint, deadline, approval, verification, deployment, staging."
 )
 
 
