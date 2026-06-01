@@ -36,6 +36,17 @@ MODEL_NAME = "large-v3"
 DEVICE = "cpu"
 COMPUTE_TYPE = "int8"
 
+# Domain-specific primer — helps Whisper recognise NAPCO/AEL names and
+# mixed Bangla-English technical vocabulary before it sees any audio.
+INITIAL_PROMPT = (
+    "Requirements discussion between NAPCO Security and AEL team. "
+    "Participants: Titu, Assad, Rocky, Ferdows, Atik, Isruk, Amin, "
+    "Michael Carrieri, Salman Firoz, Richard Goldsobel, Robert Zhu, Siva. "
+    "Topics: MVP Access, Dashboard, requirements, features, sprint, deadline, "
+    "approval, verification, backlog, user story, deployment, staging, bugfix. "
+    "Conversation mixes Bangla and English freely."
+)
+
 
 def find_latest_session(calls_dir: Path) -> str | None:
     sessions = sorted({p.name.split("_")[0] for p in calls_dir.glob("*_mic.wav")})
@@ -49,11 +60,13 @@ def load_model() -> WhisperModel:
 def transcribe(model: WhisperModel, wav: Path, label: str) -> list[dict]:
     segments, info = model.transcribe(
         str(wav),
-        task="translate",
-        language="bn",
-        beam_size=1,
+        task="translate",       # always output English regardless of input language
+        language=None,          # auto-detect per window — handles Bangla+English mix
+        beam_size=5,            # was 1; higher = more accurate, ~2x slower
+        initial_prompt=INITIAL_PROMPT,
         vad_filter=True,
         vad_parameters={"min_silence_duration_ms": 500},
+        condition_on_previous_text=True,
     )
     print(f"  [{label}] detected={info.language!r} ({info.language_probability:.2f})")
     out = []
