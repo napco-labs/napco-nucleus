@@ -324,44 +324,64 @@ def _stop_recording(state: dict, reason: str = "") -> None:
 
 def _audio_session_watcher(state: dict, stop_evt: threading.Event,
                            poll_interval_s: float = 2.0,
-                           stop_debounce: int = 2,
+                           stop_debounce: int = 15,
+                           start_confirm: int = 3,
                            max_call_seconds: int = 7200) -> None:
     """Background thread: drive start/stop purely from Teams audio-session state.
 
-    Rising edge  : fires only when Teams audio is ACTIVE (state 1) — real
-                   audio flowing. Ringing, notifications, and background
-                   Teams processes (state Inactive=0) do NOT start a recording.
-    Keep-alive   : accepts Active OR Inactive so mid-call silences between
-                   speakers don't trigger the stop debounce.
-    Falling edge : stop after `stop_debounce` consecutive polls where Teams
-                   has no audio session at all (state Expired/gone).
+    Rising edge  : fires after `start_confirm` consecutive polls where Teams
+                   audio is Active OR Inactive (ringing counts). Requiring
+                   multiple consecutive polls filters out brief notification
+                   sounds (< 4s) while still catching real calls (ring 5+ s).
+    Keep-alive   : accepts Active OR Inactive so mid-call silences don't stop.
+    Falling edge : stop after `stop_debounce` (15) consecutive off polls = 30s.
+                   This prevents mid-call drops from brief audio-session blips.
+    Auto-resume  : on daemon restart, if Teams is already in a call (Active or
+                   Inactive), start recording immediately without waiting for a
+                   rising edge so no call audio is missed after a watchdog restart.
     Hard cap     : stop after max_call_seconds regardless, guards stuck state.
     """
     print(f"[voice] auto watcher: poll={poll_interval_s}s, "
-          f"stop_debounce={stop_debounce} polls, "
+          f"stop_debounce={stop_debounce} polls ({stop_debounce*poll_interval_s:.0f}s), "
+          f"start_confirm={start_confirm} polls ({start_confirm*poll_interval_s:.0f}s), "
           f"hard_cap={max_call_seconds}s")
     last_active = False
     off_streak = 0
+    on_streak = 0   # consecutive polls where Teams is in call (for start_confirm)
+
+    # Auto-resume on restart: if Teams is already in a call when the daemon
+    # starts (e.g. watchdog restarted us mid-call), begin recording immediately.
+    try:
+        already_in, reason = _teams_in_call()
+        if already_in:
+            print(f"[voice] watcher: Teams already in call on startup — "
+                  f"auto-resuming recording ({reason})")
+            _start_recording(state)
+            last_active = True
+            on_streak = start_confirm
+    except Exception:
+        pass
+
     while not stop_evt.is_set():
         try:
-            # START gate: Active only (real audio flowing)
-            can_start, start_reason = _teams_call_started()
-            # KEEP-ALIVE gate: Active or Inactive (call is live, even if silent)
+            # KEEP-ALIVE gate: Active or Inactive (ringing + active = real call)
             in_call, reason = _teams_in_call()
         except Exception as e:
             print(f"[voice] watcher: state check errored: {e}")
-            can_start = False
             in_call = False
             reason = f"watcher exception: {e}"
-            start_reason = reason
 
-        # Use can_start for rising edge, in_call for keep-alive/falling edge
         active = in_call
 
-        if can_start and not last_active:
-            print(f"[voice] watcher: rising edge (Active audio) — {start_reason}")
-            _start_recording(state)
-            off_streak = 0
+        if active and not last_active:
+            # Rising edge candidate — require start_confirm consecutive polls
+            # to filter brief notification sounds (< start_confirm * poll_interval)
+            on_streak += 1
+            if on_streak >= start_confirm:
+                print(f"[voice] watcher: rising edge confirmed "
+                      f"({on_streak} polls) — {reason}")
+                _start_recording(state)
+                off_streak = 0
         elif active:
             off_streak = 0
             started_at = state.get("call_started_at")
@@ -381,13 +401,15 @@ def _audio_session_watcher(state: dict, stop_evt: threading.Event,
                     stop_evt.wait(poll_interval_s)
                     continue
         else:
+            on_streak = 0   # reset start confirmation counter
             if last_active:
                 off_streak += 1
                 if off_streak >= stop_debounce:
                     proc = state.get("proc")
                     if proc is not None and proc.poll() is None:
                         print(f"[voice] watcher: falling edge "
-                              f"(off for {off_streak} polls) — {reason}")
+                              f"(off for {off_streak} polls = "
+                              f"{off_streak*poll_interval_s:.0f}s) — {reason}")
                         _stop_recording(state, reason="session ended")
                     off_streak = 0
                     last_active = False
@@ -397,6 +419,7 @@ def _audio_session_watcher(state: dict, stop_evt: threading.Event,
 
         if active:
             last_active = True
+            on_streak = start_confirm  # already confirmed, keep at threshold
         stop_evt.wait(poll_interval_s)
 
 

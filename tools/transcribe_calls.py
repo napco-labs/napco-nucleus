@@ -422,8 +422,12 @@ def main() -> int:
     ap.add_argument("--dry-run", action="store_true",
                     help="List pending sessions without transcribing.")
     ap.add_argument("--no-groq", action="store_true",
-                    help="Skip Groq entirely, use local faster-whisper "
-                         "directly. For debugging / Groq outages.")
+                    help="Deprecated — faster-whisper is now the default. "
+                         "Has no effect.")
+    ap.add_argument("--groq", action="store_true",
+                    help="Use Groq API as primary (faster but poor Bangla "
+                         "quality). Requires GROQ_API_KEY. Falls back to "
+                         "faster-whisper on failure.")
     args = ap.parse_args()
 
     root = _central_root()
@@ -434,7 +438,9 @@ def main() -> int:
         print(f"Central path not reachable: {root}", file=sys.stderr)
         return 2
 
-    use_groq = not args.no_groq and bool(os.getenv("GROQ_API_KEY"))
+    # faster-whisper is primary — Groq quality for Bangla is poor.
+    # Pass --groq to force Groq (e.g. when CPU is overloaded and speed matters).
+    use_groq = args.no_groq is False and getattr(args, 'groq', False) and bool(os.getenv("GROQ_API_KEY"))
     backend_hint = "Groq + faster-whisper fallback" if use_groq else "faster-whisper only"
     print(f"Transcribe calls — central={root}  days={args.days}  backend={backend_hint}")
 
