@@ -292,10 +292,15 @@ def _transcribe_chunk(model, chunk_path: Path, offset_s: float,
                       label: str) -> list[dict]:
     """Run faster-whisper on one chunk and return segment dicts with
     timestamps adjusted to the parent file's clock."""
+    # Default to translate->English: for these mixed Bangla/English call
+    # recordings, faster-whisper's translate head produces far cleaner,
+    # requirement-bearing text than Bangla transcribe + downstream MT
+    # (Google bn-BD hallucinated nursery rhymes on this audio).
+    fw_task = os.getenv("NUCLEUS_FW_TASK", "translate")
     segments_iter, _info = model.transcribe(
         str(chunk_path),
-        task="transcribe",  # Claude handles translation downstream
-        language="bn",
+        task=fw_task,
+        language=(None if fw_task == "translate" else "bn"),
         beam_size=1,
         vad_filter=True,
         vad_parameters={"min_silence_duration_ms": 500},
@@ -386,10 +391,11 @@ def _transcribe_call(mic: Path | None, speaker: Path | None,
                      stamp: str) -> list[str]:
     """Return body lines for the MEETING section.
 
-    Two backends, Groq primary + faster-whisper fallback (mirrors the
-    pattern in tools/transcribe_calls.py). Groq's translations endpoint
-    returns English directly so the session doc carries English when
-    Groq succeeds, Bangla verbatim when faster-whisper handles it.
+    Two backends, faster-whisper primary + optional Groq (mirrors the
+    pattern in tools/transcribe_calls.py). Groq is opt-in via
+    NUCLEUS_USE_GROQ=1; its translations endpoint returns English
+    directly, but its Bangla quality is poor, so by default we use
+    faster-whisper and keep Bangla verbatim for Claude to translate.
 
     Faster-whisper path (fallback) — two-pass design:
       1. faster-whisper large-v3 transcribes each track to the SOURCE
@@ -435,14 +441,35 @@ def _transcribe_call(mic: Path | None, speaker: Path | None,
     except ValueError:
         started = None
 
-    groq_result = _try_groq_transcribe(mic, speaker, started)
-    if groq_result is not None:
-        return groq_result
+    # Transcription cascade: Google STT -> faster-whisper -> Groq.
+    # Google is primary (best Bangla quality, cloud, no local OOM);
+    # faster-whisper is the local fallback; Groq is last resort. All
+    # three emit Bangla verbatim for Claude to translate downstream.
 
-    # ── faster-whisper fallback ────────────────────────────────────
+    # ── 1. Google STT (primary) ────────────────────────────────────
+    if os.getenv("GOOGLE_STT_CREDENTIALS") or os.getenv("GOOGLE_STT_API_KEY"):
+        try:
+            from tools.google_stt import google_transcribe  # lazy
+            mic_segs = google_transcribe(mic, "You") if mic else []
+            spk_segs = google_transcribe(speaker, "Other") if speaker else []
+            all_segs = sorted(mic_segs + spk_segs, key=lambda s: s["start"])
+            if all_segs:
+                print(f"  transcribed via Google STT "
+                      f"({len(all_segs)} segments, bn-BD)")
+                return _segs_to_body_lines(all_segs, started,
+                                           source_label="Bangla")
+            print("  Google STT returned no speech; trying faster-whisper")
+        except Exception as e:
+            print(f"  Google STT failed: {e}; falling back to faster-whisper")
+
+    # ── 2. faster-whisper (secondary) ──────────────────────────────
     try:
         from faster_whisper import WhisperModel  # lazy
     except ImportError:
+        # ── 3. Groq (tertiary) — only when faster-whisper is absent ─
+        groq_result = _try_groq_transcribe(mic, speaker, started)
+        if groq_result is not None:
+            return groq_result
         return [f"(faster-whisper not installed; raw WAVs at {mic} / {speaker})"]
 
     chunk_seconds = int(os.environ.get("NUCLEUS_TRANSCRIBE_CHUNK_S", "300"))
@@ -526,7 +553,9 @@ def _transcribe_call(mic: Path | None, speaker: Path | None,
     print(f"  transcription done in {elapsed:.1f}s wall-clock")
 
     all_segs.sort(key=lambda s: s["start"])
-    return _segs_to_body_lines(all_segs, started, source_label="Bangla")
+    fw_label = "English" if os.getenv(
+        "NUCLEUS_FW_TASK", "translate") == "translate" else "Bangla"
+    return _segs_to_body_lines(all_segs, started, source_label=fw_label)
 
 
 def _read_chat_docx_lines(path: Path) -> list[str]:

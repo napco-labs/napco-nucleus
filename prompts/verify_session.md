@@ -27,6 +27,20 @@ If `section_count == 0` → STOP and report "Session is empty — no pulls have 
 
 Otherwise capture `session_path`, `sections`, and `content` for the next step.
 
+### 1.1 Normalize to English — translate, then reorganise (mandatory)
+
+The session is often mixed Bangla + English (Teams calls are usually Bangla; NAPCO Security clients speak English; ASR adds noise). Before identifying anything, build a clean English working text:
+
+1. **Translate** every Bangla passage to natural English. Keep technical terms and proper nouns verbatim — product/page names (e.g. LIF, MVP Access), feature terms (SSO, Azure AD, Milestone DVR, partition/zone/area), people, numbers. English passages stay as-is.
+2. **Reorganise** the translated text into a coherent, de-noised narrative grouped by source section. Drop filler, ASR garble, and clearly off-topic chatter — but NEVER invent or infer content that isn't there.
+3. Preserve speaker/source attribution and the source IDs so step 2 can cite them verbatim.
+
+Do all subsequent steps (client resolution, requirement extraction) against this English working text, not the raw Bangla/ASR transcript.
+
+**Speaker roles in MEETING/call sections (critical):** lines labelled **`Other`** are the **external client's voice** (captured from the speaker output) — this is where the requirements live; mine it hard. Lines labelled **`You`** are the internal AEL/dev side (acknowledgements, clarifying questions) — useful context, but the client's asks come from `Other`. If one track is empty/sparse, rely on the other; never conclude "no requirements" just because the dev side is quiet.
+
+**Be thorough — these calls are requirement-dense.** A 25–40 min technical call typically contains MANY distinct asks (auth/SSO, API/Swagger docs, integrations, DVR/camera plugins, permissions/roles, UI/menu changes, reporting, ticketing). Extract EACH distinct ask as its own item — do not collapse a whole call into one requirement. Phrase every requirement as a **concrete, workable task**: an actionable statement of what must be built/changed (e.g. "Add Azure AD single sign-on to the login flow", "Expose Swagger API docs behind authenticated access"), not a vague topic. If the audio is noisy, still extract every ask you can defensibly support from the text; flag low-confidence ones rather than dropping them silently.
+
 ### 1.5 Identify the client(s) in scope (mandatory before identify)
 
 Before extracting requirements, identify which client(s) the session is about. NAPCO Nucleus serves **multiple clients** — resolve `client_name` per-message using these conventions:

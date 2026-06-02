@@ -39,6 +39,13 @@ def append_draft(msg: EmailMessage, *,
              replaced: int — count of stale drafts removed}
     Never raises — IMAP errors are caught and surfaced in the dict.
     """
+    if os.getenv("NUCLEUS_SKIP_IMAP_DRAFT", "").strip().lower() in (
+            "1", "true", "yes"):
+        # Direct-send-to-team is the delivery path now; the per-client
+        # Gmail draft is redundant (recipients are already on the CC).
+        return {"appended": False, "folder": None, "error": None,
+                "skipped": "NUCLEUS_SKIP_IMAP_DRAFT set"}
+
     host = (os.getenv("REQ_IMAP_HOST") or "imap.gmail.com").strip()
     port = int(os.getenv("REQ_IMAP_PORT", "993"))
     user = (os.getenv("REQ_IMAP_USER") or "").strip()
