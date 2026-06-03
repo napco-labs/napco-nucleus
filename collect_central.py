@@ -385,10 +385,11 @@ def _transcribe_call(mic: Path | None, speaker: Path | None,
         if all_segs:
             print(f"  transcribed via Google STT ({len(all_segs)} segments)")
             return _segs_to_body_lines(all_segs, started, source_label="Bangla")
-        return ["(Google STT returned no speech — check audio file)"]
+        return ["(no speech detected in call audio)"]
     except Exception as e:
         print(f"  Google STT failed: {e}", file=sys.stderr)
-        return [f"(transcription failed: {e})"]
+        return ["(call audio could not be transcribed — "
+                "requirements from this call may be missing)"]
 
 
 def _read_chat_docx_lines(path: Path) -> list[str]:

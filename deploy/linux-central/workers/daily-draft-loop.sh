@@ -1,29 +1,33 @@
 #!/bin/bash
-# Requirement pipeline + email — fires after call transcription completes.
+# Requirement pipeline + email — fires after call transcription completes,
+# OR at DAILY_DRAFT_TARGET_TIME as a catch-all even if no trigger arrived.
 #
 # RULE: never send email without call transcript data.
 # 90% of requirements come from calls. Email only fires when at least
 # one call transcript exists for the current lookback window.
 #
-# Flow:
-#   transcribe-loop.sh writes /data/nucleus-central/.pipeline_trigger
-#   after transcribing >= 1 session. This loop polls every 2 minutes.
-#   When trigger found:
-#     1. Verify at least 1 call transcript exists — abort if none
-#     2. Delete trigger
-#     3. Run collect_central.py (collects transcripts + chat + email)
-#     4. Send email (always — even if 0 requirements found, but only
-#        when call data is present)
+# Two trigger paths:
+#   1. EVENT:  transcribe-loop.sh writes .pipeline_trigger after transcribing
+#              >= 1 session. Fires within 2 min of transcription completing.
+#   2. CLOCK:  fires once per BD calendar day at DAILY_DRAFT_TARGET_TIME
+#              (default 00:05) as a safety catch-all — ensures the pipeline
+#              runs even if the event trigger was missed (e.g. transcribe
+#              container was down all day and recovered late).
+#              Requires call transcripts to exist (same rule as event path).
 
 set -uo pipefail
 LOOKBACK_MINUTES="${DAILY_DRAFT_LOOKBACK_MINUTES:-1440}"
 POLL_SECONDS="${PIPELINE_POLL_SECONDS:-120}"
 TRIGGER_FILE="/data/nucleus-central/.pipeline_trigger"
 CENTRAL="/data/nucleus-central"
+CLOCK_TARGET="${DAILY_DRAFT_TARGET_TIME:-00:05}"
+LAST_CLOCK_RUN_DATE=""
 
 trap 'echo "[draft-loop] received SIGTERM, exiting"; exit 0' TERM INT
 
-echo "[draft-loop] starting — polling every ${POLL_SECONDS}s for transcription trigger"
+echo "[draft-loop] starting — polling every ${POLL_SECONDS}s"
+echo "[draft-loop] event trigger: ${TRIGGER_FILE}"
+echo "[draft-loop] clock catch-all: ${CLOCK_TARGET} BD daily"
 
 has_call_transcripts() {
     # Returns 0 (true) if at least 1 *_transcript.md exists in the last
@@ -40,34 +44,56 @@ has_call_transcripts() {
     return 1
 }
 
-while true; do
-    sleep "$POLL_SECONDS" &
-    wait $!
-
-    if [ ! -f "$TRIGGER_FILE" ]; then
-        continue
-    fi
-
-    echo "[draft-loop] trigger detected at $(date -Iseconds)"
-
-    if ! has_call_transcripts; then
-        echo "[draft-loop] no call transcripts in last ${LOOKBACK_MINUTES} min — skipping pipeline. Will retry next trigger."
-        rm -f "$TRIGGER_FILE"
-        continue
-    fi
-
-    echo "[draft-loop] call transcripts confirmed — running pipeline"
+run_pipeline() {
+    local reason="$1"
+    echo "[draft-loop] running pipeline — reason: ${reason}"
     rm -f "$TRIGGER_FILE"
 
     python collect_central.py --client all --last-minutes "$LOOKBACK_MINUTES"
-    rc=$?
-    echo "[draft-loop] collect_central.py exited rc=$rc"
+    local rc=$?
+    echo "[draft-loop] collect_central.py exited rc=${rc}"
 
     if [ -n "${NUCLEUS_ROLLUP_TO:-}" ]; then
         echo "[draft-loop] sending email"
         python -m mail.daily_rollup
-        echo "[draft-loop] email sent rc=$?"
+        echo "[draft-loop] email rc=$?"
     else
         echo "[draft-loop] NUCLEUS_ROLLUP_TO not set — skipping email"
     fi
+}
+
+while true; do
+    sleep "$POLL_SECONDS" &
+    wait $!
+
+    # ── Clock-based catch-all ─────────────────────────────────────
+    # Fires once per day at CLOCK_TARGET even if no event trigger arrived.
+    today=$(date +%Y-%m-%d)
+    current_hm=$(date +%H:%M)
+    if [[ "$current_hm" > "$CLOCK_TARGET" || "$current_hm" == "$CLOCK_TARGET" ]] \
+       && [[ "$LAST_CLOCK_RUN_DATE" != "$today" ]]; then
+        LAST_CLOCK_RUN_DATE="$today"
+        if has_call_transcripts; then
+            echo "[draft-loop] clock trigger at ${current_hm} BD (target ${CLOCK_TARGET})"
+            run_pipeline "clock:${CLOCK_TARGET}"
+        else
+            echo "[draft-loop] clock trigger at ${current_hm} — no transcripts in lookback window, skipping."
+        fi
+        continue
+    fi
+
+    # ── Event-based trigger ───────────────────────────────────────
+    if [ ! -f "$TRIGGER_FILE" ]; then
+        continue
+    fi
+
+    echo "[draft-loop] event trigger detected at $(date -Iseconds)"
+
+    if ! has_call_transcripts; then
+        echo "[draft-loop] no call transcripts in last ${LOOKBACK_MINUTES} min — skipping pipeline."
+        rm -f "$TRIGGER_FILE"
+        continue
+    fi
+
+    run_pipeline "event:transcription-complete"
 done

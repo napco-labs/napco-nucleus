@@ -197,10 +197,23 @@ def main() -> int:
         print("[rollup] --dry-run: not sending.")
         return 0
 
-    _send(msg, all_recipients=to_addrs + cc_addrs)
-    print(f"[rollup] sent to {len(to_addrs)} TO + {len(cc_addrs)} CC "
-          f"recipients.")
-    return 0
+    import time as _time
+    all_recipients = to_addrs + cc_addrs
+    for _attempt in range(2):
+        try:
+            _send(msg, all_recipients=all_recipients)
+            print(f"[rollup] sent to {len(to_addrs)} TO + {len(cc_addrs)} CC "
+                  f"recipients.")
+            return 0
+        except Exception as e:
+            if _attempt == 0:
+                print(f"[rollup] SMTP failed (attempt 1): {e} — retrying in 60s",
+                      file=sys.stderr)
+                _time.sleep(60)
+            else:
+                print(f"[rollup] SMTP failed (attempt 2): {e} — giving up.",
+                      file=sys.stderr)
+                return 1
 
 
 if __name__ == "__main__":

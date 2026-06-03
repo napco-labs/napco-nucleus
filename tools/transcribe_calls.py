@@ -72,6 +72,44 @@ def _day_dirs(root: Path, days: int) -> list[Path]:
     return out
 
 
+MAX_TRANSCRIBE_FAILURES = 5
+
+
+def _failure_count(calls_dir: Path, session: str) -> int:
+    p = calls_dir / f"{session}.transcribe_failures"
+    try:
+        return int(p.read_text().strip())
+    except Exception:
+        return 0
+
+
+def _increment_failure(calls_dir: Path, session: str) -> int:
+    p = calls_dir / f"{session}.transcribe_failures"
+    count = _failure_count(calls_dir, session) + 1
+    try:
+        p.write_text(str(count))
+    except OSError:
+        pass
+    return count
+
+
+def _write_failed_transcript(calls_dir: Path, session: str) -> None:
+    out = calls_dir / f"{session}_transcript.md"
+    try:
+        started = dt.datetime.strptime(session, "%Y%m%d-%H%M%S")
+    except ValueError:
+        started = dt.datetime.now()
+    with out.open("w", encoding="utf-8") as f:
+        f.write(f"# Call transcript — {session}\n\n")
+        f.write(f"_Started_: {started:%Y-%m-%d %H:%M}  \n")
+        f.write(f"_Status_: TRANSCRIPTION FAILED after "
+                f"{MAX_TRANSCRIBE_FAILURES} attempts — "
+                f"requirements from this call are unavailable.\n\n")
+        f.write("---\n\n")
+        f.write("(No transcript available — Google STT failed repeatedly. "
+                "Check audio quality and API credentials.)\n")
+
+
 def _pending_sessions(calls_dir: Path) -> list[str]:
     """Session prefixes (e.g. '20260513-203305') with metadata present
     but no transcript yet."""
@@ -283,7 +321,7 @@ def main() -> int:
                 technical_details={"pending": len(work)})
             return 0
 
-        ok, failed = 0, 0
+        ok, failed, skipped = 0, 0, 0
         for calls_dir, session in work:
             try:
                 _transcribe_session_via_google_stt(
@@ -294,15 +332,24 @@ def main() -> int:
                 ok += 1
                 print(f"  [google-stt] {session}")
             except Exception as e:
-                logger.exception("Google STT failed: %s/%s", calls_dir, session)
-                print(f"  FAILED {session}: {e}", file=sys.stderr)
-                failed += 1
+                count = _increment_failure(calls_dir, session)
+                print(f"  FAILED {session} (attempt {count}): {e}",
+                      file=sys.stderr)
+                if count >= MAX_TRANSCRIBE_FAILURES:
+                    print(f"  [poison-pill] {session} failed {count}x — "
+                          f"writing failed transcript to stop retrying.",
+                          file=sys.stderr)
+                    _write_failed_transcript(calls_dir, session)
+                    skipped += 1
+                else:
+                    failed += 1
 
-        print(f"  done: ok={ok}  failed={failed}")
+        print(f"  done: ok={ok}  failed={failed}  poison-pill={skipped}")
         memory.log_activity(
             task_name="transcribe-calls:run",
-            result=f"ok:{ok}/failed:{failed}",
-            technical_details={"ok": ok, "failed": failed, "days": args.days})
+            result=f"ok:{ok}/failed:{failed}/skipped:{skipped}",
+            technical_details={"ok": ok, "failed": failed,
+                               "skipped": skipped, "days": args.days})
         return 0 if failed == 0 else 1
 
 

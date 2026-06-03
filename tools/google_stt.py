@@ -119,13 +119,68 @@ def _recognize_chunk(chunk_path: Path, params: dict, headers: dict,
     if model:
         config["model"] = model
     body = {"config": config, "audio": {"content": content}}
-    r = requests.post(GOOGLE_STT_URL, params=params, headers=headers,
-                      json=body, timeout=300)
-    if r.status_code != 200:
+    import time as _time
+    for _attempt in range(3):
+        r = requests.post(GOOGLE_STT_URL, params=params, headers=headers,
+                          json=body, timeout=300)
+        if r.status_code == 200:
+            break
+        if r.status_code in (429, 500, 502, 503) and _attempt < 2:
+            wait = (5, 15)[_attempt]
+            print(f"  [google-stt] {r.status_code} on attempt {_attempt+1}; "
+                  f"retrying in {wait}s...")
+            _time.sleep(wait)
+            continue
         raise RuntimeError(f"Google STT {r.status_code}: {r.text[:300]}")
     payload = r.json()
     parts: list[str] = []
     for res in payload.get("results", []):
+        alts = res.get("alternatives") or []
+        if alts and (alts[0].get("transcript") or "").strip():
+            parts.append(alts[0]["transcript"].strip())
+    return " ".join(parts).strip()
+
+
+def _project_id() -> str:
+    """Project for the v2 recognizer path — from the SA JSON or env."""
+    creds = os.getenv("GOOGLE_STT_CREDENTIALS")
+    if creds and Path(creds).exists():
+        import json
+        pid = json.load(open(creds)).get("project_id")
+        if pid:
+            return pid
+    return os.getenv("GOOGLE_STT_PROJECT", "")
+
+
+def _recognize_chunk_v2(chunk_path: Path, params: dict, headers: dict,
+                        language: str, model: str, region: str,
+                        project: str) -> str:
+    """POST one <=55 s chunk to the Speech-to-Text v2 recognizer (Chirp 2
+    et al). Uses the `_` inline recognizer + autoDecodingConfig."""
+    import requests  # lazy
+    with open(chunk_path, "rb") as f:
+        content = base64.b64encode(f.read()).decode("ascii")
+    # Chirp 2 requires a SINGLE language code — multiple codes return a
+    # 400 on language_codes. bn-BD handles the mixed Bangla/English calls
+    # well on its own (it keeps English terms verbatim). Use "auto" via
+    # GOOGLE_STT_LANGUAGE if you want automatic language detection instead.
+    body = {
+        "config": {
+            "model": model,
+            "languageCodes": [language],
+            "features": {"enableAutomaticPunctuation": True},
+            "autoDecodingConfig": {},
+        },
+        "content": content,
+    }
+    url = (f"https://{region}-speech.googleapis.com/v2/projects/{project}"
+           f"/locations/{region}/recognizers/_:recognize")
+    r = requests.post(url, params=params, headers=headers, json=body,
+                      timeout=300)
+    if r.status_code != 200:
+        raise RuntimeError(f"Google STT v2 {r.status_code}: {r.text[:300]}")
+    parts: list[str] = []
+    for res in r.json().get("results", []):
         alts = res.get("alternatives") or []
         if alts and (alts[0].get("transcript") or "").strip():
             parts.append(alts[0]["transcript"].strip())
@@ -144,6 +199,11 @@ def google_transcribe(wav_path: Path | None, label: str,
     params, headers = _resolve_auth()
     language = language or os.getenv("GOOGLE_STT_LANGUAGE", DEFAULT_LANGUAGE)
     model = os.getenv("GOOGLE_STT_MODEL", DEFAULT_MODEL)
+    # Chirp / Chirp 2 live on the v2 API (best for Bangla); classic models
+    # (default, latest_long) stay on v1.
+    use_v2 = model.startswith("chirp")
+    region = os.getenv("GOOGLE_STT_REGION", "us-central1")
+    project = _project_id() if use_v2 else ""
 
     try:
         concurrency = max(1, int(os.getenv("GOOGLE_STT_CONCURRENCY", "8")))
@@ -152,7 +212,12 @@ def google_transcribe(wav_path: Path | None, label: str,
 
     def _do(item: tuple[Path, float]) -> dict | None:
         chunk_path, offset = item
-        text = _recognize_chunk(chunk_path, params, headers, language, model)
+        if use_v2:
+            text = _recognize_chunk_v2(chunk_path, params, headers,
+                                       language, model, region, project)
+        else:
+            text = _recognize_chunk(chunk_path, params, headers,
+                                    language, model)
         if not text:
             return None
         return {
