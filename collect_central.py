@@ -366,73 +366,9 @@ def _segs_to_body_lines(all_segs: list[dict],
     return lines
 
 
-def _try_groq_transcribe(mic: Path | None, speaker: Path | None,
-                         started: dt.datetime | None) -> list[str] | None:
-    """Try Groq for both tracks. Return body lines on success, None on
-    any failure (key missing, oversized file, Groq down, etc.) — caller
-    falls back to faster-whisper. ~30s per track on a typical call vs
-    ~10 min for CPU faster-whisper.
-    """
-    if not os.getenv("GROQ_API_KEY"):
-        return None
-    try:
-        from tools.transcribe_calls import _groq_translate  # lazy
-        mic_segs = _groq_translate(mic, label="You") if mic else []
-        spk_segs = _groq_translate(speaker, label="Other") if speaker else []
-        all_segs = sorted(mic_segs + spk_segs, key=lambda s: s["start"])
-        print(f"  transcribed via Groq ({len(all_segs)} segments, English)")
-        return _segs_to_body_lines(all_segs, started, source_label="English")
-    except Exception as e:
-        print(f"  Groq failed: {e}; falling back to faster-whisper")
-        return None
-
-
 def _transcribe_call(mic: Path | None, speaker: Path | None,
                      stamp: str) -> list[str]:
-    """Return body lines for the MEETING section.
-
-    Two backends, faster-whisper primary + optional Groq (mirrors the
-    pattern in tools/transcribe_calls.py). Groq is opt-in via
-    NUCLEUS_USE_GROQ=1; its translations endpoint returns English
-    directly, but its Bangla quality is poor, so by default we use
-    faster-whisper and keep Bangla verbatim for Claude to translate.
-
-    Faster-whisper path (fallback) — two-pass design:
-      1. faster-whisper large-v3 transcribes each track to the SOURCE
-         language (Bangla). Whisper's transcribe head is meaningfully
-         stronger than its translate head on Bangla — translation gets
-         done downstream by Claude where context can recover meaning.
-      2. The session doc retains Bangla verbatim so a Bangla-speaking
-         reviewer can audit the transcription quality directly.
-      3. The verify_session prompt already instructs Claude to translate
-         Bangla source material to English when extracting requirements.
-
-    Faster-whisper chunked parallel design (2026-05-11): each WAV is
-    split into chunk_seconds-long pieces (default 300s = 5 min) and
-    the chunks are transcribed in a ThreadPoolExecutor. CTranslate2
-    releases the GIL on CPU inference, so threads scale to ~cpu_count()
-    workers without the per-process model-loading penalty.
-
-    A 1-hour call (2 tracks × 12 chunks = 24 jobs) on a 4-8 core box
-    transcribes in ~15-25 min via faster-whisper, ~1 min via Groq.
-
-    Faster-whisper tuning per chunk:
-      - beam_size=1                       (fast)
-      - condition_on_previous_text=True   (better continuity within chunk)
-      - vad_filter=True                   (skip silence — big speedup)
-      - vad min_silence_duration_ms=500   (don't split mid-sentence)
-      - avg_logprob < -0.7 → "(uncertain)" marker so the reviewer's eye
-        lands on the lines that need verification
-
-    Configurable via env:
-      GROQ_API_KEY                       enables Groq primary (highly recommended)
-      GROQ_TEAMS_WHISPER_MODEL           Groq model override
-      NUCLEUS_TRANSCRIBE_CHUNK_S         faster-whisper chunk len (default 300)
-      NUCLEUS_TRANSCRIBE_WORKERS         max parallel threads (default
-                                          min(cpu_count, 4))
-
-    Falls back to a placeholder line if Whisper isn't available.
-    """
+    """Return body lines for the MEETING section using Google STT."""
     if not mic and not speaker:
         return ["(both tracks missing)"]
 
@@ -441,121 +377,18 @@ def _transcribe_call(mic: Path | None, speaker: Path | None,
     except ValueError:
         started = None
 
-    # Transcription cascade: Google STT -> faster-whisper -> Groq.
-    # Google is primary (best Bangla quality, cloud, no local OOM);
-    # faster-whisper is the local fallback; Groq is last resort. All
-    # three emit Bangla verbatim for Claude to translate downstream.
-
-    # ── 1. Google STT (primary) ────────────────────────────────────
-    if os.getenv("GOOGLE_STT_CREDENTIALS") or os.getenv("GOOGLE_STT_API_KEY"):
-        try:
-            from tools.google_stt import google_transcribe  # lazy
-            mic_segs = google_transcribe(mic, "You") if mic else []
-            spk_segs = google_transcribe(speaker, "Other") if speaker else []
-            all_segs = sorted(mic_segs + spk_segs, key=lambda s: s["start"])
-            if all_segs:
-                print(f"  transcribed via Google STT "
-                      f"({len(all_segs)} segments, bn-BD)")
-                return _segs_to_body_lines(all_segs, started,
-                                           source_label="Bangla")
-            print("  Google STT returned no speech; trying faster-whisper")
-        except Exception as e:
-            print(f"  Google STT failed: {e}; falling back to faster-whisper")
-
-    # ── 2. faster-whisper (secondary) ──────────────────────────────
     try:
-        from faster_whisper import WhisperModel  # lazy
-    except ImportError:
-        # ── 3. Groq (tertiary) — only when faster-whisper is absent ─
-        groq_result = _try_groq_transcribe(mic, speaker, started)
-        if groq_result is not None:
-            return groq_result
-        return [f"(faster-whisper not installed; raw WAVs at {mic} / {speaker})"]
-
-    chunk_seconds = int(os.environ.get("NUCLEUS_TRANSCRIBE_CHUNK_S", "300"))
-    try:
-        import multiprocessing
-        default_workers = min(multiprocessing.cpu_count(), 4)
-    except Exception:
-        default_workers = 4
-    try:
-        max_workers = max(1, int(os.environ.get(
-            "NUCLEUS_TRANSCRIBE_WORKERS", str(default_workers))))
-    except ValueError:
-        max_workers = default_workers
-
-    # `started` was set above (before the Groq attempt) so both paths
-    # share it; no need to recompute here.
-
-    # ── 1. Chunk both tracks ────────────────────────────────────
-    tmp_dir = Path((mic or speaker).parent) / f"_chunks_{stamp}"
-    jobs: list[tuple[Path, float, str]] = []
-    for wav, label in [(mic, "You"), (speaker, "Other")]:
-        if not wav:
-            continue
-        try:
-            for chunk_path, offset_s in _chunk_wav(
-                    wav, chunk_seconds=chunk_seconds, out_dir=tmp_dir):
-                jobs.append((chunk_path, offset_s, label))
-        except Exception as e:
-            print(f"  ! chunking failed for {wav}: {e}", file=sys.stderr)
-
-    if not jobs:
-        return ["(no audio chunks produced — check track files)"]
-
-    print(f"  transcribing {len(jobs)} chunk(s) of {chunk_seconds}s "
-          f"each, {max_workers} thread(s) parallel...")
-
-    # ── 2. Transcribe in parallel ───────────────────────────────
-    import concurrent.futures as _cf
-    import time as _time
-
-    model = WhisperModel("large-v3", device="cpu", compute_type="int8")
-    all_segs: list[dict] = []
-    started_at = _time.perf_counter()
-
-    try:
-        with _cf.ThreadPoolExecutor(max_workers=max_workers) as exe:
-            future_to_job = {
-                exe.submit(_transcribe_chunk, model, cp, off, lab):
-                    (cp, off, lab)
-                for (cp, off, lab) in jobs
-            }
-            done_count = 0
-            for fut in _cf.as_completed(future_to_job):
-                try:
-                    segs = fut.result()
-                    all_segs.extend(segs)
-                except Exception as e:
-                    cp, off, lab = future_to_job[fut]
-                    print(f"  ! chunk transcription failed "
-                          f"({cp.name} {lab} @+{off:.0f}s): {e}",
-                          file=sys.stderr)
-                done_count += 1
-                if done_count % max(1, len(jobs) // 10) == 0:
-                    print(f"  ...{done_count}/{len(jobs)} chunks done")
-    finally:
-        # ── 3. Cleanup the temporary chunk files ────────────────
-        try:
-            for cp, _off, _lab in jobs:
-                try:
-                    cp.unlink(missing_ok=True)
-                except OSError:
-                    pass
-            try:
-                tmp_dir.rmdir()
-            except OSError:
-                pass
-        except Exception:
-            pass
-
-    elapsed = _time.perf_counter() - started_at
-    print(f"  transcription done in {elapsed:.1f}s wall-clock")
-
-    all_segs.sort(key=lambda s: s["start"])
-    fw_label = "English" if os.getenv(
-        "NUCLEUS_FW_TASK", "translate") == "translate" else "Bangla"
-    return _segs_to_body_lines(all_segs, started, source_label=fw_label)
+        from tools.google_stt import google_transcribe  # lazy
+        mic_segs = google_transcribe(mic, "You") if mic else []
+        spk_segs = google_transcribe(speaker, "Other") if speaker else []
+        all_segs = sorted(mic_segs + spk_segs, key=lambda s: s["start"])
+        if all_segs:
+            print(f"  transcribed via Google STT ({len(all_segs)} segments)")
+            return _segs_to_body_lines(all_segs, started, source_label="Bangla")
+        return ["(Google STT returned no speech — check audio file)"]
+    except Exception as e:
+        print(f"  Google STT failed: {e}", file=sys.stderr)
+        return [f"(transcription failed: {e})"]
 
 
 def _read_chat_docx_lines(path: Path) -> list[str]:
