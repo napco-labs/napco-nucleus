@@ -92,15 +92,16 @@ services:
       - /srv/nucleus-central:/data/nucleus-central
 
   # ----------------------------------------------------------------
-  # Transcribe worker -- ports the MVPACCESS 2-min Scheduled Task.
-  # Walks /data/nucleus-central/*/<date>/calls/ for completed
-  # sessions (signal: <session>.json present + <session>_transcript.md
-  # missing). Uses Groq primary, faster-whisper fallback.
+  # Transcribe worker -- 2-min cadence. Walks central share for
+  # completed call sessions (signal: <session>.json present +
+  # <session>_transcript.md missing) and transcribes via Google STT.
   # ----------------------------------------------------------------
   transcribe:
     <<: *worker-base
     container_name: nucleus-transcribe
     command: ["/usr/local/lib/nucleus-workers/transcribe-loop.sh"]
+    mem_limit: 2g
+    mem_reservation: 256m
 
   # ----------------------------------------------------------------
   # Stage-email -- 15-min cadence. Captures Gmail content into central.
@@ -134,10 +135,10 @@ services:
     <<: *worker-base
     container_name: nucleus-daily-draft
     command: ["/usr/local/lib/nucleus-workers/daily-draft-loop.sh"]
-    # 5g was too tight: Rocky's 317 MB call → 7 faster-whisper chunks
-    # × 4 threads → OOM (exit 137) on 2026-05-22. 10g gives headroom
-    # for large-file fallback while still cgroup-isolating any runaway.
-    mem_limit: 10g
+    # faster-whisper removed (2026-06-03); pipeline now uses Google STT
+    # (cloud HTTP, no local model load). 4g is generous headroom for
+    # collect_central + Claude Agent SDK; isolates any runaway from host.
+    mem_limit: 4g
     mem_reservation: 512m
 
   # ----------------------------------------------------------------
