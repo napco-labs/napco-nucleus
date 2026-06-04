@@ -249,82 +249,6 @@ def _extract_image_text(path: Path) -> str:
     return f"(OCR returned empty text for {path.name})"
 
 
-_UNCERTAIN_LOGPROB = -0.7  # avg_logprob < this -> "(uncertain)" marker
-
-
-def _chunk_wav(wav_path: Path, *, chunk_seconds: int,
-               out_dir: Path) -> list[tuple[Path, float]]:
-    """Split a WAV file into chunk_seconds-long pieces using the
-    stdlib `wave` module. Returns [(chunk_path, start_offset_s), ...].
-
-    Chunks share the same sample rate / channels / bit depth as the
-    source so faster-whisper handles them identically to the
-    unchunked input."""
-    import wave  # stdlib, lazy
-    out_dir.mkdir(parents=True, exist_ok=True)
-    chunks: list[tuple[Path, float]] = []
-    with wave.open(str(wav_path), "rb") as w:
-        framerate = w.getframerate()
-        nchannels = w.getnchannels()
-        sampwidth = w.getsampwidth()
-        total_frames = w.getnframes()
-        duration = total_frames / framerate if framerate else 0
-        chunk_frames = int(chunk_seconds * framerate)
-        idx = 0
-        offset_frames = 0
-        while offset_frames < total_frames:
-            w.setpos(offset_frames)
-            n = min(chunk_frames, total_frames - offset_frames)
-            frames = w.readframes(n)
-            chunk_path = out_dir / f"{wav_path.stem}_chunk{idx:03d}.wav"
-            with wave.open(str(chunk_path), "wb") as cw:
-                cw.setnchannels(nchannels)
-                cw.setsampwidth(sampwidth)
-                cw.setframerate(framerate)
-                cw.writeframes(frames)
-            chunks.append((chunk_path, offset_frames / framerate))
-            offset_frames += n
-            idx += 1
-    return chunks
-
-
-def _transcribe_chunk(model, chunk_path: Path, offset_s: float,
-                      label: str) -> list[dict]:
-    """Run faster-whisper on one chunk and return segment dicts with
-    timestamps adjusted to the parent file's clock."""
-    # Default to translate->English: for these mixed Bangla/English call
-    # recordings, faster-whisper's translate head produces far cleaner,
-    # requirement-bearing text than Bangla transcribe + downstream MT
-    # (Google bn-BD hallucinated nursery rhymes on this audio).
-    fw_task = os.getenv("NUCLEUS_FW_TASK", "translate")
-    segments_iter, _info = model.transcribe(
-        str(chunk_path),
-        task=fw_task,
-        language=(None if fw_task == "translate" else "bn"),
-        beam_size=1,
-        vad_filter=True,
-        vad_parameters={"min_silence_duration_ms": 500},
-        condition_on_previous_text=True,
-    )
-    out: list[dict] = []
-    for s in segments_iter:
-        text = (s.text or "").strip()
-        if not text:
-            continue
-        logprob = getattr(s, "avg_logprob", None)
-        no_speech = getattr(s, "no_speech_prob", None)
-        uncertain = (
-            (logprob is not None and logprob < _UNCERTAIN_LOGPROB) or
-            (no_speech is not None and no_speech > 0.6)
-        )
-        out.append({
-            "start": s.start + offset_s,
-            "end": s.end + offset_s,
-            "text": text,
-            "speaker": label,
-            "uncertain": uncertain,
-        })
-    return out
 
 
 def _segs_to_body_lines(all_segs: list[dict],
@@ -332,7 +256,7 @@ def _segs_to_body_lines(all_segs: list[dict],
                         source_label: str = "Bangla") -> list[str]:
     """Render transcript segments as MEETING-section body lines.
 
-    Shared by both transcription paths (Groq + faster-whisper).
+    Renders Google STT segment dicts as MEETING-section body lines.
     source_label drives the header line so a reviewer knows what the
     session doc actually contains.
     """
