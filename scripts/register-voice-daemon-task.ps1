@@ -128,7 +128,7 @@ try {
         -Trigger $trigger `
         -Settings $settings `
         -Description "Autostart the Teams voice daemon at logon. Listens 24x7 for start/stop phrases; the Teams-active gate inside the daemon decides whether to record." `
-        -RunLevel Limited `
+        -RunLevel Highest `
         -ErrorAction Stop `
         | Out-Null
 } catch {
