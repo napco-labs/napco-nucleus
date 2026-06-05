@@ -54,37 +54,77 @@ STOP_FILE = Path(__file__).parent.parent / "data" / "teams" / ".stop_recording"
 _EXCL_MODE_PROP = "{b3f8fa53-0004-438e-9003-51a46e139bfc},6"
 _CAPTURE_REG_PATH = r"SOFTWARE\Microsoft\Windows\CurrentVersion\MMDevices\Audio\Capture"
 
+_HEADSET_KEYWORDS = [
+    "headset", "headphone", "logitech", "jabra", "plantronics",
+    "sennheiser", "bose", "hyperx", "corsair", "razer",
+]
 
-def _disable_exclusive_mode_all_capture_devices() -> None:
-    """Set AllowExclusiveMode=0 for every audio capture device in the registry.
 
-    Windows lets an app (e.g. Teams) grab a mic in exclusive mode, which
-    locks out all other apps.  This runs before every recording so the fix
-    applies regardless of which USB port or device the dev is using.
+def _find_headset_guid_via_pnp() -> str | None:
+    """Use PnP to find the current GUID of the connected headset mic.
+
+    Runs a PowerShell query so it discovers the device regardless of which
+    USB port it is plugged into.  Returns the trailing GUID from the
+    InstanceId (matches the key under MMDevices\\Audio\\Capture).
+    """
+    import re
+    import subprocess
+    script = r"""
+$devs = Get-PnpDevice -Class AudioEndpoint -ErrorAction SilentlyContinue
+foreach ($d in $devs) {
+    [PSCustomObject]@{
+        FriendlyName = $d.FriendlyName
+        InstanceId   = $d.InstanceId
+    }
+} | ConvertTo-Json -Depth 1
+"""
+    try:
+        out = subprocess.run(
+            ["powershell", "-NoProfile", "-Command", script],
+            capture_output=True, text=True, timeout=15,
+        ).stdout.strip()
+        if not out:
+            return None
+        import json
+        data = json.loads(out)
+        if isinstance(data, dict):
+            data = [data]
+        for item in data:
+            name = (item.get("FriendlyName") or "").lower()
+            if any(kw in name for kw in _HEADSET_KEYWORDS):
+                iid = item.get("InstanceId", "")
+                m = re.search(r"\{[0-9A-Fa-f\-]{36}\}$", iid)
+                if m:
+                    return m.group(0)
+    except Exception:
+        pass
+    return None
+
+
+def _disable_exclusive_mode_for_mic() -> None:
+    """Disable exclusive mode for the connected headset mic.
+
+    Queries PnP to find the headset's current device GUID (works on any
+    USB port), then writes AllowExclusiveMode=0 to the registry for that
+    specific device.  Runs before every recording — no manual fix needed
+    when devs switch ports or devices.
     Only runs on Windows; silently skips on other platforms.
     """
     if sys.platform != "win32":
         return
     try:
         import winreg
-        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, _CAPTURE_REG_PATH) as capture:
-            i = 0
-            while True:
-                try:
-                    dev_guid = winreg.EnumKey(capture, i)
-                except OSError:
-                    break
-                try:
-                    prop_path = f"{_CAPTURE_REG_PATH}\\{dev_guid}\\Properties"
-                    with winreg.OpenKey(
-                        winreg.HKEY_LOCAL_MACHINE, prop_path,
-                        access=winreg.KEY_SET_VALUE | winreg.KEY_READ,
-                    ) as props:
-                        winreg.SetValueEx(props, _EXCL_MODE_PROP, 0, winreg.REG_DWORD, 0)
-                except OSError:
-                    pass
-                i += 1
-        print("  [mic] exclusive mode disabled for all capture devices")
+        guid = _find_headset_guid_via_pnp()
+        if not guid:
+            print("  [mic] no headset found via PnP — skipping exclusive mode fix")
+            return
+        prop_path = f"{_CAPTURE_REG_PATH}\\{guid}\\Properties"
+        with winreg.OpenKey(
+            winreg.HKEY_LOCAL_MACHINE, prop_path,
+            access=winreg.KEY_SET_VALUE | winreg.KEY_READ,
+        ) as props:
+            winreg.SetValueEx(props, _EXCL_MODE_PROP, 0, winreg.REG_DWORD, 0)
+        print(f"  [mic] exclusive mode disabled for headset {guid}")
     except Exception as e:
         print(f"  [mic] exclusive mode fix skipped: {e}", file=sys.stderr)
 
@@ -397,7 +437,7 @@ def main() -> int:
     if STOP_FILE.exists():
         STOP_FILE.unlink()
 
-    _disable_exclusive_mode_all_capture_devices()
+    _disable_exclusive_mode_for_mic()
     p = pyaudio.PyAudio()
     try:
         loopback = resolve_loopback(p)
