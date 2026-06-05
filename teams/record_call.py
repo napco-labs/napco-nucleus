@@ -50,6 +50,44 @@ load_dotenv(Path(__file__).parent.parent / ".env", override=True)
 CHUNK = 1024
 STOP_FILE = Path(__file__).parent.parent / "data" / "teams" / ".stop_recording"
 
+# Registry property key that controls exclusive-mode on Windows audio capture devices.
+_EXCL_MODE_PROP = "{b3f8fa53-0004-438e-9003-51a46e139bfc},6"
+_CAPTURE_REG_PATH = r"SOFTWARE\Microsoft\Windows\CurrentVersion\MMDevices\Audio\Capture"
+
+
+def _disable_exclusive_mode_all_capture_devices() -> None:
+    """Set AllowExclusiveMode=0 for every audio capture device in the registry.
+
+    Windows lets an app (e.g. Teams) grab a mic in exclusive mode, which
+    locks out all other apps.  This runs before every recording so the fix
+    applies regardless of which USB port or device the dev is using.
+    Only runs on Windows; silently skips on other platforms.
+    """
+    if sys.platform != "win32":
+        return
+    try:
+        import winreg
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, _CAPTURE_REG_PATH) as capture:
+            i = 0
+            while True:
+                try:
+                    dev_guid = winreg.EnumKey(capture, i)
+                except OSError:
+                    break
+                try:
+                    prop_path = f"{_CAPTURE_REG_PATH}\\{dev_guid}\\Properties"
+                    with winreg.OpenKey(
+                        winreg.HKEY_LOCAL_MACHINE, prop_path,
+                        access=winreg.KEY_SET_VALUE | winreg.KEY_READ,
+                    ) as props:
+                        winreg.SetValueEx(props, _EXCL_MODE_PROP, 0, winreg.REG_DWORD, 0)
+                except OSError:
+                    pass
+                i += 1
+        print("  [mic] exclusive mode disabled for all capture devices")
+    except Exception as e:
+        print(f"  [mic] exclusive mode fix skipped: {e}", file=sys.stderr)
+
 
 def resolve_loopback(p: pyaudio.PyAudio) -> dict:
     speaker = p.get_device_info_by_index(p.get_default_output_device_info()["index"])
@@ -359,6 +397,7 @@ def main() -> int:
     if STOP_FILE.exists():
         STOP_FILE.unlink()
 
+    _disable_exclusive_mode_all_capture_devices()
     p = pyaudio.PyAudio()
     try:
         loopback = resolve_loopback(p)
