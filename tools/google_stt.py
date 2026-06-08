@@ -1,6 +1,7 @@
 """Google Cloud Speech-to-Text backend for call transcription.
 
-Primary engine in the Google -> faster-whisper -> Groq cascade.
+The SOLE call-transcription engine (faster-whisper removed 2026-06-08).
+Bangla->English is done downstream by Claude, not by the STT.
 
 Uses the v1 *synchronous* REST endpoint authenticated with a plain API
 key, so NO service account and NO GCS bucket are required (the
@@ -191,8 +192,8 @@ def google_transcribe(wav_path: Path | None, label: str,
                       language: str | None = None) -> list[dict]:
     """Transcribe one WAV track via Google STT. Returns segments
     [{start,end,text,speaker}] on a continuous timeline. Raises on a
-    hard failure (missing creds, ffmpeg error, API error) so the caller
-    can fall back to faster-whisper.
+    hard failure (missing creds, ffmpeg error, API error) — Google STT is
+    the only engine, so the caller surfaces the error rather than falling back.
     """
     if wav_path is None:
         return []
@@ -232,7 +233,7 @@ def google_transcribe(wav_path: Path | None, label: str,
         chunks = _segment_to_16k_mono(wav_path, Path(td))
         # Recognize chunks concurrently — the bearer token is shared and
         # the sync endpoint handles parallel requests. An exception in any
-        # chunk propagates so the caller can fall back to faster-whisper.
+        # chunk propagates to the caller (Google STT is the only engine).
         from concurrent.futures import ThreadPoolExecutor
         with ThreadPoolExecutor(max_workers=concurrency) as ex:
             for seg in ex.map(_do, chunks):

@@ -604,25 +604,38 @@ def main() -> int:
     args = ap.parse_args()
 
     phrases = _load_phrases()
-    print(f"[voice] phrase list: "
-          f"{len(phrases['start'])} start phrase(s), "
-          f"{len(phrases['stop'])} stop phrase(s)")
-    print(f"[voice]   start: {phrases['start']}")
-    print(f"[voice]   stop:  {phrases['stop']}")
 
-    print(f"[voice] loading faster-whisper {args.model}...")
-    from faster_whisper import WhisperModel  # lazy
-    model = WhisperModel(args.model, device="cpu", compute_type="int8")
-    print("[voice] model loaded.")
-
-    p = pyaudio.PyAudio()
-    dev = _open_default_input(p)
-    print(f"[voice] mic: {dev['name']!r} @ {SAMPLE_RATE} Hz")
-    stream = p.open(
-        format=pyaudio.paInt16, channels=1, rate=SAMPLE_RATE,
-        input=True, frames_per_buffer=FRAME_SAMPLES,
-        input_device_index=dev["index"],
-    )
+    # The wake-word / phrase listener is the ONLY part that needs
+    # faster-whisper, and it exists purely for voice "start/stop recording"
+    # convenience commands. In AUTO mode (default) recording is driven by the
+    # Teams audio-session watcher (pycaw) — no local transcription at all — so
+    # we skip faster-whisper entirely and it can be uninstalled. Phrase mode
+    # still works IF faster-whisper happens to be installed.
+    need_phrase_listener = (args.trigger_mode == "phrase")
+    model = None
+    p = None
+    stream = None
+    if need_phrase_listener:
+        print(f"[voice] phrase mode: loading faster-whisper {args.model}...")
+        try:
+            from faster_whisper import WhisperModel  # lazy; phrase mode only
+        except ImportError:
+            print("[voice] ERROR: --trigger-mode phrase needs faster-whisper, "
+                  "which is not installed. Use auto mode (the default).",
+                  file=sys.stderr)
+            return 1
+        model = WhisperModel(args.model, device="cpu", compute_type="int8")
+        print("[voice] model loaded.")
+        print(f"[voice]   start phrases: {phrases['start']}")
+        print(f"[voice]   stop phrases:  {phrases['stop']}")
+        p = pyaudio.PyAudio()
+        dev = _open_default_input(p)
+        print(f"[voice] mic: {dev['name']!r} @ {SAMPLE_RATE} Hz")
+        stream = p.open(
+            format=pyaudio.paInt16, channels=1, rate=SAMPLE_RATE,
+            input=True, frames_per_buffer=FRAME_SAMPLES,
+            input_device_index=dev["index"],
+        )
 
     if args.allow_any_call:
         print("[voice] Teams-only gate DISABLED (--allow-any-call).")
@@ -630,7 +643,11 @@ def main() -> int:
         print("[voice] Teams-only gate ON: start fires only while "
               "MS Teams is ringing or in a call.")
     print(f"[voice] trigger mode: {args.trigger_mode}")
-    print('[voice] listening for start/stop phrases. Ctrl+C to quit.')
+    if need_phrase_listener:
+        print('[voice] listening for start/stop phrases. Ctrl+C to quit.')
+    else:
+        print('[voice] auto mode: recording driven by Teams call state '
+              '(no voice commands, no faster-whisper). Ctrl+C to quit.')
     state: dict = {
         "proc": None,
         "allow_any_call": args.allow_any_call,
@@ -668,55 +685,53 @@ def main() -> int:
         )
         watcher_thread.start()
 
-    buf: list[bytes] = []
-    silent_frames = 0
-    silence_tail_frames = SILENCE_TAIL_MS // FRAME_MS
-    min_utt_frames = MIN_UTTERANCE_MS // FRAME_MS
-    max_utt_frames = MAX_UTTERANCE_MS // FRAME_MS
-
     try:
-        while True:
-            # Same OSError -9999 family of failures that killed the
-            # recorder on 2026-05-21 can hit here too (the wake-word
-            # listener owns its own input stream). Tolerate transient
-            # device hiccups by skipping the bad frame and continuing
-            # to listen, instead of letting the daemon die.
-            try:
-                data = stream.read(FRAME_SAMPLES, exception_on_overflow=False)
-            except OSError as e:
-                print(f"[voice] wake-word stream.read failed ({e!r}); "
-                      f"skipping frame and continuing.", file=sys.stderr)
-                # Brief back-off so a persistent device error doesn't
-                # tight-loop and spam the log.
-                time.sleep(0.5)
-                continue
-            samples = np.frombuffer(data, dtype=np.int16)
-            rms = float(np.sqrt(np.mean(samples.astype(np.float32) ** 2)))
+        if need_phrase_listener:
+            buf: list[bytes] = []
+            silent_frames = 0
+            silence_tail_frames = SILENCE_TAIL_MS // FRAME_MS
+            min_utt_frames = MIN_UTTERANCE_MS // FRAME_MS
+            max_utt_frames = MAX_UTTERANCE_MS // FRAME_MS
+            while True:
+                # Tolerate transient device hiccups (OSError -9999 family) by
+                # skipping the bad frame instead of letting the daemon die.
+                try:
+                    data = stream.read(FRAME_SAMPLES, exception_on_overflow=False)
+                except OSError as e:
+                    print(f"[voice] wake-word stream.read failed ({e!r}); "
+                          f"skipping frame and continuing.", file=sys.stderr)
+                    time.sleep(0.5)
+                    continue
+                samples = np.frombuffer(data, dtype=np.int16)
+                rms = float(np.sqrt(np.mean(samples.astype(np.float32) ** 2)))
 
-            if rms >= SPEECH_RMS:
-                if not buf:
-                    pass
-                buf.append(data)
-                silent_frames = 0
-                if len(buf) >= max_utt_frames:
-                    audio = _audio_to_float(b"".join(buf))
-                    segments, _ = model.transcribe(audio, beam_size=1)
-                    text = " ".join(s.text for s in segments).strip()
-                    _handle_transcript(text, state, phrases)
-                    buf = []
+                if rms >= SPEECH_RMS:
+                    buf.append(data)
                     silent_frames = 0
-            elif buf:
-                buf.append(data)
-                silent_frames += 1
-                if silent_frames >= silence_tail_frames:
-                    if len(buf) >= min_utt_frames + silence_tail_frames:
+                    if len(buf) >= max_utt_frames:
                         audio = _audio_to_float(b"".join(buf))
-                        segments, _ = model.transcribe(
-                            audio, language="en", beam_size=1)
+                        segments, _ = model.transcribe(audio, beam_size=1)
                         text = " ".join(s.text for s in segments).strip()
                         _handle_transcript(text, state, phrases)
-                    buf = []
-                    silent_frames = 0
+                        buf = []
+                        silent_frames = 0
+                elif buf:
+                    buf.append(data)
+                    silent_frames += 1
+                    if silent_frames >= silence_tail_frames:
+                        if len(buf) >= min_utt_frames + silence_tail_frames:
+                            audio = _audio_to_float(b"".join(buf))
+                            segments, _ = model.transcribe(
+                                audio, language="en", beam_size=1)
+                            text = " ".join(s.text for s in segments).strip()
+                            _handle_transcript(text, state, phrases)
+                        buf = []
+                        silent_frames = 0
+        else:
+            # Auto mode: no whisper, no mic listener. Keep the process alive
+            # while the watcher thread drives recording from Teams call state.
+            while not watcher_stop.is_set():
+                watcher_stop.wait(1.0)
     except KeyboardInterrupt:
         print("\n[voice] shutting down.")
     finally:
@@ -733,10 +748,12 @@ def main() -> int:
             except subprocess.TimeoutExpired:
                 pass
         try:
-            stream.stop_stream(); stream.close()
+            if stream is not None:
+                stream.stop_stream(); stream.close()
         except Exception:
             pass
-        p.terminate()
+        if p is not None:
+            p.terminate()
     return 0
 
 

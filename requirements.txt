@@ -17,8 +17,9 @@ PyAudioWPatch>=0.2.12
 # Voice daemon — detect when MS Teams has an active audio session (ringing
 # or in-call) so the "Assalamualaikum" start trigger only fires for Teams calls.
 pycaw>=20240210
-# Call transcription + Bangla->English translation
-faster-whisper>=1.2
+# Call transcription is Google STT (cloud) on central; Bangla->English is
+# done by Claude. faster-whisper removed 2026-06-08 — the voice daemon runs
+# auto mode (Teams audio-session trigger, pycaw) and needs no local STT.
 # Richer PDF extraction (used by mail/ attachment parser)
 pdfplumber>=0.11
 # PDF generation for boss-facing documents

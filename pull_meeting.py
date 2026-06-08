@@ -66,8 +66,17 @@ def main() -> int:
     print(f"Loading faster-whisper large-v3 (~3 GB on first run). "
           f"Expect a few minutes on CPU.")
 
-    # In-process transcribe — same logic as teams/transcribe_call.py
-    from faster_whisper import WhisperModel  # lazy
+    # In-process transcribe — same logic as teams/transcribe_call.py.
+    # faster-whisper is no longer a project dependency (removed 2026-06-08;
+    # live transcription is Google STT on central). This standalone tool
+    # imports it lazily and degrades with a clear message if absent.
+    try:
+        from faster_whisper import WhisperModel  # lazy; this offline tool only
+    except ImportError:
+        print("faster-whisper is not installed. This standalone offline tool "
+              "needs it; the live pipeline uses Google STT on central. "
+              "Install with: pip install faster-whisper", file=__import__('sys').stderr)
+        return 1
     model = WhisperModel("large-v3", device="cpu", compute_type="int8")
 
     all_segs: list[dict] = []

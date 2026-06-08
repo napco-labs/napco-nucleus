@@ -30,7 +30,10 @@ import os
 import sys
 from pathlib import Path
 
-from faster_whisper import WhisperModel
+# NOTE: faster-whisper is NOT a project dependency anymore (removed 2026-06-08;
+# call transcription is Google STT on central). This module is a standalone
+# offline tool — it imports faster_whisper lazily in load_model() so the rest
+# of the package (and the voice daemon) work without the package installed.
 
 MODEL_NAME = "large-v3"
 DEVICE = "cpu"
@@ -51,7 +54,15 @@ def find_latest_session(calls_dir: Path) -> str | None:
     return sessions[-1] if sessions else None
 
 
-def load_model() -> WhisperModel:
+def load_model() -> "WhisperModel":
+    try:
+        from faster_whisper import WhisperModel  # lazy; this offline tool only
+    except ImportError as e:
+        raise SystemExit(
+            "faster-whisper is not installed. This standalone offline tool "
+            "needs it; the live pipeline uses Google STT on central instead. "
+            "Install with: pip install faster-whisper"
+        ) from e
     return WhisperModel(MODEL_NAME, device=DEVICE, compute_type=COMPUTE_TYPE)
 
 

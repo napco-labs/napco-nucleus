@@ -25,8 +25,11 @@ while true; do
         echo "[transcribe-loop] tools.transcribe_calls exited rc=$rc (will retry next tick)"
     else
         # Check if any sessions were actually transcribed this tick.
-        # tools.transcribe_calls prints "done: groq=N fw=M failed=K" on success.
-        transcribed=$(echo "$output" | grep -oP 'fw=\K[0-9]+' | awk '{s+=$1}END{print s+0}')
+        # tools.transcribe_calls prints "done: ok=N failed=K poison-pill=S".
+        # (Was 'fw=' from the faster-whisper era; the engine is Google STT now,
+        #  which reports ok=. Counting fw= meant the trigger never fired, so the
+        #  post-call email only went at the 23:00 catch-all. Fixed 2026-06-08.)
+        transcribed=$(echo "$output" | grep -oP 'ok=\K[0-9]+' | awk '{s+=$1}END{print s+0}')
         if [ "${transcribed:-0}" -gt 0 ]; then
             echo "[transcribe-loop] transcribed $transcribed session(s) — writing pipeline trigger"
             touch "$TRIGGER_FILE"
