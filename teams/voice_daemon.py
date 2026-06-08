@@ -3,10 +3,11 @@
 Two trigger modes (--trigger-mode, default `auto`):
 
   auto    -> Recording starts/stops based on MS Teams audio-session state
-             alone. The moment Teams enters a call (or starts ringing),
-             recording begins. When Teams' audio session ends, recording
-             stops. Phrase matching also stays armed in this mode so a
-             dev can still say "stop recording" to end early.
+             alone. Recording begins when a Teams call is CONNECTED (audio
+             goes Active — i.e. the call is received), and stops ~30s after
+             the call audio ends. Idle/ringing 'Inactive' sessions do NOT
+             trigger a recording (that false-started junk + risked missing
+             the next real call). See _audio_session_watcher.
 
   phrase  -> Legacy behavior. Recording fires only on a recognized phrase
              (wake-word `nucleus <verb>` or natural bookend like
@@ -274,19 +275,18 @@ def _start_recording(state: dict) -> None:
             print("[voice] already recording, ignoring start.")
             return
         if not state.get("allow_any_call", False):
-            # Gate accepts Active OR Inactive (ringing). We START FROM THE
-            # RING (2026-06-08, Titu) so the opening of a call — which often
-            # carries the agenda — is never lost. Ring-then-declined junk is
-            # filtered downstream by record_call's NUCLEUS_CALL_MIN_DURATION_S
-            # discard (<20s WAVs are dropped, never uploaded to central), and
-            # by the watcher's start_confirm debounce that ignores < a few-second
-            # notification blips. Was Active-only before, which missed ring audio.
-            ok, reason = _teams_in_call()
-            if not ok:
-                print(f"[voice] start gated: {reason}. "
+            # Gate: record only a CONNECTED call — Teams audio ACTIVE (state 1).
+            # A standing/idle 'Inactive' session (Teams merely open, or a silent
+            # ring) is REJECTED. Triggering on Inactive was tried for "record
+            # from ring" but it false-started 0KB junk recordings whenever the
+            # daemon ran while Teams was open, and could lock out the next real
+            # call. So we start when the call is received (2026-06-08, Titu).
+            st, reason = _teams_audio_state()
+            if st != 1:
+                print(f"[voice] start gated: not a connected call ({reason}). "
                       f"Pass --allow-any-call to disable the gate.")
                 return
-            print(f"[voice] Teams gate OK (ringing or active audio): {reason}")
+            print(f"[voice] Teams gate OK (connected call, Active audio): {reason}")
             excluded, exc_reason = _excluded_active_call()
             if excluded:
                 print(f"[voice] start gated: {exc_reason}. "
@@ -336,102 +336,96 @@ def _audio_session_watcher(state: dict, stop_evt: threading.Event,
                            stop_debounce: int = 15,
                            start_confirm: int = 2,
                            max_call_seconds: int = 7200) -> None:
-    """Background thread: drive start/stop purely from Teams audio-session state.
+    """Background thread: drive start/stop from the Teams audio-session state.
 
-    Rising edge  : fires after `start_confirm` consecutive polls where Teams
-                   audio is Active OR Inactive (ringing counts). Lowered to 2
-                   polls (~4s) on 2026-06-08 so short real calls aren't missed
-                   — the goal is NO missed calls. Brief notification blips that
-                   slip through still cost nothing: the resulting <20s WAV is
-                   discarded by record_call before any upload to central.
-                   Overridable via NUCLEUS_START_CONFIRM_POLLS.
-    Keep-alive   : accepts Active OR Inactive so mid-call silences don't stop.
-    Falling edge : stop after `stop_debounce` (15) consecutive off polls = 30s.
-                   This prevents mid-call drops from brief audio-session blips.
-    Auto-resume  : on daemon restart, if Teams is already in a call (Active or
-                   Inactive), start recording immediately without waiting for a
-                   rising edge so no call audio is missed after a watchdog restart.
-    Hard cap     : stop after max_call_seconds regardless, guards stuck state.
+    START : recording begins when Teams audio is ACTIVE (a call is connected /
+            received), confirmed over `start_confirm` polls (~4s). This is the
+            robust signal. An idle/standing 'Inactive' session — Teams merely
+            open, or a silent ring — does NOT start a recording. Triggering on
+            Inactive was tried for "record from ring" but it false-started 0KB
+            junk recordings whenever the daemon ran while Teams was open, and
+            could LOCK OUT the next real call. Start-on-received fixes both
+            (2026-06-08, per Titu). Tunable via NUCLEUS_START_CONFIRM_POLLS.
+    KEEP  : recording continues while Active. Brief non-Active blips are
+            tolerated by the stop debounce.
+    STOP  : after `stop_debounce` consecutive polls where Teams is NOT Active
+            (Inactive or no session) — ~30s — i.e. the call audio has ended.
+    Auto-resume : on daemon restart, resume immediately ONLY if Teams is ACTIVE
+            (a real call is in progress) — never on a standing Inactive session.
+    Hard cap : stop after max_call_seconds regardless, guards a stuck session.
     """
     print(f"[voice] auto watcher: poll={poll_interval_s}s, "
           f"stop_debounce={stop_debounce} polls ({stop_debounce*poll_interval_s:.0f}s), "
           f"start_confirm={start_confirm} polls ({start_confirm*poll_interval_s:.0f}s), "
           f"hard_cap={max_call_seconds}s")
-    last_active = False
-    off_streak = 0
-    on_streak = 0   # consecutive polls where Teams is in call (for start_confirm)
+    recording = False   # are we in an active recording cycle?
+    off_streak = 0      # consecutive NOT-Active polls (toward STOP)
+    on_streak = 0       # consecutive Active polls (toward START)
 
-    # Auto-resume on restart: if Teams is already in a call when the daemon
-    # starts (e.g. watchdog restarted us mid-call), begin recording immediately.
-    try:
-        already_in, reason = _teams_in_call()
-        if already_in:
-            print(f"[voice] watcher: Teams already in call on startup — "
-                  f"auto-resuming recording ({reason})")
-            _start_recording(state)
-            last_active = True
-            on_streak = start_confirm
-    except Exception:
-        pass
+    def _audio_state() -> tuple[int, str]:
+        try:
+            return _teams_audio_state()  # (-1 None, 0 Inactive, 1 Active)
+        except Exception as e:
+            return (-1, f"watcher exception: {e}")
+
+    # Auto-resume on restart ONLY for a genuine in-progress call (Active).
+    # A standing Inactive session (Teams just open) must NOT auto-resume —
+    # that caused false 0KB recordings + missed real calls (2026-06-08).
+    st, reason = _audio_state()
+    if st == 1:
+        print(f"[voice] watcher: Teams ACTIVE on startup — auto-resuming "
+              f"recording ({reason})")
+        _start_recording(state)
+        recording = True
+        on_streak = start_confirm
 
     while not stop_evt.is_set():
-        try:
-            # KEEP-ALIVE gate: Active or Inactive (ringing + active = real call)
-            in_call, reason = _teams_in_call()
-        except Exception as e:
-            print(f"[voice] watcher: state check errored: {e}")
-            in_call = False
-            reason = f"watcher exception: {e}"
+        st, reason = _audio_state()
+        is_active = (st == 1)
 
-        active = in_call
-
-        if active and not last_active:
-            # Rising edge candidate — require start_confirm consecutive polls
-            # to filter brief notification sounds (< start_confirm * poll_interval)
-            on_streak += 1
-            if on_streak >= start_confirm:
-                print(f"[voice] watcher: rising edge confirmed "
-                      f"({on_streak} polls) — {reason}")
-                _start_recording(state)
-                off_streak = 0
-        elif active:
-            off_streak = 0
-            started_at = state.get("call_started_at")
-            proc = state.get("proc")
-            if (started_at is not None and proc is not None
-                    and proc.poll() is None):
-                elapsed = time.monotonic() - started_at
-                if elapsed >= max_call_seconds:
-                    print(f"[voice] watcher: hard cap hit "
-                          f"(elapsed={elapsed:.0f}s >= {max_call_seconds}s)")
-                    _stop_recording(state, reason="hard cap")
-                    # No auto-resume: keep last_active=True (sticky) so the
-                    # still-Active session can't trigger a new rising edge.
-                    # State resets naturally when the call actually ends and
-                    # we see the falling edge.
+        if not recording:
+            # Look for a call to START: Teams Active, confirmed over N polls.
+            if is_active:
+                on_streak += 1
+                if on_streak >= start_confirm:
+                    print(f"[voice] watcher: call received — recording "
+                          f"(Active confirmed, {on_streak} polls) — {reason}")
+                    _start_recording(state)
+                    recording = True
                     off_streak = 0
-                    stop_evt.wait(poll_interval_s)
-                    continue
+            else:
+                on_streak = 0
         else:
-            on_streak = 0   # reset start confirmation counter
-            if last_active:
+            # Recording: keep while Active; STOP after stop_debounce polls of
+            # NOT-Active (call ended). Brief Active blips reset the off streak.
+            if is_active:
+                off_streak = 0
+                started_at = state.get("call_started_at")
+                proc = state.get("proc")
+                if (started_at is not None and proc is not None
+                        and proc.poll() is None):
+                    elapsed = time.monotonic() - started_at
+                    if elapsed >= max_call_seconds:
+                        print(f"[voice] watcher: hard cap hit "
+                              f"(elapsed={elapsed:.0f}s >= {max_call_seconds}s)")
+                        _stop_recording(state, reason="hard cap")
+                        recording = False
+                        on_streak = 0
+                        off_streak = 0
+                        stop_evt.wait(poll_interval_s)
+                        continue
+            else:
                 off_streak += 1
                 if off_streak >= stop_debounce:
                     proc = state.get("proc")
                     if proc is not None and proc.poll() is None:
-                        print(f"[voice] watcher: falling edge "
-                              f"(off for {off_streak} polls = "
+                        print(f"[voice] watcher: call ended (not Active for "
+                              f"{off_streak} polls = "
                               f"{off_streak*poll_interval_s:.0f}s) — {reason}")
-                        _stop_recording(state, reason="session ended")
+                        _stop_recording(state, reason="call ended")
+                    recording = False
                     off_streak = 0
-                    last_active = False
-                # else: still debouncing, leave last_active=True
-            else:
-                off_streak = 0
-
-        if active:
-            last_active = True
-            on_streak = start_confirm  # already confirmed, keep at threshold
+                    on_streak = 0
         stop_evt.wait(poll_interval_s)
 
 
@@ -640,8 +634,8 @@ def main() -> int:
     if args.allow_any_call:
         print("[voice] Teams-only gate DISABLED (--allow-any-call).")
     else:
-        print("[voice] Teams-only gate ON: start fires only while "
-              "MS Teams is ringing or in a call.")
+        print("[voice] Teams-only gate ON: recording starts when a Teams "
+              "call is CONNECTED (Active audio), not on idle/ringing.")
     print(f"[voice] trigger mode: {args.trigger_mode}")
     if need_phrase_listener:
         print('[voice] listening for start/stop phrases. Ctrl+C to quit.')
