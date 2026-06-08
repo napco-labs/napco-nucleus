@@ -50,6 +50,51 @@ load_dotenv(Path(__file__).parent.parent / ".env", override=True)
 CHUNK = 1024
 STOP_FILE = Path(__file__).parent.parent / "data" / "teams" / ".stop_recording"
 
+# PortAudio error codes that mean "the device went away" (e.g. a USB
+# headset unplugged and replugged into another port mid-call) rather
+# than "we're done". On any of these we re-enumerate the devices and
+# reopen the stream on the device's NEW port instead of ending the track.
+#   -9988 paStreamIsStopped / stream closed   (the Atik mid-call replug)
+#   -9986 paDeviceUnavailable
+#   -9985 paIncompatibleStreamHostApi
+#   -9999 paUnanticipatedHostError (generic WASAPI device-revoked)
+#   -9978 paInternalError seen on hot-unplug
+_DEVICE_LOST_ERRNOS = {-9988, -9986, -9985, -9984, -9978, -9999}
+
+# How long to keep trying to rediscover a device that vanished mid-call
+# before giving up on that track. Covers the seconds a dev spends moving
+# the plug from one USB port to another.
+try:
+    _RECONNECT_WINDOW_S = float(os.environ.get("NUCLEUS_RECONNECT_WINDOW_S", "45"))
+except ValueError:
+    _RECONNECT_WINDOW_S = 45.0
+
+# Pa_Initialize / Pa_Terminate are reference-counted but not guaranteed
+# thread-safe to call concurrently. Each track owns its own PyAudio
+# instance and may re-init on reconnect, so serialize create/terminate.
+_PA_LOCK = threading.Lock()
+
+
+def _make_pyaudio() -> "pyaudio.PyAudio":
+    """Create a fresh PyAudio instance under the global PA lock.
+
+    A new instance re-runs Pa_Initialize, which is the ONLY way PortAudio
+    re-enumerates a USB device that moved to a different port — so the
+    reconnect path must build a new one, not reuse the old handle.
+    """
+    with _PA_LOCK:
+        return pyaudio.PyAudio()
+
+
+def _terminate_pa(p) -> None:
+    if p is None:
+        return
+    with _PA_LOCK:
+        try:
+            p.terminate()
+        except Exception:
+            pass
+
 # Registry property key that controls exclusive-mode on Windows audio capture devices.
 _EXCL_MODE_PROP = "{b3f8fa53-0004-438e-9003-51a46e139bfc},6"
 _CAPTURE_REG_PATH = r"SOFTWARE\Microsoft\Windows\CurrentVersion\MMDevices\Audio\Capture"
@@ -139,46 +184,159 @@ def resolve_loopback(p: pyaudio.PyAudio) -> dict:
     raise RuntimeError("No WASAPI loopback device found for default speaker.")
 
 
-def record(p: pyaudio.PyAudio, dev: dict, path: Path, stop: threading.Event, label: str) -> None:
-    rate = int(dev["defaultSampleRate"])
-    channels = int(dev["maxInputChannels"])
-    stream = p.open(
-        format=pyaudio.paInt16,
-        channels=channels,
-        rate=rate,
-        frames_per_buffer=CHUNK,
-        input=True,
-        input_device_index=dev["index"],
-    )
-    print(f"  [{label:7}] {path.name}  {rate}Hz {channels}ch  {dev['name']!r}")
+def _resolve_device(p: pyaudio.PyAudio, label: str) -> dict:
+    """Resolve the input device for a track on a *fresh* PyAudio instance.
+
+    Called both at startup and after a mid-call reconnect. Because it
+    re-runs against a re-enumerated PyAudio, a headset that was moved to
+    another USB port is rediscovered by IDENTITY (its name), not by a
+    stale device index — this is the "find the device, register its new
+    port" idea applied live, mid-call.
+
+      speaker -> the WASAPI loopback of the default output device.
+      mic     -> the known headset (Logitech/Jabra/...) by name if present,
+                 else the system default input.
+    """
+    if label == "speaker":
+        return resolve_loopback(p)
+    # mic: follow the physical headset across ports by matching its name,
+    # so unplug-and-replug-elsewhere still lands on the same device.
     try:
+        for i in range(p.get_device_count()):
+            info = p.get_device_info_by_index(i)
+            if int(info.get("maxInputChannels", 0)) > 0 and any(
+                kw in (info.get("name") or "").lower() for kw in _HEADSET_KEYWORDS
+            ):
+                return info
+    except Exception:
+        pass
+    return p.get_default_input_device_info()
+
+
+def _errno_of(e: OSError):
+    """Best-effort extraction of the integer PortAudio error code."""
+    if e.args and isinstance(e.args[0], int):
+        return e.args[0]
+    if getattr(e, "errno", None) is not None:
+        return e.errno
+    return None
+
+
+def record(path: Path, stop: threading.Event, label: str,
+           reconnect_window_s: float | None = None) -> None:
+    """Record one track to `path`, SURVIVING a mid-call device change.
+
+    Owns its own PyAudio instance so it can terminate + re-init — the only
+    way PortAudio re-enumerates a USB device moved to a new port — without
+    disturbing the other track. On a "device lost" read error the stream is
+    reopened against the rediscovered device and writing CONTINUES into the
+    same WAV. So an Atik-style mid-call replug no longer truncates the call:
+    the gap during the unplug is a few seconds of silence, then audio
+    resumes, instead of the track dying outright.
+
+    A genuinely fatal error (or the device not returning within
+    reconnect_window_s) still ends just this track; the main loop keeps the
+    other side going.
+    """
+    if reconnect_window_s is None:
+        reconnect_window_s = _RECONNECT_WINDOW_S
+
+    p = _make_pyaudio()
+    stream = None
+    try:
+        dev = _resolve_device(p, label)
+        # Lock the WAV format to the FIRST successful open. Reconnects
+        # request this same rate/channels (WASAPI shared mode converts),
+        # so the single output WAV stays internally consistent even if the
+        # reattached device reports a different native format.
+        rate = int(dev["defaultSampleRate"])
+        channels = int(dev["maxInputChannels"]) or 1
+        sampwidth = p.get_sample_size(pyaudio.paInt16)
+        stream = p.open(
+            format=pyaudio.paInt16, channels=channels, rate=rate,
+            frames_per_buffer=CHUNK, input=True,
+            input_device_index=dev["index"],
+        )
+        print(f"  [{label:7}] {path.name}  {rate}Hz {channels}ch  {dev['name']!r}")
+
         with wave.open(str(path), "wb") as wf:
             wf.setnchannels(channels)
-            wf.setsampwidth(p.get_sample_size(pyaudio.paInt16))
+            wf.setsampwidth(sampwidth)
             wf.setframerate(rate)
+            lost_since = None  # monotonic time the device first went away
             while not stop.is_set():
-                # Swallow PortAudio host errors (e.g. errno -9999 when a
-                # USB headset glitches mid-call, or the OS revokes the
-                # device handle) so a sick mic stream doesn't take the
-                # speaker side down with it. The main loop tolerates one
-                # track dying — see _start_recording's "any alive" guard.
+                # --- Reconnect state: stream is down, try to rebuild it ---
+                if stream is None:
+                    now = time.monotonic()
+                    if now - lost_since > reconnect_window_s:
+                        print(f"  [{label:7}] device did not come back within "
+                              f"{reconnect_window_s:.0f}s; ending this track.",
+                              file=sys.stderr)
+                        break
+                    if stop.wait(1.0):  # brief backoff between attempts; honors stop
+                        break
+                    try:
+                        p = _make_pyaudio()
+                        # The new port's endpoint may have exclusive mode
+                        # re-enabled — clear it again so Teams can't hold the
+                        # mic and lock us out.
+                        if label == "mic":
+                            _disable_exclusive_mode_for_mic()
+                        dev = _resolve_device(p, label)
+                        stream = p.open(
+                            format=pyaudio.paInt16, channels=channels, rate=rate,
+                            frames_per_buffer=CHUNK, input=True,
+                            input_device_index=dev["index"],
+                        )
+                        lost_since = None
+                        print(f"  [{label:7}] reconnected -> {dev['name']!r} "
+                              f"(port re-registered); recording resumes.")
+                    except Exception as re:
+                        # Device still mid-replug / not back yet. Drop the
+                        # half-built instance and retry until the window ends.
+                        _terminate_pa(p)
+                        p = None
+                        print(f"  [{label:7}] reconnect attempt failed "
+                              f"({re}); retrying...", file=sys.stderr)
+                    continue
+
+                # --- Normal path: read a chunk and write it ----------------
                 try:
                     data = stream.read(CHUNK, exception_on_overflow=False)
                 except OSError as e:
-                    print(f"  [{label:7}] stream.read failed ({e!r}); "
-                          f"ending this track. The other side keeps "
-                          f"recording.", file=sys.stderr)
-                    break
+                    errno = _errno_of(e)
+                    if errno not in _DEVICE_LOST_ERRNOS:
+                        # Not a hot-unplug — a real, non-recoverable error.
+                        print(f"  [{label:7}] stream.read failed ({e!r}); "
+                              f"ending this track. The other side keeps "
+                              f"recording.", file=sys.stderr)
+                        break
+                    # Device lost mid-call (e.g. Atik moved the USB plug).
+                    # Tear the dead stream + instance down so the rebuilt
+                    # PyAudio re-enumerates the device on its NEW port, then
+                    # fall into the reconnect state above.
+                    print(f"  [{label:7}] device lost ({errno}) — likely a "
+                          f"mid-call port change. Re-finding the device and "
+                          f"reopening on its new port...", file=sys.stderr)
+                    try:
+                        stream.close()
+                    except Exception:
+                        pass
+                    stream = None
+                    _terminate_pa(p)
+                    p = None
+                    lost_since = time.monotonic()
+                    continue
+
                 wf.writeframes(data)
     finally:
         try:
-            stream.stop_stream()
+            if stream is not None:
+                stream.stop_stream()
+                stream.close()
         except Exception:
             pass
-        try:
-            stream.close()
-        except Exception:
-            pass
+        _terminate_pa(p)
 
 
 def _denoise_mic_wav(path: Path,
@@ -437,45 +595,42 @@ def main() -> int:
     if STOP_FILE.exists():
         STOP_FILE.unlink()
 
+    # Clear exclusive mode for the headset up front. Each track now owns
+    # its own PyAudio instance and re-resolves its device on reconnect, so
+    # a mid-call USB port change is recovered inside record() itself.
     _disable_exclusive_mode_for_mic()
-    p = pyaudio.PyAudio()
+
+    stop = threading.Event()
+    threads = [
+        threading.Thread(target=record, args=(spk_path, stop, "speaker"), daemon=True),
+        threading.Thread(target=record, args=(mic_path, stop, "mic"), daemon=True),
+    ]
+
+    print(f"Recording -> {out_dir.resolve()}")
+    print(f"Stop with Ctrl+C, or `touch {STOP_FILE}`\n")
+    for t in threads:
+        t.start()
+
     try:
-        loopback = resolve_loopback(p)
-        mic = p.get_default_input_device_info()
-
-        stop = threading.Event()
-        threads = [
-            threading.Thread(target=record, args=(p, loopback, spk_path, stop, "speaker"), daemon=True),
-            threading.Thread(target=record, args=(p, mic, mic_path, stop, "mic"), daemon=True),
-        ]
-
-        print(f"Recording -> {out_dir.resolve()}")
-        print(f"Stop with Ctrl+C, or `touch {STOP_FILE}`\n")
+        # Keep recording as long as AT LEAST ONE track is still alive.
+        # Previously this was `all(...)` which meant a single failed
+        # stream killed the whole session (see record() OSError guard
+        # for the failure mode this protects against).
+        while any(t.is_alive() for t in threads):
+            if STOP_FILE.exists():
+                print("\nStop sentinel detected — stopping...")
+                STOP_FILE.unlink()
+                stop.set()
+                break
+            for t in threads:
+                t.join(timeout=0.5)
         for t in threads:
-            t.start()
-
-        try:
-            # Keep recording as long as AT LEAST ONE track is still alive.
-            # Previously this was `all(...)` which meant a single failed
-            # stream killed the whole session (see record() OSError guard
-            # for the failure mode this protects against).
-            while any(t.is_alive() for t in threads):
-                if STOP_FILE.exists():
-                    print("\nStop sentinel detected — stopping...")
-                    STOP_FILE.unlink()
-                    stop.set()
-                    break
-                for t in threads:
-                    t.join(timeout=0.5)
-            for t in threads:
-                t.join()
-        except KeyboardInterrupt:
-            print("\nStopping...")
-            stop.set()
-            for t in threads:
-                t.join()
-    finally:
-        p.terminate()
+            t.join()
+    except KeyboardInterrupt:
+        print("\nStopping...")
+        stop.set()
+        for t in threads:
+            t.join()
 
     print()
     for path in (spk_path, mic_path):
