@@ -114,26 +114,29 @@ _HEADSET_KEYWORDS = [
 ]
 
 
-def _find_headset_audio_endpoints() -> list[tuple[str, str]]:
-    """Return [(kind, guid), ...] for the connected headset's audio endpoints.
+def _find_audio_endpoints() -> list[tuple[str, str]]:
+    """Return [(kind, guid), ...] for every ACTIVE audio endpoint.
 
-    kind is 'render' (speaker / output) or 'capture' (mic / input). Found via
-    a PnP query so it works regardless of which USB port the device is on.
-    MMDEVAPI InstanceIds encode the data-flow: {0.0.0.*} = render (output),
-    {0.0.1.*} = capture (input); the trailing {GUID} is the MMDevices key.
+    We free exclusive mode on ALL active render + capture endpoints rather than
+    matching a headset by name — name/keyword matching missed the real device on
+    some PCs (e.g. a Realtek/built-in mic), leaving the default mic OR speaker
+    locked by Teams and that track recording 0 bytes (2026-06-08). Touching the
+    actual default devices is the only reliable way; AllowExclusiveMode=0 on an
+    unused device is harmless. MMDEVAPI InstanceIds encode the data-flow:
+    {0.0.0.*}=render (speaker/out), {0.0.1.*}=capture (mic/in); the trailing
+    {GUID} is the MMDevices registry key.
     """
     import re
     import subprocess
     import json
-    script = r"""
-$devs = Get-PnpDevice -Class AudioEndpoint -ErrorAction SilentlyContinue
-foreach ($d in $devs) {
-    [PSCustomObject]@{
-        FriendlyName = $d.FriendlyName
-        InstanceId   = $d.InstanceId
-    }
-} | ConvertTo-Json -Depth 1
-"""
+    # Single pipeline — a `foreach (...) {...} | ConvertTo-Json` block fails with
+    # "An empty pipe element is not allowed" when passed via powershell -Command,
+    # which silently made this return [] on every PC (so exclusive mode was never
+    # actually disabled). Fixed 2026-06-08.
+    script = (
+        "Get-PnpDevice -Class AudioEndpoint -Status OK -ErrorAction SilentlyContinue "
+        "| Select-Object FriendlyName, InstanceId | ConvertTo-Json -Depth 2"
+    )
     found: list[tuple[str, str]] = []
     try:
         out = subprocess.run(
@@ -146,9 +149,6 @@ foreach ($d in $devs) {
         if isinstance(data, dict):
             data = [data]
         for item in data:
-            name = (item.get("FriendlyName") or "").lower()
-            if not any(kw in name for kw in _HEADSET_KEYWORDS):
-                continue
             iid = item.get("InstanceId", "") or ""
             m = re.search(r"\{[0-9A-Fa-f\-]{36}\}$", iid)
             if not m:
@@ -159,6 +159,7 @@ foreach ($d in $devs) {
             elif "{0.0.0" in iid:
                 kind = "render"
             else:  # fall back to the friendly name
+                name = (item.get("FriendlyName") or "").lower()
                 kind = "capture" if ("microphone" in name or "mic" in name) else "render"
             found.append((kind, guid))
     except Exception:
@@ -166,9 +167,14 @@ foreach ($d in $devs) {
     return found
 
 
+# Back-compat alias.
+def _find_headset_audio_endpoints() -> list[tuple[str, str]]:
+    return _find_audio_endpoints()
+
+
 def _find_headset_guid_via_pnp() -> str | None:
-    """Back-compat: first capture (mic) headset GUID, or None."""
-    for kind, guid in _find_headset_audio_endpoints():
+    """Back-compat: first capture (mic) endpoint GUID, or None."""
+    for kind, guid in _find_audio_endpoints():
         if kind == "capture":
             return guid
     return None
@@ -191,9 +197,9 @@ def _disable_exclusive_mode_for_mic() -> None:
         import winreg
     except Exception:
         return
-    endpoints = _find_headset_audio_endpoints()
+    endpoints = _find_audio_endpoints()
     if not endpoints:
-        print("  [audio] no headset endpoints via PnP — skipping exclusive mode fix")
+        print("  [audio] no audio endpoints via PnP — skipping exclusive mode fix")
         return
     for kind, guid in endpoints:
         base = _RENDER_REG_PATH if kind == "render" else _CAPTURE_REG_PATH
