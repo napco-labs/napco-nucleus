@@ -1,47 +1,45 @@
 <#
 .SYNOPSIS
-Register the Teams chat-push as two Windows Scheduled Tasks split by
-BD time-of-day, matching the daily rhythm of US-client interaction.
+Register the Teams chat-push as ONE Windows Scheduled Task that fires
+every 20 minutes across the BD working day.
 
 .DESCRIPTION
-Two Task Scheduler entries on each dev machine:
+One Task Scheduler entry on each dev machine:
 
-  "NAPCO Nucleus - Chat Push (Day)"         every  2 hr,  BD 10:00 -> 17:00
-                                             fires at 10:00, 12:00, 14:00, 16:00
-                                             window = last 120 min
+  "NAPCO Nucleus - Chat Push"   every 20 min, BD 04:00 -> 22:50
+                                 window = last 30 min per push
+                                 (20-min cadence + 10-min overlap so a
+                                  single missed/late tick self-heals)
 
-  "NAPCO Nucleus - Chat Push (Transition)"  once daily,   BD 17:30
-                                             window = last  90 min
-                                             (closes the 16:00-17:30 BD gap
-                                             between Day and Evening)
+Rationale (set 2026-06-08 by Titu):
+  - Flat 20-minute cadence all working day — simpler + fresher than the
+    old 2h-day / 30m-evening / 17:30-transition split.
+  - Window 04:00 -> 22:50: last push lands ~22:40, just before the
+    23:00 (11 PM) daily Requirement Management run picks up the day.
+  - The 30-min lookback (vs the 20-min cadence) overlaps consecutive
+    pushes so a skipped or late tick can't drop a 20-min slice of chat.
 
-  "NAPCO Nucleus - Chat Push (Evening)"     every 30 min, BD 18:00 -> 24:00
-                                             window = last  30 min
+Note on the grid: repetitions sit on the 20-min grid anchored at 04:00
+(04:00, 04:20, ... 22:40). 22:50 is the repetition-duration cut-off, so
+the final effective push is 22:40 — 20 min before the 23:00 daily run,
+which itself reads the whole day (--last-minutes 1440) from central.
 
-Day stops at 16:00 (not 18:00) so its last fire doesn't collide with
-Evening's first fire at 18:00. The Transition task bridges the gap.
-Net coverage: continuous from BD 08:00 -> 24:00.
-
-Rationale: US clients arrive online around BD 19:00, so the evening
-window pushes at a higher cadence to surface fresh chat into central
-quickly. During BD daytime, internal-only chat doesn't need the same
-freshness, so we batch at 2-hr intervals.
-
-Both tasks run on the dev's local clock — dev machines are on BD time.
-
-push-chat.bat (--last-minutes 15) remains the ad-hoc entry point for
-"push my chat now" voice commands; that's untouched by this script.
-
-Coverage gap: BD 00:00 -> 10:00 is NOT auto-pushed. If overnight chat
-needs to land before the next 10:00 tick, run push-chat.bat manually
-or call:
+Coverage gap (by design): BD 22:50 -> 04:00 is NOT auto-pushed. If
+overnight chat must land before the next 04:00 tick, run manually:
     py -3 -m teams.push_chat --last-minutes 600
 
-Re-running this script is idempotent — both entries are dropped and
-re-created so it doubles as the upgrade path.
+Both the task and the daily run use the dev's local clock — dev machines
+are on BD time.
+
+push-chat.bat (--last-minutes 15) remains the ad-hoc "push my chat now"
+entry point and is untouched by this script.
+
+Re-running this script is idempotent — the entry (and any older
+Day/Evening/Transition entries) are dropped and re-created, so it
+doubles as the upgrade path.
 
 .PARAMETER Unregister
-Remove both tasks and exit.
+Remove the task (and legacy entries) and exit.
 
 .EXAMPLE
     .\scripts\register-chat-push-task.ps1
@@ -53,16 +51,28 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-$dayTask = "NAPCO Nucleus - Chat Push (Day)"
-$transTask = "NAPCO Nucleus - Chat Push (Transition)"
-$eveTask = "NAPCO Nucleus - Chat Push (Evening)"
+$chatTask = "NAPCO Nucleus - Chat Push"
+# Older split-window entries this script supersedes. Listed so a
+# re-run cleanly removes them (upgrade path from the pre-2026-06-08
+# Day/Evening/Transition schedule and the original single-window one).
 $legacyTasks = @(
-    "NAPCO Nucleus - Chat Push",
+    "NAPCO Nucleus - Chat Push (Day)",
+    "NAPCO Nucleus - Chat Push (Evening)",
+    "NAPCO Nucleus - Chat Push (Transition)",
     "NAPCO Nucleus - Chat Push (Backfill)"
 )
 
+# Chat-push cadence + window (BD local).
+$startHour = 4          # 04:00
+$startMinute = 0
+$intervalMinutes = 20   # every 20 min
+$lastMinutes = 30       # 30-min lookback (20-min cadence + 10-min overlap)
+# Window length 04:00 -> 22:50 = 18 h 50 m.
+$windowHours = 18
+$windowMinutes = 50
+
 if ($Unregister) {
-    foreach ($name in @($dayTask, $transTask, $eveTask) + $legacyTasks) {
+    foreach ($name in @($chatTask) + $legacyTasks) {
         if (Get-ScheduledTask -TaskName $name -ErrorAction SilentlyContinue) {
             Unregister-ScheduledTask -TaskName $name -Confirm:$false
             Write-Host "Removed: $name"
@@ -82,9 +92,8 @@ if (-not (Test-Path $vbsPath)) {
     return
 }
 
-# Drop ALL prior chat-push entries (new + legacy single-window setup)
-# so this script is idempotent and doubles as the upgrade path from
-# the pre-split schedule.
+# Drop the current entry plus all legacy split-window entries so this
+# script is idempotent and doubles as the upgrade path.
 #
 # Two cleanup paths because they catch different kinds of leftovers:
 #   - Unregister-ScheduledTask (CIM): clean unregister of tasks the
@@ -102,7 +111,7 @@ function Invoke-SchtasksDelete {
     cmd /c "schtasks /delete /tn `"$Name`" /f >nul 2>&1"
 }
 
-foreach ($name in @($dayTask, $transTask, $eveTask) + $legacyTasks) {
+foreach ($name in @($chatTask) + $legacyTasks) {
     if (Get-ScheduledTask -TaskName $name -ErrorAction SilentlyContinue) {
         try {
             Unregister-ScheduledTask -TaskName $name -Confirm:$false -ErrorAction Stop
@@ -111,139 +120,67 @@ foreach ($name in @($dayTask, $transTask, $eveTask) + $legacyTasks) {
             Invoke-SchtasksDelete -Name $name
         }
     } else {
-        # CIM doesn't see one with this name, but an orphan may still be
-        # on disk. schtasks /delete will quietly succeed if the orphan
-        # exists, quietly fail if it doesn't -- either way we're clean.
         Invoke-SchtasksDelete -Name $name
     }
 }
 
-function Register-ChatPush {
-    param(
-        [string]$Name,
-        [int]$StartHour,
-        [int]$DurationHours,
-        [int]$IntervalMinutes,
-        [int]$LastMinutes,
-        [string]$Description
-    )
-    # Anchor to today's StartHour BD-local. If that's already past + the
-    # window has already closed, anchor tomorrow.
-    $anchor = (Get-Date).Date.AddHours($StartHour)
-    $windowClose = $anchor.AddHours($DurationHours)
-    if ((Get-Date) -gt $windowClose) {
-        $anchor = $anchor.AddDays(1)
-    }
-
-    # Hidden launcher: wscript.exe runs push-chat-hidden.vbs which spawns
-    # `python -m teams.push_chat --last-minutes <N>` with a hidden window
-    # and tees output to logs\chat_push.log.
-    $action = New-ScheduledTaskAction `
-        -Execute "wscript.exe" `
-        -Argument ('"{0}" --last-minutes {1}' -f $vbsPath, $LastMinutes) `
-        -WorkingDirectory $repoRoot
-
-    $dailyTrigger = New-ScheduledTaskTrigger -Daily -At $anchor
-    $dailyTrigger.Repetition = (New-ScheduledTaskTrigger `
-        -Once -At $anchor `
-        -RepetitionInterval (New-TimeSpan -Minutes $IntervalMinutes) `
-        -RepetitionDuration (New-TimeSpan -Hours $DurationHours)).Repetition
-
-    $settings = New-ScheduledTaskSettingsSet `
-        -AllowStartIfOnBatteries `
-        -DontStopIfGoingOnBatteries `
-        -StartWhenAvailable `
-        -ExecutionTimeLimit (New-TimeSpan -Minutes 10)
-
-    # Inline belt-and-suspenders cleanup right before Register. The
-    # outer top-of-script cleanup at line 105 should already have
-    # wiped this name, but we've seen sporadic cases (parens in task
-    # name + cmd /c quoting subtleties) where Evening specifically
-    # survived cleanup and Register-ScheduledTask hit "Cannot create
-    # a file when that file already exists". Use cmd /c to avoid
-    # PS5.1 NativeCommandError when the task doesn't exist yet.
-    Invoke-SchtasksDelete -Name $Name
-
-    try {
-        Register-ScheduledTask `
-            -TaskName $Name `
-            -Action $action `
-            -Trigger $dailyTrigger `
-            -Settings $settings `
-            -Description $Description `
-            -RunLevel Limited `
-            -ErrorAction Stop `
-            | Out-Null
-    } catch {
-        # Write to host AND throw a non-terminating error so the
-        # script-level supervisor sees it but the loop continues to
-        # register the next task in the sequence (Day -> Evening ->
-        # Transition order; one failure shouldn't drop the others).
-        Write-Host ("FAILED to register {0}: {1}" -f $Name, $_.Exception.Message) -ForegroundColor Red
-        return
-    }
-
-    Write-Host ("Registered: {0,-40} every {1,3} min  BD {2:D2}:00-{3:D2}:00  --last-minutes {4}  first run {5}" -f `
-        $Name, $IntervalMinutes, $StartHour, ($StartHour + $DurationHours), $LastMinutes, $anchor)
+# Anchor to today's 04:00 BD-local. If the whole window has already
+# closed for today (now is past 22:50), anchor tomorrow.
+$anchor = (Get-Date).Date.AddHours($startHour).AddMinutes($startMinute)
+$windowClose = $anchor.AddHours($windowHours).AddMinutes($windowMinutes)
+if ((Get-Date) -gt $windowClose) {
+    $anchor = $anchor.AddDays(1)
 }
 
-Register-ChatPush `
-    -Name $dayTask `
-    -StartHour 10 `
-    -DurationHours 7 `
-    -IntervalMinutes 120 `
-    -LastMinutes 120 `
-    -Description "Pushes the last 120 min of Teams chat into NUCLEUS_CENTRAL_PATH. Fires at BD 10:00, 12:00, 14:00, 16:00 — stops at 16:00 so the last tick doesn't collide with the Evening task's 18:00 fire."
-
-Register-ChatPush `
-    -Name $eveTask `
-    -StartHour 18 `
-    -DurationHours 6 `
-    -IntervalMinutes 30 `
-    -LastMinutes 30 `
-    -Description "Pushes the last 30 min of Teams chat into NUCLEUS_CENTRAL_PATH. Runs every 30 min during BD 18:00-24:00 window — peak US-client interaction time."
-
-# Transition: one fire daily at 17:30 BD to bridge the 16:00-17:30 gap.
-$transAnchor = (Get-Date).Date.AddHours(17).AddMinutes(30)
-if ((Get-Date) -gt $transAnchor) {
-    $transAnchor = $transAnchor.AddDays(1)
-}
-
-# Hidden launcher (same VBS wrapper as Day + Evening). VBS resolves
-# venv vs system python on its own.
-$transAction = New-ScheduledTaskAction `
+# Hidden launcher: wscript.exe runs push-chat-hidden.vbs which spawns
+# `python -m teams.push_chat --last-minutes <N>` with a hidden window
+# and tees output to logs\chat_push.log.
+$action = New-ScheduledTaskAction `
     -Execute "wscript.exe" `
-    -Argument ('"{0}" --last-minutes 90' -f $vbsPath) `
+    -Argument ('"{0}" --last-minutes {1}' -f $vbsPath, $lastMinutes) `
     -WorkingDirectory $repoRoot
 
-$transTrigger = New-ScheduledTaskTrigger -Daily -At $transAnchor
+# Daily trigger carrying a sub-day repetition: fire at $anchor, then
+# every $intervalMinutes for the $windowHours/$windowMinutes duration.
+$dailyTrigger = New-ScheduledTaskTrigger -Daily -At $anchor
+$dailyTrigger.Repetition = (New-ScheduledTaskTrigger `
+    -Once -At $anchor `
+    -RepetitionInterval (New-TimeSpan -Minutes $intervalMinutes) `
+    -RepetitionDuration (New-TimeSpan -Hours $windowHours -Minutes $windowMinutes)).Repetition
 
-$transSettings = New-ScheduledTaskSettingsSet `
+$settings = New-ScheduledTaskSettingsSet `
     -AllowStartIfOnBatteries `
     -DontStopIfGoingOnBatteries `
     -StartWhenAvailable `
     -ExecutionTimeLimit (New-TimeSpan -Minutes 10)
 
+# Inline belt-and-suspenders cleanup right before Register, in case the
+# parens-in-name + cmd /c quoting let an orphan survive the loop above.
+Invoke-SchtasksDelete -Name $chatTask
+
 try {
     Register-ScheduledTask `
-        -TaskName $transTask `
-        -Action $transAction `
-        -Trigger $transTrigger `
-        -Settings $transSettings `
-        -Description "Bridges the 16:00-17:30 BD gap between the Day and Evening chat-push windows. Fires once daily at 17:30 with --last-minutes 90." `
+        -TaskName $chatTask `
+        -Action $action `
+        -Trigger $dailyTrigger `
+        -Settings $settings `
+        -Description "Pushes the last $lastMinutes min of Teams chat into NUCLEUS_CENTRAL_PATH every $intervalMinutes min, BD 04:00-22:50. Last push ~22:40, just before the 23:00 daily Requirement Management run." `
         -RunLevel Limited `
         -ErrorAction Stop `
         | Out-Null
-    Write-Host ("Registered: {0,-44} once daily    BD 17:30        --last-minutes 90  first run {1}" -f $transTask, $transAnchor)
 } catch {
-    Write-Error "FAILED to register '$transTask': $($_.Exception.Message)"
+    Write-Error "FAILED to register '$chatTask': $($_.Exception.Message)"
+    exit 1
 }
 
+Write-Host ("Registered: {0}" -f $chatTask)
+Write-Host ("    Fires:   every {0} min, BD 04:00 -> 22:50 (last ~22:40)" -f $intervalMinutes)
+Write-Host ("    Window:  --last-minutes {0} (20-min cadence + 10-min overlap)" -f $lastMinutes)
+Write-Host ("    First:   $anchor")
 Write-Host ""
-Write-Host "Coverage: continuous BD 08:00-24:00. Only gap is BD 00:00-10:00."
-Write-Host "Overnight catch-up if needed:"
+Write-Host "Overnight (22:50-04:00) is not auto-pushed by design. Catch-up if needed:"
 Write-Host "    py -3 -m teams.push_chat --last-minutes 600"
 Write-Host ""
 Write-Host "View:    Task Scheduler -> Task Scheduler Library"
-Write-Host "Run now: Start-ScheduledTask -TaskName '$eveTask'"
+Write-Host "Run now: Start-ScheduledTask -TaskName '$chatTask'"
 Write-Host "Remove:  .\scripts\register-chat-push-task.ps1 -Unregister"

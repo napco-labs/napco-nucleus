@@ -50,6 +50,13 @@ load_dotenv(Path(__file__).parent.parent / ".env", override=True)
 CHUNK = 1024
 STOP_FILE = Path(__file__).parent.parent / "data" / "teams" / ".stop_recording"
 
+# Marker dropped while a recording is in progress and removed on clean
+# finalize. Its presence at daemon startup means the previous recording
+# did NOT stop cleanly (the daemon — or the whole PC — died mid-call).
+# voice_daemon reads this on boot to recover the orphaned audio instead
+# of losing the call. Holds the recorder PID + the WAV paths + start time.
+MARKER_FILE = Path(__file__).parent.parent / "data" / "teams" / ".recording_active"
+
 # PortAudio error codes that mean "the device went away" (e.g. a USB
 # headset unplugged and replugged into another port mid-call) rather
 # than "we're done". On any of these we re-enumerate the devices and
@@ -582,7 +589,184 @@ def _central_calls_dir() -> Path | None:
     return Path(raw) / _dev_name() / day / "calls"
 
 
+def _write_marker(stamp: str, out_dir: Path, started_dt: datetime.datetime,
+                  spk_path: Path, mic_path: Path) -> None:
+    """Record that a capture is in progress so a crash can be recovered."""
+    try:
+        MARKER_FILE.parent.mkdir(parents=True, exist_ok=True)
+        MARKER_FILE.write_text(json.dumps({
+            "stamp": stamp,
+            "pid": os.getpid(),
+            "out_dir": str(out_dir),
+            "spk_path": str(spk_path),
+            "mic_path": str(mic_path),
+            "started_at": started_dt.isoformat(timespec="seconds"),
+            "started_at_ms": int(started_dt.timestamp() * 1000),
+        }, indent=2), encoding="utf-8")
+    except Exception as e:
+        print(f"  [marker] write failed (crash recovery disabled "
+              f"for this call): {e}", file=sys.stderr)
+
+
+def _clear_marker() -> None:
+    try:
+        MARKER_FILE.unlink()
+    except FileNotFoundError:
+        pass
+    except Exception as e:
+        print(f"  [marker] clear failed: {e}", file=sys.stderr)
+
+
+def _repair_wav_header(path: Path) -> bool:
+    """Rewrite the RIFF/data sizes of a WAV left unclosed by a crash.
+
+    The `wave` writer fills the RIFF + data chunk sizes only on close(). A
+    process killed mid-call leaves a 44-byte PCM header with stale (often
+    zero) sizes even though every captured sample IS on disk after the
+    header. We recompute both size fields from the real file length so the
+    audio becomes readable/transcribable. Returns True if the file now
+    looks like a valid non-empty WAV.
+    """
+    try:
+        size = path.stat().st_size
+        if size < 44:
+            return False
+        with open(path, "r+b") as f:
+            head = f.read(44)
+            if head[0:4] != b"RIFF" or head[8:12] != b"WAVE":
+                return False
+            # Standard 44-byte PCM header: 'data' length tag at offset 40,
+            # audio bytes follow at 44. (Our writer always emits this layout.)
+            if head[36:40] != b"data":
+                return False
+            data_bytes = size - 44
+            riff_size = size - 8
+            f.seek(4)
+            f.write(riff_size.to_bytes(4, "little"))
+            f.seek(40)
+            f.write(data_bytes.to_bytes(4, "little"))
+        return data_bytes > 0
+    except Exception as e:
+        print(f"  [recover] WAV header repair failed for {path.name}: {e}",
+              file=sys.stderr)
+        return False
+
+
+def _postprocess_and_upload(*, out_dir: Path, stamp: str,
+                            started_dt: datetime.datetime,
+                            ended_dt: datetime.datetime,
+                            spk_path: Path, mic_path: Path) -> int:
+    """Mic denoise/normalize, min-duration discard, then metadata + upload.
+
+    Shared by the normal end-of-call path and the crash-recovery finalize
+    so both behave identically. Returns 0 always (best-effort).
+    """
+    duration_s = (ended_dt - started_dt).total_seconds()
+
+    # Mic post-processing. Order: denoise FIRST (kill hum before measuring
+    # peak), then normalize. Both toggleable via env.
+    if mic_path.exists() and mic_path.stat().st_size > 0:
+        if os.environ.get("NUCLEUS_MIC_DENOISE", "1") != "0":
+            try:
+                mains_hz = float(os.environ.get("NUCLEUS_MIC_MAINS_HZ", "50"))
+            except ValueError:
+                mains_hz = 50.0
+            _denoise_mic_wav(mic_path, mains_hz=mains_hz)
+        if os.environ.get("NUCLEUS_MIC_NORMALIZE", "1") != "0":
+            _normalize_mic_wav(mic_path)
+
+    # Discard sessions shorter than the configured minimum (default 20s) —
+    # ringing-then-declined, voice notes, playback blips. Keeps junk off
+    # central even though we now START FROM THE RING.
+    try:
+        min_duration_s = float(os.environ.get("NUCLEUS_CALL_MIN_DURATION_S", "20"))
+    except ValueError:
+        min_duration_s = 20.0
+    if duration_s < min_duration_s:
+        print(f"  duration {duration_s:.1f}s < min {min_duration_s:.1f}s — "
+              f"discarding WAVs, skipping metadata + upload.")
+        for path in (spk_path, mic_path):
+            try:
+                if path.exists():
+                    path.unlink()
+            except Exception as e:
+                print(f"  delete {path.name} FAILED: {e}", file=sys.stderr)
+        return 0
+
+    _write_metadata_and_upload(
+        out_dir=out_dir, stamp=stamp,
+        started_dt=started_dt, ended_dt=ended_dt,
+        spk_path=spk_path, mic_path=mic_path,
+    )
+    return 0
+
+
+def finalize_orphan() -> int:
+    """Recover a recording the daemon/PC died on — called at daemon boot.
+
+    Reads MARKER_FILE, repairs the unclosed WAV headers so the partial
+    audio is usable, then runs the same post-process + upload as a normal
+    call. The few seconds lost at the crash instant are unavoidable, but
+    the rest of the call is preserved and pushed to central instead of
+    being thrown away. Always clears the marker so we don't loop.
+    """
+    if not MARKER_FILE.exists():
+        print("[recover] no in-progress marker — nothing to finalize.")
+        return 0
+    try:
+        m = json.loads(MARKER_FILE.read_text(encoding="utf-8"))
+    except Exception as e:
+        print(f"[recover] marker unreadable ({e}); clearing it.", file=sys.stderr)
+        _clear_marker()
+        return 0
+
+    stamp = m.get("stamp", "")
+    out_dir = Path(m.get("out_dir", str(
+        Path(__file__).parent.parent / "data" / "teams" / "calls")))
+    spk_path = Path(m["spk_path"]) if m.get("spk_path") else out_dir / f"{stamp}_speaker.wav"
+    mic_path = Path(m["mic_path"]) if m.get("mic_path") else out_dir / f"{stamp}_mic.wav"
+
+    try:
+        started_dt = datetime.datetime.fromisoformat(m["started_at"])
+    except Exception:
+        started_dt = datetime.datetime.now()
+
+    print(f"[recover] finalizing orphaned recording {stamp} "
+          f"(crash mid-call) — repairing WAV headers...")
+
+    any_audio = False
+    for p in (spk_path, mic_path):
+        if p.exists() and _repair_wav_header(p):
+            any_audio = True
+            print(f"  [recover] repaired {p.name} "
+                  f"({p.stat().st_size/1024/1024:.1f} MB)")
+
+    if not any_audio:
+        print("[recover] no recoverable audio on disk; clearing marker.")
+        _clear_marker()
+        return 0
+
+    # ended_dt = latest WAV mtime (best estimate of when capture stopped).
+    try:
+        mtimes = [p.stat().st_mtime for p in (spk_path, mic_path) if p.exists()]
+        ended_dt = datetime.datetime.fromtimestamp(max(mtimes)) if mtimes \
+            else datetime.datetime.now()
+    except Exception:
+        ended_dt = datetime.datetime.now()
+
+    _postprocess_and_upload(
+        out_dir=out_dir, stamp=stamp,
+        started_dt=started_dt, ended_dt=ended_dt,
+        spk_path=spk_path, mic_path=mic_path,
+    )
+    _clear_marker()
+    print(f"[recover] orphaned recording {stamp} finalized.")
+    return 0
+
+
 def main() -> int:
+    if "--finalize-orphan" in sys.argv[1:]:
+        return finalize_orphan()
     out_dir = Path(__file__).parent.parent / "data" / "teams" / "calls"
     out_dir.mkdir(parents=True, exist_ok=True)
     started_dt = datetime.datetime.now()
@@ -599,6 +783,10 @@ def main() -> int:
     # its own PyAudio instance and re-resolves its device on reconnect, so
     # a mid-call USB port change is recovered inside record() itself.
     _disable_exclusive_mode_for_mic()
+
+    # Drop the in-progress marker BEFORE the first sample is written so a
+    # crash at any point after this is recoverable on the next daemon boot.
+    _write_marker(stamp, out_dir, started_dt, spk_path, mic_path)
 
     stop = threading.Event()
     threads = [
@@ -638,52 +826,19 @@ def main() -> int:
         print(f"  {path}  ({size:.1f} MB)")
 
     ended_dt = datetime.datetime.now()
-    duration_s = (ended_dt - started_dt).total_seconds()
 
-    # Mic post-processing on the recorder side. Order matters:
-    #   1. Denoise FIRST -- kills mains hum + sub-audible rumble. If we
-    #      normalize first, peak amplitude includes hum -> headroom
-    #      wasted on noise instead of speech.
-    #   2. Normalize -- bring speech peak to a reasonable dBFS.
-    # Both toggleable via env so a dev can disable them if needed.
-    if mic_path.exists() and mic_path.stat().st_size > 0:
-        if os.environ.get("NUCLEUS_MIC_DENOISE", "1") != "0":
-            try:
-                mains_hz = float(os.environ.get("NUCLEUS_MIC_MAINS_HZ", "50"))
-            except ValueError:
-                mains_hz = 50.0
-            _denoise_mic_wav(mic_path, mains_hz=mains_hz)
-        if os.environ.get("NUCLEUS_MIC_NORMALIZE", "1") != "0":
-            _normalize_mic_wav(mic_path)
-
-    # Discard sessions shorter than the configured minimum (default 20s).
-    # In auto-trigger mode the daemon fires on any Teams audio-session
-    # edge — that includes a ringing-then-declined call and brief voice
-    # notes / playback. A short WAV would waste Whisper time on central.
+    # Post-process + discard-if-too-short + metadata + central upload.
+    # Shared with the crash-recovery finalize path so both behave the same.
     try:
-        min_duration_s = float(os.environ.get("NUCLEUS_CALL_MIN_DURATION_S", "20"))
-    except ValueError:
-        min_duration_s = 20.0
-    if duration_s < min_duration_s:
-        print(f"  duration {duration_s:.1f}s < min {min_duration_s:.1f}s — "
-              f"discarding WAVs, skipping metadata + upload.")
-        for path in (spk_path, mic_path):
-            try:
-                if path.exists():
-                    path.unlink()
-            except Exception as e:
-                print(f"  delete {path.name} FAILED: {e}", file=sys.stderr)
-        return 0
-
-    # Resolve client + write metadata + push to central if configured.
-    _write_metadata_and_upload(
-        out_dir=out_dir,
-        stamp=stamp,
-        started_dt=started_dt,
-        ended_dt=ended_dt,
-        spk_path=spk_path,
-        mic_path=mic_path,
-    )
+        _postprocess_and_upload(
+            out_dir=out_dir, stamp=stamp,
+            started_dt=started_dt, ended_dt=ended_dt,
+            spk_path=spk_path, mic_path=mic_path,
+        )
+    finally:
+        # Clean exit — drop the in-progress marker so the next daemon boot
+        # doesn't treat this finished call as an orphan to recover.
+        _clear_marker()
     return 0
 
 

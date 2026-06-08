@@ -3,7 +3,7 @@
 Register the end-of-day Requirement Management run on MVPACCESS.
 
 .DESCRIPTION
-One Windows Scheduled Task, fires once daily at BD 23:45:
+One Windows Scheduled Task, fires once daily at BD 23:00 (11:00 PM sharp):
 
   "NAPCO Nucleus - Requirement Management (Daily)"
       py -3 collect_central.py --client all --last-minutes 1440
@@ -22,8 +22,8 @@ Operator-rule alignment:
     requirement-management.bat / 'do it right now' any time.
   - Rule 2 (daily auto): this task IS rule 2.
   - Rule 3 (whole-day include): the 1440-min window + the accumulated
-    inbox guarantee that 23:45's draft sees the full day of inputs.
-    If you want the 23:45 draft to OVERWRITE earlier same-day Gmail
+    inbox guarantee that 23:00's draft sees the full day of inputs.
+    If you want the 23:00 draft to OVERWRITE earlier same-day Gmail
     drafts (rather than appending another draft), that's a follow-up
     code change to draft_verification_email — flag if you want it.
 
@@ -107,8 +107,8 @@ if (Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue) {
     Invoke-SchtasksDelete -TaskName $taskName
 }
 
-# Anchor: today at 23:45 BD-local. If past, anchor tomorrow.
-$anchor = (Get-Date).Date.AddHours(23).AddMinutes(45)
+# Anchor: today at 23:00 BD-local (11:00 PM sharp). If past, anchor tomorrow.
+$anchor = (Get-Date).Date.AddHours(23)
 if ((Get-Date) -gt $anchor) {
     $anchor = $anchor.AddDays(1)
 }
@@ -134,7 +134,7 @@ try {
         -Action $action `
         -Trigger $trigger `
         -Settings $settings `
-        -Description "Daily end-of-day Requirement Management pipeline. Fires once daily at BD 23:45 and includes the whole day's requirements (even if 'do it right now' already drafted earlier in the day). Writes the verification email to Gmail Drafts for manual send." `
+        -Description "Daily end-of-day Requirement Management pipeline. Fires once daily at BD 23:00 (11:00 PM sharp) and includes the whole day's requirements (even if 'do it right now' already drafted earlier in the day). Writes the verification email to Gmail Drafts for manual send." `
         -RunLevel Limited `
         -ErrorAction Stop `
         | Out-Null
@@ -144,7 +144,7 @@ try {
 }
 
 Write-Host "Registered: $taskName"
-Write-Host "    Fires:    once daily at BD 23:45 (next: $anchor)"
+Write-Host "    Fires:    once daily at BD 23:00 - 11:00 PM sharp (next: $anchor)"
 Write-Host "    Command:  $pyExe $argString"
 Write-Host "    Window:   --last-minutes 1440 (24 h, covers whole day)"
 Write-Host ""

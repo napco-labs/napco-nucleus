@@ -6,15 +6,16 @@
 #   1. EVENT:  transcribe-loop.sh writes .pipeline_trigger after transcribing
 #              >= 1 session. Fires within 2 min of transcription completing.
 #   2. CLOCK:  fires once per BD calendar day at DAILY_DRAFT_TARGET_TIME
-#              (default 00:05) — always runs regardless of whether there
-#              are call transcripts (sends a daily summary either way).
+#              (default 23:00 — 11:00 PM sharp) — always runs regardless of
+#              whether there are call transcripts (sends a daily summary
+#              either way).
 
 set -uo pipefail
 LOOKBACK_MINUTES="${DAILY_DRAFT_LOOKBACK_MINUTES:-1440}"
 POLL_SECONDS="${PIPELINE_POLL_SECONDS:-120}"
 TRIGGER_FILE="/data/nucleus-central/.pipeline_trigger"
 CENTRAL="/data/nucleus-central"
-CLOCK_TARGET="${DAILY_DRAFT_TARGET_TIME:-00:05}"
+CLOCK_TARGET="${DAILY_DRAFT_TARGET_TIME:-23:00}"
 LAST_CLOCK_RUN_DATE=""
 
 trap 'echo "[draft-loop] received SIGTERM, exiting"; exit 0' TERM INT
