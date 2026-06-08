@@ -102,25 +102,29 @@ def _terminate_pa(p) -> None:
         except Exception:
             pass
 
-# Registry property key that controls exclusive-mode on Windows audio capture devices.
+# Registry property key that controls exclusive-mode on Windows audio devices.
 _EXCL_MODE_PROP = "{b3f8fa53-0004-438e-9003-51a46e139bfc},6"
-_CAPTURE_REG_PATH = r"SOFTWARE\Microsoft\Windows\CurrentVersion\MMDevices\Audio\Capture"
+_MMDEV_BASE = r"SOFTWARE\Microsoft\Windows\CurrentVersion\MMDevices\Audio"
+_CAPTURE_REG_PATH = _MMDEV_BASE + r"\Capture"   # mic / input endpoints
+_RENDER_REG_PATH = _MMDEV_BASE + r"\Render"     # speaker / output endpoints
 
 _HEADSET_KEYWORDS = [
-    "headset", "headphone", "logitech", "jabra", "plantronics",
-    "sennheiser", "bose", "hyperx", "corsair", "razer",
+    "headset", "headphone", "logitech", "logi", "jabra", "plantronics",
+    "sennheiser", "bose", "hyperx", "corsair", "razer", "speakers",
 ]
 
 
-def _find_headset_guid_via_pnp() -> str | None:
-    """Use PnP to find the current GUID of the connected headset mic.
+def _find_headset_audio_endpoints() -> list[tuple[str, str]]:
+    """Return [(kind, guid), ...] for the connected headset's audio endpoints.
 
-    Runs a PowerShell query so it discovers the device regardless of which
-    USB port it is plugged into.  Returns the trailing GUID from the
-    InstanceId (matches the key under MMDevices\\Audio\\Capture).
+    kind is 'render' (speaker / output) or 'capture' (mic / input). Found via
+    a PnP query so it works regardless of which USB port the device is on.
+    MMDEVAPI InstanceIds encode the data-flow: {0.0.0.*} = render (output),
+    {0.0.1.*} = capture (input); the trailing {GUID} is the MMDevices key.
     """
     import re
     import subprocess
+    import json
     script = r"""
 $devs = Get-PnpDevice -Class AudioEndpoint -ErrorAction SilentlyContinue
 foreach ($d in $devs) {
@@ -130,55 +134,82 @@ foreach ($d in $devs) {
     }
 } | ConvertTo-Json -Depth 1
 """
+    found: list[tuple[str, str]] = []
     try:
         out = subprocess.run(
             ["powershell", "-NoProfile", "-Command", script],
             capture_output=True, text=True, timeout=15,
         ).stdout.strip()
         if not out:
-            return None
-        import json
+            return found
         data = json.loads(out)
         if isinstance(data, dict):
             data = [data]
         for item in data:
             name = (item.get("FriendlyName") or "").lower()
-            if any(kw in name for kw in _HEADSET_KEYWORDS):
-                iid = item.get("InstanceId", "")
-                m = re.search(r"\{[0-9A-Fa-f\-]{36}\}$", iid)
-                if m:
-                    return m.group(0)
+            if not any(kw in name for kw in _HEADSET_KEYWORDS):
+                continue
+            iid = item.get("InstanceId", "") or ""
+            m = re.search(r"\{[0-9A-Fa-f\-]{36}\}$", iid)
+            if not m:
+                continue
+            guid = m.group(0)
+            if "{0.0.1" in iid:
+                kind = "capture"
+            elif "{0.0.0" in iid:
+                kind = "render"
+            else:  # fall back to the friendly name
+                kind = "capture" if ("microphone" in name or "mic" in name) else "render"
+            found.append((kind, guid))
     except Exception:
         pass
+    return found
+
+
+def _find_headset_guid_via_pnp() -> str | None:
+    """Back-compat: first capture (mic) headset GUID, or None."""
+    for kind, guid in _find_headset_audio_endpoints():
+        if kind == "capture":
+            return guid
     return None
 
 
 def _disable_exclusive_mode_for_mic() -> None:
-    """Disable exclusive mode for the connected headset mic.
+    """Disable exclusive mode for BOTH the headset mic AND speaker endpoints.
 
-    Queries PnP to find the headset's current device GUID (works on any
-    USB port), then writes AllowExclusiveMode=0 to the registry for that
-    specific device.  Runs before every recording — no manual fix needed
-    when devs switch ports or devices.
-    Only runs on Windows; silently skips on other platforms.
+    Teams can grab the OUTPUT (render) device in exclusive mode, which makes
+    the WASAPI loopback capture 0 bytes — the speaker track came up empty
+    while the mic recorded fine (2026-06-08). Disabling exclusive mode on the
+    render endpoint too lets the loopback capture the remote party's audio.
+    Writes AllowExclusiveMode=0 under the correct MMDevices hive (Capture or
+    Render) for each headset endpoint GUID. Runs before every recording and
+    on reconnect; works on any USB port. Windows-only; skips elsewhere.
     """
     if sys.platform != "win32":
         return
     try:
         import winreg
-        guid = _find_headset_guid_via_pnp()
-        if not guid:
-            print("  [mic] no headset found via PnP — skipping exclusive mode fix")
-            return
-        prop_path = f"{_CAPTURE_REG_PATH}\\{guid}\\Properties"
-        with winreg.OpenKey(
-            winreg.HKEY_LOCAL_MACHINE, prop_path,
-            access=winreg.KEY_SET_VALUE | winreg.KEY_READ,
-        ) as props:
-            winreg.SetValueEx(props, _EXCL_MODE_PROP, 0, winreg.REG_DWORD, 0)
-        print(f"  [mic] exclusive mode disabled for headset {guid}")
-    except Exception as e:
-        print(f"  [mic] exclusive mode fix skipped: {e}", file=sys.stderr)
+    except Exception:
+        return
+    endpoints = _find_headset_audio_endpoints()
+    if not endpoints:
+        print("  [audio] no headset endpoints via PnP — skipping exclusive mode fix")
+        return
+    for kind, guid in endpoints:
+        base = _RENDER_REG_PATH if kind == "render" else _CAPTURE_REG_PATH
+        prop_path = f"{base}\\{guid}\\Properties"
+        try:
+            with winreg.OpenKey(
+                winreg.HKEY_LOCAL_MACHINE, prop_path,
+                access=winreg.KEY_SET_VALUE | winreg.KEY_READ,
+            ) as props:
+                winreg.SetValueEx(props, _EXCL_MODE_PROP, 0, winreg.REG_DWORD, 0)
+            print(f"  [audio] exclusive mode disabled for {kind} {guid}")
+        except FileNotFoundError:
+            pass  # endpoint not in this hive (unplugged) — skip quietly
+        except Exception as e:
+            print(f"  [audio] exclusive mode fix skipped for {kind} {guid}: {e}",
+                  file=sys.stderr)
 
 
 def resolve_loopback(p: pyaudio.PyAudio) -> dict:
