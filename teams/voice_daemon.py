@@ -497,14 +497,55 @@ def _pid_alive(pid: int) -> bool:
 
 
 def _run_finalize_orphan() -> None:
-    """Invoke the recorder's crash-recovery finalize as a subprocess."""
+    """Invoke the recorder's crash-recovery finalize as a subprocess.
+
+    Bounded at 120s: long enough to repair + upload a real partial recording,
+    short enough that a stuck spawn/import on a flaky dev PC can't wedge
+    recovery for minutes. Recovery also runs off the watcher thread, so even
+    this timeout never blocks call detection.
+    """
     try:
         subprocess.run(
             [sys.executable, "-m", "teams.record_call", "--finalize-orphan"],
-            cwd=str(_HERE), timeout=600,
+            cwd=str(_HERE), timeout=120,
         )
     except Exception as e:
         print(f"[voice] finalize-orphan subprocess failed: {e}", file=sys.stderr)
+
+
+def _orphan_has_recoverable_audio(m: dict) -> bool:
+    """True if the orphan's WAVs hold real audio worth repairing+uploading.
+
+    A 0-byte or header-only file (from a false/aborted start — the common case
+    behind the watcher-blocking hang) returns False so it's discarded inline
+    without spawning the finalize subprocess.
+    """
+    for key in ("spk_path", "mic_path"):
+        p = m.get(key)
+        if not p:
+            continue
+        try:
+            if Path(p).stat().st_size > 1024:  # >1KB = more than a bare header
+                return True
+        except OSError:
+            pass
+    return False
+
+
+def _discard_orphan_inline(m: dict) -> None:
+    """Delete an empty/aborted orphan's WAVs + marker. No subprocess — instant."""
+    for key in ("spk_path", "mic_path"):
+        p = m.get(key)
+        if not p:
+            continue
+        try:
+            Path(p).unlink()
+        except OSError:
+            pass
+    try:
+        _RECORDING_MARKER.unlink()
+    except OSError:
+        pass
 
 
 def _recover_orphan_recording() -> None:
@@ -550,9 +591,18 @@ def _recover_orphan_recording() -> None:
         else:
             print("[voice] orphaned recorder finalized + uploaded cleanly.")
     else:
-        print(f"[voice] crashed recording found (stamp {stamp}, pid {pid} "
-              f"dead) — recovering partial audio from disk.")
-        _run_finalize_orphan()
+        # Dead recorder. If the orphan WAVs hold no recoverable audio (the
+        # common case after a false/aborted start — 0KB or header-only files),
+        # discard inline: no subprocess, so a slow/stuck finalize can never
+        # wedge recovery. Only spawn the finalize subprocess for real audio.
+        if _orphan_has_recoverable_audio(m):
+            print(f"[voice] crashed recording found (stamp {stamp}, pid {pid} "
+                  f"dead) — recovering partial audio from disk.")
+            _run_finalize_orphan()
+        else:
+            print(f"[voice] empty/aborted orphan (stamp {stamp}, pid {pid} "
+                  f"dead) — discarding inline (no audio to recover).")
+            _discard_orphan_inline(m)
 
     # Clear any stale stop sentinel so the next real recording isn't
     # insta-stopped by leftovers from this recovery.
@@ -649,13 +699,19 @@ def main() -> int:
         "call_started_at": None,
     }
 
-    # Crash recovery: if a prior recording didn't stop cleanly (daemon or
-    # PC died mid-call), recover/upload its partial audio BEFORE the watcher
-    # can auto-resume — so we never lose a call and never double-record one.
-    try:
-        _recover_orphan_recording()
-    except Exception as e:
-        print(f"[voice] orphan recovery skipped: {e}", file=sys.stderr)
+    # Crash recovery for a prior recording that didn't stop cleanly (daemon or
+    # PC died mid-call): repair/upload its partial audio, or discard if empty.
+    # Runs in a BACKGROUND thread so a slow/stuck recovery can NEVER block the
+    # watcher from detecting calls — a hung 0KB-orphan finalize on a dev PC
+    # wedged the watcher for the full subprocess timeout (2026-06-08). Empty
+    # orphans are now discarded inline; real ones recover off the hot path.
+    def _safe_recover():
+        try:
+            _recover_orphan_recording()
+        except Exception as e:
+            print(f"[voice] orphan recovery skipped: {e}", file=sys.stderr)
+    threading.Thread(target=_safe_recover, daemon=True,
+                     name="orphan-recovery").start()
 
     watcher_stop = threading.Event()
     watcher_thread: threading.Thread | None = None
