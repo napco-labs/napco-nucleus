@@ -132,26 +132,27 @@ def _build_message(day: str, to_addrs: list[str], cc_addrs: list[str],
     msg["Subject"] = f"NAPCO Nucleus — daily client requirements ({day})"
 
     lines: list[str] = []
-    lines.append(
-        f"Daily summary of client requirements identified from the team's "
-        f"emails, Teams chats and calls in the last 24 hours.")
+    lines.append("Dear Team,")
     lines.append("")
     if reqs:
-        lines.append(f"Workable tasks identified today ({len(reqs)}):")
+        lines.append(
+            "Workable tasks identified from the last 24 hours "
+            "(MS Teams calls, chats, email, and Google Drive):")
+        lines.append("")
         for r in reqs:
             tag = r["ps"]
             if r.get("hours"):
                 tag = f"{tag} ~{r['hours']}h"
             lines.append(f"  {r['n']}. [{tag}] {r['title']}")
+        lines.append("")
+        lines.append(
+            "Please see the attached document for the full text, sources, "
+            "and confidence notes.")
     else:
-        lines.append("No new client requirements were identified from "
-                     "today's calls and communications. This may mean "
-                     "discussions were internal, or calls had no "
-                     "actionable items for the client.")
-    lines.append("")
-    lines.append(
-        "The attached document contains the full text, sources and "
-        "confidence notes. Please reply to this email with any corrections.")
+        lines.append(
+            "No requirements were found from the MS Teams calls, chats, "
+            "email, or Google Drive last night. This is just a notification "
+            "to let you know the scenario. No action needed.")
     lines.append("")
     lines.append("— NAPCO Nucleus")
     msg.set_content("\n".join(lines))
@@ -213,25 +214,22 @@ def main() -> int:
               file=sys.stderr)
         return 2
 
-    # Boss-facing email: ONLY attach the curated Requirements Verification
-    # doc. The raw session.docx (pipeline input) contains noise — marketing
-    # emails, broken-mic call clips, low-confidence ASR — that the Claude
-    # identify step already triaged out. Including it as an attachment
-    # invites the reader to open the wrong file. If you ever need to ship
-    # the session doc too (debugging), set NUCLEUS_ROLLUP_INCLUDE_SESSION=1.
-    attachments: list[Path] = []
+    # Parse the curated requirements FIRST — the email shape + attachment
+    # depend on it.
     verif = _verification_doc(day)
-    if verif.exists():
-        attachments.append(verif)
-    else:
-        print(f"[rollup] note: no '{verif.name}' — Claude identify step did "
-              "not run or produced no output.")
-    if os.environ.get("NUCLEUS_ROLLUP_INCLUDE_SESSION", "").strip() in (
-            "1", "true", "yes"):
-        if SESSION_DOC.exists():
-            attachments.append(SESSION_DOC)
-
     reqs = _parse_verification_summary(verif) if verif.exists() else []
+
+    # Attach the Requirements Verification doc ONLY when there are
+    # requirements. A no-requirements run is a plain notification — do NOT
+    # attach a blank/empty doc (per Titu, 2026-06-09). The raw session.docx
+    # stays off by default (it contains pre-triage noise); set
+    # NUCLEUS_ROLLUP_INCLUDE_SESSION=1 to include it for debugging.
+    attachments: list[Path] = []
+    if reqs and verif.exists():
+        attachments.append(verif)
+        if os.environ.get("NUCLEUS_ROLLUP_INCLUDE_SESSION", "").strip() in (
+                "1", "true", "yes") and SESSION_DOC.exists():
+            attachments.append(SESSION_DOC)
 
     already = _emailed_keys(day)
     new_reqs = [r for r in reqs if _req_key(r) not in already]
