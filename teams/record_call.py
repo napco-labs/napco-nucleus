@@ -661,6 +661,85 @@ def _normalize_mic_wav(path: Path, target_dbfs: float = 1.0,
         print(f"  mic normalize FAILED: {e}", file=sys.stderr)
 
 
+def _spectral_nr_mic_wav(path: Path, alpha: float = 2.5,
+                         beta: float = 0.06) -> None:
+    """Spectral-subtraction noise reduction for the mic WAV, in place.
+
+    The notch denoise + normalize still leave a continuous broadband HISS on
+    the mic (analog headset self-noise) that normalize then amplifies — a
+    constant 'extra sound' under speech (heard 2026-06-09). Learn the noise
+    magnitude spectrum from the quietest window and subtract it across the
+    whole spectrum (over-subtraction `alpha`, spectral floor `beta`) via
+    weighted overlap-add. 'Medium' (alpha 2.5, beta 0.06) is the level Titu
+    picked by ear. Tunable: NUCLEUS_MIC_NR_ALPHA / NUCLEUS_MIC_NR_BETA.
+    """
+    try:
+        alpha = float(os.environ.get("NUCLEUS_MIC_NR_ALPHA", str(alpha)))
+        beta = float(os.environ.get("NUCLEUS_MIC_NR_BETA", str(beta)))
+    except ValueError:
+        pass
+    N, HOP = 1024, 256
+    win = np.hanning(N)
+    try:
+        with wave.open(str(path), "rb") as wf:
+            params = wf.getparams()
+            nframes = wf.getnframes()
+            sr = wf.getframerate()
+            ch = wf.getnchannels()
+            if nframes == 0:
+                return
+            raw = wf.readframes(nframes)
+        data = np.frombuffer(raw, dtype=np.int16).astype(np.float32)
+        data = data.reshape(-1, ch) if ch > 1 else data.reshape(-1, 1)
+        if data.shape[0] < N * 2:
+            return  # too short to profile reliably
+
+        def _nr(a):
+            wlen = max(sr, N * 2)
+            bi, be = 0, None
+            for i in range(0, max(1, len(a) - wlen), max(1, sr // 2)):
+                e = float(np.sqrt(np.mean(a[i:i + wlen] ** 2)))
+                if be is None or e < be:
+                    be, bi = e, i
+            seg = a[bi:bi + wlen]
+            nmags = [np.abs(np.fft.rfft(seg[j:j + N] * win))
+                     for j in range(0, len(seg) - N, HOP)]
+            if not nmags:
+                return a
+            nm = np.mean(nmags, axis=0)
+            out = np.zeros(len(a) + N)
+            den = np.zeros(len(a) + N)
+            for i in range(0, len(a) - N, HOP):
+                F = np.fft.rfft(a[i:i + N] * win)
+                mag = np.abs(F)
+                clean = np.maximum(mag - alpha * nm, beta * mag)
+                out[i:i + N] += np.fft.irfft(
+                    clean * np.exp(1j * np.angle(F)), n=N) * win
+                den[i:i + N] += win * win
+            den[den < 1e-6] = 1e-6
+            return (out / den)[:len(a)]
+
+        for c in range(data.shape[1]):
+            data[:, c] = _nr(data[:, c])
+        samples = np.clip(data.reshape(-1), -32768, 32767).astype(np.int16)
+        tmp_path = path.with_suffix(path.suffix + ".nr.tmp")
+        try:
+            with wave.open(str(tmp_path), "wb") as wf:
+                wf.setparams(params)
+                wf.writeframes(samples.tobytes())
+            _atomic_replace_wav(tmp_path, path)
+        finally:
+            if tmp_path.exists():
+                try:
+                    tmp_path.unlink()
+                except OSError:
+                    pass
+        print(f"  mic noise-reduction: spectral subtraction "
+              f"(alpha {alpha}, beta {beta})")
+    except Exception as e:
+        print(f"  mic noise-reduction FAILED: {e}", file=sys.stderr)
+
+
 def _write_metadata_and_upload(
     *,
     out_dir: Path,
@@ -835,8 +914,10 @@ def _postprocess_and_upload(*, out_dir: Path, stamp: str,
     """
     duration_s = (ended_dt - started_dt).total_seconds()
 
-    # Mic post-processing. Order: denoise FIRST (kill hum before measuring
-    # peak), then normalize. Both toggleable via env.
+    # Mic post-processing. Order: denoise (kill hum) -> normalize (level) ->
+    # spectral noise reduction (kill the broadband hiss the notch+normalize
+    # leave behind). NR runs last to match the 'medium' sample Titu approved.
+    # All toggleable via env.
     if mic_path.exists() and mic_path.stat().st_size > 0:
         if os.environ.get("NUCLEUS_MIC_DENOISE", "1") != "0":
             try:
@@ -846,6 +927,8 @@ def _postprocess_and_upload(*, out_dir: Path, stamp: str,
             _denoise_mic_wav(mic_path, mains_hz=mains_hz)
         if os.environ.get("NUCLEUS_MIC_NORMALIZE", "1") != "0":
             _normalize_mic_wav(mic_path)
+        if os.environ.get("NUCLEUS_MIC_NR", "1") != "0":
+            _spectral_nr_mic_wav(mic_path)
 
     # Discard sessions shorter than the configured minimum (default 20s) —
     # ringing-then-declined, voice notes, playback blips. Keeps junk off
