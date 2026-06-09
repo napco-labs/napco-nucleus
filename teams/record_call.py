@@ -219,12 +219,31 @@ def _disable_exclusive_mode_for_mic() -> None:
 
 
 def resolve_loopback(p: pyaudio.PyAudio) -> dict:
-    speaker = p.get_device_info_by_index(p.get_default_output_device_info()["index"])
-    if speaker.get("isLoopbackDevice"):
-        return speaker
-    for d in p.get_loopback_device_info_generator():
-        if speaker["name"] in d["name"]:
-            return d
+    # Primary: PyAudioWPatch pairs the loopback to the WASAPI default output
+    # device BY INDEX, so it works even when PortAudio can't read the device
+    # friendly names. In some session contexts (notably a scheduled-task
+    # daemon) the names come back as '{0.0.0.00000000}.{guid}' for the speaker
+    # and 'baddevN [Loopback]' for the loopbacks — the old name-substring match
+    # could then never succeed, the speaker thread raised, and the remote
+    # party's audio was lost (2026-06-09, hit on both Atik .108 and Titu .71).
+    try:
+        lb = p.get_default_wasapi_loopback()
+        if lb:
+            return lb
+    except Exception:
+        pass
+    # Fallback: default output is itself a loopback, or match it by name.
+    try:
+        speaker = p.get_device_info_by_index(p.get_default_output_device_info()["index"])
+        if speaker.get("isLoopbackDevice"):
+            return speaker
+        name = speaker.get("name") or ""
+        if name:
+            for d in p.get_loopback_device_info_generator():
+                if name in d["name"]:
+                    return d
+    except Exception:
+        pass
     raise RuntimeError("No WASAPI loopback device found for default speaker.")
 
 
