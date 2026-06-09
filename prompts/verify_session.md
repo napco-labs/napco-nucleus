@@ -78,6 +78,8 @@ If both tools return 0 rows, this is a new client to NN's memory. Proceed withou
 
 Read the `content` returned from step 1 and extract every distinct **client requirement**. A requirement is a user-visible capability, change, bug fix, or deliverable the client asked for — NOT process chatter, greetings, scheduling, "thanks", calendar invites, daily test reports, or system-generated notifications.
 
+**Break each ask into workable ~4-hour tasks (mandatory).** The client should receive small, concrete, approvable items — not one large paragraph that overwhelms them. Decompose every client ask into the discrete implementation tasks needed to deliver it, each scoped to roughly **4 hours of work**: split anything bigger into multiple ~4h tasks; a trivial change may be 2h. Each task becomes its OWN numbered requirement with its own `estimate_hours`, `title`, and `summary`. **CRITICAL — faithfulness:** this is an implementation breakdown of what the client *actually asked for*, NOT licence to invent scope. Do not add features, hardening, or "nice to haves" the client never raised; every task must trace directly to a stated ask in the source text, and if you cannot justify it from the source, drop it. Keep titles and summaries lean (the client reads these).
+
 Use the client history from step 1.5 as context: when a client's recurring ask is missing from today's session, you may surface it as a "verify with client" item in the verification doc rather than dropping it silently. Mark such items with a confidence ≤ 0.65 and an explicit rationale ("client has raised this in 3 prior sessions — confirming if still expected").
 
 Every section in the session doc begins with a metadata block that includes a `Source ID:` value like `email/Acme-2026-05-10/abc12345`, `chat/123/1330-1345/def67890`, or `call/Titu-20260511-101500/ghi24680`. These IDs are the **machine-readable citation tokens** you cite per requirement. Use them, not free-text section titles.
@@ -90,6 +92,7 @@ For each requirement produce a dict with:
 - `rationale`: ONE short sentence (<160 chars) on what makes this a requirement rather than chatter. The reviewer reads this when the confidence is low.
 - `priority`: one of `P0` / `P1` / `P2` / `P3`. P0 = blocking with a stated deadline within 2 weeks; P1 = client signalled urgency without a date; P2 = standard (the default — use when no urgency signal); P3 = "nice to have", explicitly low priority. Default to `P2` when uncertain.
 - `severity`: one of `S1` / `S2` / `S3`. S1 = production / security / compliance / revenue impact; S2 = material workflow impact with workaround available; S3 = cosmetic / minor / DX polish. Default to `S2` when uncertain.
+- `estimate_hours`: integer estimated effort for THIS task, targeting ~4 (typical range 2-8). The unit is a single workable task — if a piece of work is clearly larger than ~8h, split it into multiple tasks rather than inflating this number. Default 4.
 - `conflicts_with`: list of Source IDs or open-item ids this requirement contradicts (from step 1.5 open_items and history). Empty list when no conflict. Be conservative — only flag actual contradictions (e.g. "retain audit logs 30 days" vs "retain audit logs 90 days"), not minor wording differences.
 - `time_ranges`: list of `{source_id, start, end}` dicts, ONE per MEETING source you cited. `start` and `end` are wall-clock times in `HH:MM:SS` form copied from the transcript lines (e.g. the line `[10:23:01] You: ...` → start `10:23:01`). Pick the tightest range that captures the relevant exchange — usually a single back-and-forth (3-20 seconds). Empty list for EMAIL / CHAT / DRIVE sources (those don't have audio). Required for MEETING sources so the reviewer can pull an audio snippet via `tools/audio_snippet.py`.
 
@@ -105,9 +108,9 @@ If ALL candidates were dedup hits, STOP and report "All identified requirements 
 
 ### 3. Write the Requirements Verification doc
 
-`write_verification_docx(requirements=<list from step 2>)` — writes `data/requirements/Requirements Verification <YYYY-MM-DD>.docx`. Output shape is a flat numbered list, one paragraph per requirement: `1. <title> - <summary>`, followed by a small grey citation/confidence/rationale line.
+`write_verification_docx(requirements=<list from step 2>)` — writes `data/requirements/Requirements Verification <YYYY-MM-DD>.docx`. Output shape is a flat numbered list, one paragraph per task: `1. [P1/S2 ~4h] <title> - <summary>`, followed by a small grey citation/confidence/rationale line.
 
-Pass ALL five fields per requirement (title, summary, source_refs, confidence, rationale) — the tool now renders confidence and rationale in the doc, and items below 0.75 are highlighted in amber so the reviewer reads them carefully. The tool returns `{path, requirement_count, mean_confidence, low_confidence_count}` — capture all four; surface `mean_confidence` and `low_confidence_count` in the final reply so the reviewer can decide whether to send as-is or re-pull with more data.
+Pass all fields per task (title, summary, source_refs, confidence, rationale, priority, severity, estimate_hours) — the tool renders the `[priority/severity ~Nh]` tag, plus confidence and rationale, and items below 0.75 are highlighted in amber so the reviewer reads them carefully. The tool returns `{path, requirement_count, mean_confidence, low_confidence_count}` — capture all four; surface `mean_confidence` and `low_confidence_count` in the final reply so the reviewer can decide whether to send as-is or re-pull with more data.
 
 ### 4. Draft ONE client email — with TWO attachments
 

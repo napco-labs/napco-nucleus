@@ -144,6 +144,9 @@ async def write_aggregation_docx_tool(args):
     "sentence on why this counts as a requirement, not noise), "
     "priority (optional 'P0'|'P1'|'P2'|'P3' - urgency tag), "
     "severity (optional 'S1'|'S2'|'S3' - blast radius tag), "
+    "estimate_hours (optional int - effort for this single workable task, "
+    "targeting ~4h; rendered as a '~Nh' tag in the [priority/severity] "
+    "bracket), "
     "conflicts_with (optional list of Source IDs or open-item ids the "
     "requirement appears to contradict — rendered as an amber WARNING "
     "line so the reviewer notices), "
@@ -212,6 +215,13 @@ async def write_verification_docx_tool(args):
         severity = (r.get("severity") or "").strip().upper()
         if severity not in _SEVERITY_VALID:
             severity = ""
+        estimate = r.get("estimate_hours")
+        try:
+            est_val = int(round(float(estimate))) if estimate is not None else None
+        except (TypeError, ValueError):
+            est_val = None
+        if est_val is not None and est_val <= 0:
+            est_val = None
         conflicts = r.get("conflicts_with") or []
         if not isinstance(conflicts, list):
             conflicts = []
@@ -219,14 +229,16 @@ async def write_verification_docx_tool(args):
         if not isinstance(time_ranges, list):
             time_ranges = []
 
-        # Flat numbered line: "1. " + [P1/S2] + bold(title) + " - " + summary
+        # Flat numbered line: "1. " + [P1/S2 ~4h] + bold(title) + " - " + summary
         p = doc.add_paragraph()
         p.add_run(f"{i}. ").bold = True
-        if priority or severity:
-            tag = "/".join(t for t in (priority, severity) if t)
-            tag_run = p.add_run(f"[{tag}] ")
+        tag_inner = "/".join(t for t in (priority, severity) if t)
+        if est_val is not None:
+            tag_inner = (tag_inner + " " if tag_inner else "") + f"~{est_val}h"
+        if tag_inner:
+            tag_run = p.add_run(f"[{tag_inner}] ")
             tag_run.bold = True
-            # P0/P1 + S1 get red accent; others stay grey
+            # P0/P1 + S1 get amber accent; others stay default
             if priority in {"P0", "P1"} or severity == "S1":
                 tag_run.font.color.rgb = _AMBER
         p.add_run(title).bold = True
@@ -327,6 +339,7 @@ async def write_verification_docx_tool(args):
                     "rationale": r.get("rationale"),
                     "priority": (r.get("priority") or "").strip().upper() or None,
                     "severity": (r.get("severity") or "").strip().upper() or None,
+                    "estimate_hours": r.get("estimate_hours"),
                     "conflicts_with": r.get("conflicts_with") or [],
                     "time_ranges": [
                         {"source_id": (tr.get("source_id") or "").strip(),

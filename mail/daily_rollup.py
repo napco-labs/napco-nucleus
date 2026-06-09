@@ -56,16 +56,19 @@ def _split_addresses(raw: str) -> list[str]:
     return [a.strip() for a in (raw or "").split(",") if a.strip()]
 
 
+# Matches "1. [P1/S2 ~4h] Title - summary". The "~Nh" effort tag is optional
+# (older docs / items without an estimate omit it) so this stays backward
+# compatible. Groups: 1=number, 2=P/S, 3=hours (optional), 4=title.
 _REQ_LINE = __import__("re").compile(
-    r"^\s*(\d+)\.\s*\[(P\d+/S\d+)\]\s*(.+?)(?:\s*[-–—]\s*.+)?$")
+    r"^\s*(\d+)\.\s*\[(P\d+/S\d+)(?:\s*~?\s*(\d+)\s*h)?\]\s*(.+?)(?:\s*[-–—]\s*.+)?$")
 
 
 def _parse_verification_summary(path: Path) -> list[dict]:
-    """Pull a one-line headline per requirement out of the verification
-    .docx so the email body can summarise them at-a-glance. Returns a
-    list of {"n": "1", "ps": "P2/S3", "title": "..."} dicts. Returns
-    [] if the file is missing or contains no recognisable requirement
-    lines (parser is best-effort, never raises)."""
+    """Pull a one-line headline per task out of the verification .docx so
+    the email body can summarise them at-a-glance. Returns a list of
+    {"n": "1", "ps": "P2/S3", "hours": "4"|None, "title": "..."} dicts.
+    Returns [] if the file is missing or contains no recognisable
+    requirement lines (parser is best-effort, never raises)."""
     try:
         from docx import Document  # lazy: optional dep on the host side
         d = Document(str(path))
@@ -76,7 +79,7 @@ def _parse_verification_summary(path: Path) -> list[dict]:
         m = _REQ_LINE.match(p.text or "")
         if m:
             out.append({"n": m.group(1), "ps": m.group(2),
-                        "title": m.group(3).strip()})
+                        "hours": m.group(3), "title": m.group(4).strip()})
     return out
 
 
@@ -134,9 +137,12 @@ def _build_message(day: str, to_addrs: list[str], cc_addrs: list[str],
         f"emails, Teams chats and calls in the last 24 hours.")
     lines.append("")
     if reqs:
-        lines.append(f"Requirements identified today ({len(reqs)}):")
+        lines.append(f"Workable tasks identified today ({len(reqs)}):")
         for r in reqs:
-            lines.append(f"  {r['n']}. [{r['ps']}] {r['title']}")
+            tag = r["ps"]
+            if r.get("hours"):
+                tag = f"{tag} ~{r['hours']}h"
+            lines.append(f"  {r['n']}. [{tag}] {r['title']}")
     else:
         lines.append("No new client requirements were identified from "
                      "today's calls and communications. This may mean "
