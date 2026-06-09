@@ -229,18 +229,11 @@ async def write_verification_docx_tool(args):
         if not isinstance(time_ranges, list):
             time_ranges = []
 
-        # Flat numbered line: "1. " + [P1/S2 ~4h] + bold(title) + " - " + summary
+        # Plain label (Titu's spec 2026-06-09): "Requirement#1: <title> -
+        # <summary>". No priority/severity/effort tag in the client doc —
+        # those stay in the JSON sidecar for internal / OpenProject use only.
         p = doc.add_paragraph()
-        p.add_run(f"{i}. ").bold = True
-        tag_inner = "/".join(t for t in (priority, severity) if t)
-        if est_val is not None:
-            tag_inner = (tag_inner + " " if tag_inner else "") + f"~{est_val}h"
-        if tag_inner:
-            tag_run = p.add_run(f"[{tag_inner}] ")
-            tag_run.bold = True
-            # P0/P1 + S1 get amber accent; others stay default
-            if priority in {"P0", "P1"} or severity == "S1":
-                tag_run.font.color.rgb = _AMBER
+        p.add_run(f"Requirement#{i}: ").bold = True
         p.add_run(title).bold = True
         if summary:
             collapsed = " ".join(line.strip() for line in summary.splitlines() if line.strip())

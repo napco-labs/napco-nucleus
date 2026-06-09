@@ -56,19 +56,21 @@ def _split_addresses(raw: str) -> list[str]:
     return [a.strip() for a in (raw or "").split(",") if a.strip()]
 
 
-# Matches "1. [P1/S2 ~4h] Title - summary". The "~Nh" effort tag is optional
-# (older docs / items without an estimate omit it) so this stays backward
-# compatible. Groups: 1=number, 2=P/S, 3=hours (optional), 4=title.
+# Matches the verification-doc requirement line. Primary format (Titu's spec):
+#   "Requirement#1: Title - summary"
+# Also tolerates the older "1. [P1/S2 ~4h] Title - summary" so prior docs still
+# parse. Groups: 1=number (Requirement# form), 2=number (old "N." form),
+# 3=title. Any "[...]" tag after an old-style number is stripped.
 _REQ_LINE = __import__("re").compile(
-    r"^\s*(\d+)\.\s*\[(P\d+/S\d+)(?:\s*~?\s*(\d+)\s*h)?\]\s*(.+?)(?:\s*[-–—]\s*.+)?$")
+    r"^\s*(?:Requirement#\s*(\d+):|(\d+)\.)\s*(?:\[[^\]]*\]\s*)?(.+?)"
+    r"(?:\s*[-–—]\s*.+)?$")
 
 
 def _parse_verification_summary(path: Path) -> list[dict]:
-    """Pull a one-line headline per task out of the verification .docx so
-    the email body can summarise them at-a-glance. Returns a list of
-    {"n": "1", "ps": "P2/S3", "hours": "4"|None, "title": "..."} dicts.
-    Returns [] if the file is missing or contains no recognisable
-    requirement lines (parser is best-effort, never raises)."""
+    """Pull a one-line headline per requirement out of the verification .docx
+    so the email body can summarise them at-a-glance. Returns a list of
+    {"n": "1", "title": "..."} dicts. Returns [] if the file is missing or
+    has no recognisable requirement lines (best-effort, never raises)."""
     try:
         from docx import Document  # lazy: optional dep on the host side
         d = Document(str(path))
@@ -78,8 +80,8 @@ def _parse_verification_summary(path: Path) -> list[dict]:
     for p in d.paragraphs:
         m = _REQ_LINE.match(p.text or "")
         if m:
-            out.append({"n": m.group(1), "ps": m.group(2),
-                        "hours": m.group(3), "title": m.group(4).strip()})
+            out.append({"n": (m.group(1) or m.group(2)),
+                        "title": m.group(3).strip()})
     return out
 
 
@@ -136,14 +138,11 @@ def _build_message(day: str, to_addrs: list[str], cc_addrs: list[str],
     lines.append("")
     if reqs:
         lines.append(
-            "Workable tasks identified from the last 24 hours "
+            "Requirements identified from the last 24 hours "
             "(MS Teams calls, chats, email, and Google Drive):")
         lines.append("")
         for r in reqs:
-            tag = r["ps"]
-            if r.get("hours"):
-                tag = f"{tag} ~{r['hours']}h"
-            lines.append(f"  {r['n']}. [{tag}] {r['title']}")
+            lines.append(f"  Requirement#{r['n']}: {r['title']}")
         lines.append("")
         lines.append(
             "Please see the attached document for the full text, sources, "
