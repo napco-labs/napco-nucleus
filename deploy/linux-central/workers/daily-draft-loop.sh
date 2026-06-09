@@ -26,6 +26,7 @@ echo "[draft-loop] clock catch-all: ${CLOCK_TARGET} BD daily"
 
 run_pipeline() {
     local reason="$1"
+    local email_args="${2:-}"   # extra args for daily_rollup (e.g. --require-new)
     echo "[draft-loop] running pipeline — reason: ${reason}"
     rm -f "$TRIGGER_FILE"
 
@@ -34,8 +35,8 @@ run_pipeline() {
     echo "[draft-loop] collect_central.py exited rc=${rc}"
 
     if [ -n "${NUCLEUS_ROLLUP_TO:-}" ]; then
-        echo "[draft-loop] sending email"
-        python -m mail.daily_rollup
+        echo "[draft-loop] sending email ${email_args}"
+        python -m mail.daily_rollup ${email_args}
         echo "[draft-loop] email rc=$?"
     else
         echo "[draft-loop] NUCLEUS_ROLLUP_TO not set — skipping email"
@@ -54,6 +55,7 @@ while true; do
        && [[ "$LAST_CLOCK_RUN_DATE" != "$today" ]]; then
         LAST_CLOCK_RUN_DATE="$today"
         echo "[draft-loop] clock trigger at ${current_hm} BD (target ${CLOCK_TARGET})"
+        # Clock run = the daily summary: always send, even on a 0-requirement day.
         run_pipeline "clock:${CLOCK_TARGET}"
         continue
     fi
@@ -64,5 +66,8 @@ while true; do
     fi
 
     echo "[draft-loop] event trigger detected at $(date -Iseconds)"
-    run_pipeline "event:transcription-complete"
+    # Event run (a transcription finished): only email the team when there's a
+    # net-new requirement — no empty/duplicate midday blasts. To force a send
+    # regardless (manual "send now"), run `python -m mail.daily_rollup` directly.
+    run_pipeline "event:transcription-complete" "--require-new"
 done

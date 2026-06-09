@@ -80,6 +80,40 @@ def _parse_verification_summary(path: Path) -> list[dict]:
     return out
 
 
+# ── Same-day dedupe of emailed requirements ──────────────────────────────
+# Event-triggered runs (one per transcription) must NOT re-email the team a
+# requirement that already went out earlier today, and must NOT send at all
+# when there's nothing net-new — otherwise every completed transcription
+# blasts assad + CC, often with 0 requirements (2026-06-09). We track the
+# requirement titles already emailed per BD day in a tiny state file; the
+# 23:00 clock run ignores this gate and always sends the daily summary.
+_EMAILED_DIR = REQUIREMENTS_DIR / ".emailed"
+
+
+def _req_key(r: dict) -> str:
+    return (r.get("title") or "").strip().lower()
+
+
+def _emailed_keys(day: str) -> set[str]:
+    try:
+        f = _EMAILED_DIR / f"{day}.txt"
+        return {l.strip() for l in f.read_text(encoding="utf-8").splitlines()
+                if l.strip()}
+    except Exception:
+        return set()
+
+
+def _record_emailed(day: str, keys: list[str]) -> None:
+    try:
+        _EMAILED_DIR.mkdir(parents=True, exist_ok=True)
+        merged = _emailed_keys(day) | {k for k in keys if k}
+        (_EMAILED_DIR / f"{day}.txt").write_text(
+            "\n".join(sorted(merged)), encoding="utf-8")
+    except Exception as e:
+        print(f"[rollup] warn: could not record emailed requirements: {e}",
+              file=sys.stderr)
+
+
 def _build_message(day: str, to_addrs: list[str], cc_addrs: list[str],
                    attachments: list[Path],
                    reqs: list[dict]) -> EmailMessage:
@@ -157,6 +191,11 @@ def main() -> int:
                     help="YYYY-MM-DD. Default: today (local BD time).")
     ap.add_argument("--dry-run", action="store_true",
                     help="Print the plan + recipients without sending.")
+    ap.add_argument("--require-new", action="store_true",
+                    help="Only send if there is >=1 requirement not already "
+                         "emailed today (skip empty/duplicate sends). Used for "
+                         "event-triggered runs; the 23:00 clock run omits it so "
+                         "the daily summary always goes out.")
     args = ap.parse_args()
 
     day = args.day or dt.date.today().strftime("%Y-%m-%d")
@@ -188,9 +227,20 @@ def main() -> int:
 
     reqs = _parse_verification_summary(verif) if verif.exists() else []
 
+    already = _emailed_keys(day)
+    new_reqs = [r for r in reqs if _req_key(r) not in already]
+
     print(f"[rollup] day={day}  to={to_addrs}  cc={cc_addrs}  "
           f"attachments={[p.name for p in attachments]}  "
-          f"reqs_inlined={len(reqs)}")
+          f"reqs_inlined={len(reqs)}  net_new={len(new_reqs)}  "
+          f"require_new={args.require_new}")
+
+    # Event-triggered runs: skip the team email unless something is net-new.
+    # Kills the empty / duplicate midday blasts; the clock run never sets this.
+    if args.require_new and not new_reqs:
+        print(f"[rollup] --require-new: {len(reqs)} requirement(s) on file, "
+              f"0 net-new since last send — skipping email.")
+        return 0
 
     msg = _build_message(day, to_addrs, cc_addrs, attachments, reqs)
     if args.dry_run:
@@ -204,6 +254,7 @@ def main() -> int:
             _send(msg, all_recipients=all_recipients)
             print(f"[rollup] sent to {len(to_addrs)} TO + {len(cc_addrs)} CC "
                   f"recipients.")
+            _record_emailed(day, [_req_key(r) for r in reqs])
             return 0
         except Exception as e:
             if _attempt == 0:
