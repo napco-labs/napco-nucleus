@@ -185,6 +185,13 @@ async def run_agent(task: str, dry_run: bool) -> None:
         "mcp_servers": {"napco-nucleus": server},
         "allowed_tools": allowed,
     }
+    # Pin the model for requirement identification — Titu wants Opus 4.7 doing
+    # the verify_session identify step (highest-quality extraction from the
+    # combined all-dev pull-session doc). Override per-deploy via
+    # NUCLEUS_AGENT_MODEL (set it empty to fall back to the SDK default).
+    agent_model = os.environ.get("NUCLEUS_AGENT_MODEL", "claude-opus-4-7").strip()
+    if agent_model:
+        options_kwargs["model"] = agent_model
     cli_path = nucleus_config.claude_cli_path()
     if cli_path:
         options_kwargs["cli_path"] = cli_path
