@@ -76,6 +76,15 @@ try:
 except ValueError:
     _RECONNECT_WINDOW_S = 45.0
 
+# Seconds of ZERO speaker-loopback frames into an active call before we assume
+# the WASAPI default output is a silent/idle device (e.g. a monitor or S/PDIF
+# is the Windows default while the call audio is actually on the headset) and
+# switch to whichever render endpoint is really delivering audio.
+try:
+    _SPEAKER_SILENT_SWITCH_S = float(os.environ.get("NUCLEUS_SPEAKER_SWITCH_S", "5"))
+except ValueError:
+    _SPEAKER_SILENT_SWITCH_S = 5.0
+
 # Pa_Initialize / Pa_Terminate are reference-counted but not guaranteed
 # thread-safe to call concurrently. Each track owns its own PyAudio
 # instance and may re-init on reconnect, so serialize create/terminate.
@@ -247,6 +256,48 @@ def resolve_loopback(p: pyaudio.PyAudio) -> dict:
     raise RuntimeError("No WASAPI loopback device found for default speaker.")
 
 
+def _probe_active_loopback(p: pyaudio.PyAudio, exclude_index=None,
+                           probe_s: float = 1.5) -> dict | None:
+    """Return a render-endpoint loopback that is ACTIVELY delivering frames.
+
+    Used as a self-heal when the WASAPI default-output loopback stays silent
+    during a live call — meaning the Windows default output is an idle device
+    (monitor / S/PDIF) but the call audio is really playing on another endpoint
+    (the headset). We open each other loopback briefly and pick the first one
+    that has frames available, i.e. the endpoint something is actually playing
+    to. Returns None if no endpoint is delivering audio.
+    """
+    try:
+        candidates = list(p.get_loopback_device_info_generator())
+    except Exception:
+        return None
+    for d in candidates:
+        if exclude_index is not None and d.get("index") == exclude_index:
+            continue
+        s = None
+        try:
+            rate = int(d["defaultSampleRate"])
+            ch = int(d.get("maxInputChannels", 0)) or 2
+            s = p.open(format=pyaudio.paInt16, channels=ch, rate=rate,
+                       frames_per_buffer=CHUNK, input=True,
+                       input_device_index=d["index"])
+            deadline = time.monotonic() + probe_s
+            while time.monotonic() < deadline:
+                if s.get_read_available() >= CHUNK:
+                    return d
+                time.sleep(0.03)
+        except Exception:
+            pass
+        finally:
+            try:
+                if s is not None:
+                    s.stop_stream()
+                    s.close()
+            except Exception:
+                pass
+    return None
+
+
 def _resolve_device(p: pyaudio.PyAudio, label: str) -> dict:
     """Resolve the input device for a track on a *fresh* PyAudio instance.
 
@@ -327,6 +378,10 @@ def record(path: Path, stop: threading.Event, label: str,
             wf.setsampwidth(sampwidth)
             wf.setframerate(rate)
             lost_since = None  # monotonic time the device first went away
+            frames_written = 0          # frames written to this track so far
+            nonsilent_seen = False      # did we ever capture a non-zero sample?
+            t_start = time.monotonic()
+            tried_loopback_switch = False  # speaker self-heal attempted?
             while not stop.is_set():
                 # --- Reconnect state: stream is down, try to rebuild it ---
                 if stream is None:
@@ -363,8 +418,47 @@ def record(path: Path, stop: threading.Event, label: str,
                               f"({re}); retrying...", file=sys.stderr)
                     continue
 
-                # --- Normal path: read a chunk and write it ----------------
+                # --- Speaker self-heal: default output is a SILENT device ---
+                # If the speaker loopback produced ZERO frames a few seconds
+                # into the (already-Active) call, the Windows default output
+                # isn't where the call audio is playing — switch to whatever
+                # render endpoint is actually delivering audio (the headset).
+                if (label == "speaker" and not tried_loopback_switch
+                        and frames_written == 0
+                        and time.monotonic() - t_start >= _SPEAKER_SILENT_SWITCH_S):
+                    tried_loopback_switch = True  # one shot — don't thrash
+                    alt = _probe_active_loopback(p, exclude_index=dev.get("index"))
+                    if alt is not None:
+                        print(f"  [speaker] default output silent for "
+                              f"{_SPEAKER_SILENT_SWITCH_S:.0f}s — switching to "
+                              f"active endpoint {alt['name']!r}.", file=sys.stderr)
+                        try:
+                            stream.stop_stream()
+                            stream.close()
+                        except Exception:
+                            pass
+                        try:
+                            stream = p.open(
+                                format=pyaudio.paInt16, channels=channels,
+                                rate=rate, frames_per_buffer=CHUNK, input=True,
+                                input_device_index=alt["index"],
+                            )
+                            dev = alt
+                        except Exception as se:
+                            print(f"  [speaker] switch failed ({se}); ending "
+                                  f"this track.", file=sys.stderr)
+                            break
+
+                # --- Normal path: non-blocking, stop-aware read + write -----
+                # WASAPI loopback only delivers frames while the endpoint is
+                # active; a blocking read() hangs on post-call silence so the
+                # recorder never finalizes (the 'stuck recorder' / 0-byte
+                # tracks). Poll what's available and stay responsive to stop.
                 try:
+                    if stream.get_read_available() < CHUNK:
+                        if stop.wait(0.05):
+                            break
+                        continue
                     data = stream.read(CHUNK, exception_on_overflow=False)
                 except OSError as e:
                     errno = _errno_of(e)
@@ -392,6 +486,22 @@ def record(path: Path, stop: threading.Event, label: str,
                     continue
 
                 wf.writeframes(data)
+                frames_written += CHUNK
+                if not nonsilent_seen and any(data):
+                    nonsilent_seen = True
+
+            # Loud, non-silent failure: make a missing/empty speaker track
+            # obvious in the log instead of a mysterious 0-byte file.
+            if label == "speaker":
+                if frames_written == 0:
+                    print("  [speaker] WARNING: captured 0 frames — no render "
+                          "endpoint delivered audio (is the call device the "
+                          "Windows default output?). Speaker track is empty.",
+                          file=sys.stderr)
+                elif not nonsilent_seen:
+                    print("  [speaker] WARNING: captured only silence — the "
+                          "call audio may be on a different output device.",
+                          file=sys.stderr)
     finally:
         try:
             if stream is not None:
