@@ -449,17 +449,23 @@ def record(path: Path, stop: threading.Event, label: str,
                                   f"this track.", file=sys.stderr)
                             break
 
-                # --- Normal path: non-blocking, stop-aware read + write -----
+                # --- Normal path: drain available frames, stay stop-aware ---
                 # WASAPI loopback only delivers frames while the endpoint is
                 # active; a blocking read() hangs on post-call silence so the
                 # recorder never finalizes (the 'stuck recorder' / 0-byte
-                # tracks). Poll what's available and stay responsive to stop.
+                # tracks). So poll instead. CRITICAL: read ALL available frames,
+                # not just one CHUNK — loopback audio arrives in BURSTS, and
+                # reading a single CHUNK per poll lets the buffer back up until
+                # WASAPI overflows and DROPS frames (exception_on_overflow=
+                # False), which made the speaker track skip/break and play back
+                # fast-forwarded (2026-06-09). Draining keeps it continuous.
                 try:
-                    if stream.get_read_available() < CHUNK:
-                        if stop.wait(0.05):
+                    avail = stream.get_read_available()
+                    if avail < CHUNK:
+                        if stop.wait(0.02):
                             break
                         continue
-                    data = stream.read(CHUNK, exception_on_overflow=False)
+                    data = stream.read(avail, exception_on_overflow=False)
                 except OSError as e:
                     errno = _errno_of(e)
                     if errno not in _DEVICE_LOST_ERRNOS:
@@ -486,7 +492,7 @@ def record(path: Path, stop: threading.Event, label: str,
                     continue
 
                 wf.writeframes(data)
-                frames_written += CHUNK
+                frames_written += avail
                 if not nonsilent_seen and any(data):
                     nonsilent_seen = True
 
