@@ -28,8 +28,10 @@ Env knobs:
     GOOGLE_STT_CREDENTIALS  path to a service-account JSON (preferred)
     GOOGLE_STT_API_KEY      API key, used only if no SA creds are set
     GOOGLE_STT_LANGUAGE     default "bn-BD"
-    GOOGLE_STT_MODEL        default "default" (widest language support;
-                            set "latest_long" where the language allows it)
+    GOOGLE_STT_MODEL        default "chirp_2" (Chirp 2 on the v2 API — best
+                            for Bangla; needs a project_id via
+                            GOOGLE_STT_CREDENTIALS/GOOGLE_STT_PROJECT. Set
+                            "latest_long" or "default" to use the v1 models.)
 """
 from __future__ import annotations
 
@@ -44,7 +46,7 @@ GOOGLE_STT_URL = "https://speech.googleapis.com/v1/speech:recognize"
 CHUNK_SECONDS = 55       # strictly < the 60 s sync-recognize cap
 TARGET_RATE = 16000      # Google recommends 16 kHz mono
 DEFAULT_LANGUAGE = "bn-BD"
-DEFAULT_MODEL = "default"
+DEFAULT_MODEL = "chirp_2"   # Chirp 2 (v2) — ~2x better Bangla coverage than latest_long
 _SCOPE = "https://www.googleapis.com/auth/cloud-platform"
 
 
@@ -205,6 +207,13 @@ def google_transcribe(wav_path: Path | None, label: str,
     use_v2 = model.startswith("chirp")
     region = os.getenv("GOOGLE_STT_REGION", "us-central1")
     project = _project_id() if use_v2 else ""
+    # Safety: Chirp (v2) needs a project_id. If one can't be resolved (no SA
+    # JSON / GOOGLE_STT_PROJECT), fall back to the v1 latest_long model so
+    # transcription still runs instead of hard-failing on the v2 endpoint.
+    if use_v2 and not project:
+        print("  [google-stt] chirp model needs a project_id but none found "
+              "— falling back to latest_long (v1)")
+        model, use_v2 = "latest_long", False
 
     try:
         concurrency = max(1, int(os.getenv("GOOGLE_STT_CONCURRENCY", "8")))
