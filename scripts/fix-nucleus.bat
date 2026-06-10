@@ -139,6 +139,17 @@ echo [7/8] Starting voice daemon now (no need to log out)...
 powershell -NoProfile -Command "Start-ScheduledTask -TaskName 'NAPCO Nucleus - Voice Daemon'; Start-Sleep -Seconds 2; $proc = Get-Process pythonw, python -ErrorAction SilentlyContinue; if ($proc) { 'OK: python is running (' + $proc.Count + ' proc).' } else { Write-Warning 'voice daemon did not appear -- check logs\voice_daemon.log' }"
 echo.
 
+REM ── call backfill: re-push any local calls missing from central ──
+REM  Always runs (incl. --quiet logon self-heal) so a call stranded
+REM  by a failed live push self-heals on the next logon, no manual step.
+echo [*] Backfilling any local calls missing from central...
+python -m teams.backfill_central
+if errorlevel 1 (
+    echo       WARN: call backfill reported a failure -- see output above.
+    set /a FAIL_COUNT+=1
+)
+echo.
+
 REM ── 8/8 chat backfill (interactive only; auto-run skips) ───
 if "%QUIET%"=="0" (
     echo [8/8] Pushing the last 4 hours of chat to central as a backfill...
