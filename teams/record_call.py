@@ -24,6 +24,7 @@ from __future__ import annotations
 import datetime
 import json
 import os
+import queue
 import shutil
 import socket
 import sys
@@ -355,6 +356,25 @@ def record(path: Path, stop: threading.Event, label: str,
     if reconnect_window_s is None:
         reconnect_window_s = _RECONNECT_WINDOW_S
 
+    # Callback-mode capture. PortAudio's realtime thread pushes every buffer
+    # onto this queue the instant it arrives; the loop below drains it to disk.
+    # This removes the poll gap of the old blocking-read loop, where WASAPI's
+    # internal buffer could overflow and DROP frames while we slept 20ms or were
+    # busy writing -- the cause of the ~15% speaker loss / fast-forwarded
+    # playback (2026-06-09). The queue absorbs bursts so a slow write never
+    # costs captured audio; overflows (should now be ~0) are still counted and
+    # logged so any regression stays visible.
+    audio_q: "queue.Queue[bytes]" = queue.Queue()
+    overflow = [0]
+
+    def _make_cb():
+        def _cb(in_data, frame_count, time_info, status):
+            if status & pyaudio.paInputOverflow:
+                overflow[0] += 1
+            audio_q.put(in_data)
+            return (None, pyaudio.paContinue)
+        return _cb
+
     p = _make_pyaudio()
     stream = None
     try:
@@ -366,11 +386,18 @@ def record(path: Path, stop: threading.Event, label: str,
         rate = int(dev["defaultSampleRate"])
         channels = int(dev["maxInputChannels"]) or 1
         sampwidth = p.get_sample_size(pyaudio.paInt16)
-        stream = p.open(
-            format=pyaudio.paInt16, channels=channels, rate=rate,
-            frames_per_buffer=CHUNK, input=True,
-            input_device_index=dev["index"],
-        )
+        bytes_per_frame = channels * sampwidth
+
+        def _open(pa, device_index):
+            # Single place every stream open goes through, so the callback +
+            # format stay identical across first open, reconnects, and the
+            # speaker endpoint switch. pyaudio auto-starts a callback stream.
+            return pa.open(
+                format=pyaudio.paInt16, channels=channels, rate=rate,
+                frames_per_buffer=CHUNK, input=True,
+                input_device_index=device_index, stream_callback=_make_cb())
+
+        stream = _open(p, dev["index"])
         print(f"  [{label:7}] {path.name}  {rate}Hz {channels}ch  {dev['name']!r}")
 
         with wave.open(str(path), "wb") as wf:
@@ -382,6 +409,25 @@ def record(path: Path, stop: threading.Event, label: str,
             nonsilent_seen = False      # did we ever capture a non-zero sample?
             t_start = time.monotonic()
             tried_loopback_switch = False  # speaker self-heal attempted?
+            was_active = False  # has the stream ever reported active? (startup)
+
+            def _drain() -> bool:
+                """Move all queued callback buffers to the WAV. Returns True if
+                anything was written (so the caller knows whether to back off)."""
+                nonlocal frames_written, nonsilent_seen
+                wrote = False
+                while True:
+                    try:
+                        data = audio_q.get_nowait()
+                    except queue.Empty:
+                        break
+                    wf.writeframes(data)
+                    frames_written += len(data) // bytes_per_frame
+                    if not nonsilent_seen and any(data):
+                        nonsilent_seen = True
+                    wrote = True
+                return wrote
+
             while not stop.is_set():
                 # --- Reconnect state: stream is down, try to rebuild it ---
                 if stream is None:
@@ -401,11 +447,7 @@ def record(path: Path, stop: threading.Event, label: str,
                         if label == "mic":
                             _disable_exclusive_mode_for_mic()
                         dev = _resolve_device(p, label)
-                        stream = p.open(
-                            format=pyaudio.paInt16, channels=channels, rate=rate,
-                            frames_per_buffer=CHUNK, input=True,
-                            input_device_index=dev["index"],
-                        )
+                        stream = _open(p, dev["index"])
                         lost_since = None
                         print(f"  [{label:7}] reconnected -> {dev['name']!r} "
                               f"(port re-registered); recording resumes.")
@@ -438,49 +480,30 @@ def record(path: Path, stop: threading.Event, label: str,
                         except Exception:
                             pass
                         try:
-                            stream = p.open(
-                                format=pyaudio.paInt16, channels=channels,
-                                rate=rate, frames_per_buffer=CHUNK, input=True,
-                                input_device_index=alt["index"],
-                            )
+                            stream = _open(p, alt["index"])
                             dev = alt
                         except Exception as se:
                             print(f"  [speaker] switch failed ({se}); ending "
                                   f"this track.", file=sys.stderr)
                             break
 
-                # --- Normal path: drain available frames, stay stop-aware ---
-                # WASAPI loopback only delivers frames while the endpoint is
-                # active; a blocking read() hangs on post-call silence so the
-                # recorder never finalizes (the 'stuck recorder' / 0-byte
-                # tracks). So poll instead. CRITICAL: read ALL available frames,
-                # not just one CHUNK — loopback audio arrives in BURSTS, and
-                # reading a single CHUNK per poll lets the buffer back up until
-                # WASAPI overflows and DROPS frames (exception_on_overflow=
-                # False), which made the speaker track skip/break and play back
-                # fast-forwarded (2026-06-09). Draining keeps it continuous.
-                try:
-                    avail = stream.get_read_available()
-                    if avail < CHUNK:
-                        if stop.wait(0.02):
-                            break
-                        continue
-                    data = stream.read(avail, exception_on_overflow=False)
-                except OSError as e:
-                    errno = _errno_of(e)
-                    if errno not in _DEVICE_LOST_ERRNOS:
-                        # Not a hot-unplug — a real, non-recoverable error.
-                        print(f"  [{label:7}] stream.read failed ({e!r}); "
-                              f"ending this track. The other side keeps "
-                              f"recording.", file=sys.stderr)
-                        break
-                    # Device lost mid-call (e.g. Atik moved the USB plug).
-                    # Tear the dead stream + instance down so the rebuilt
-                    # PyAudio re-enumerates the device on its NEW port, then
-                    # fall into the reconnect state above.
-                    print(f"  [{label:7}] device lost ({errno}) — likely a "
-                          f"mid-call port change. Re-finding the device and "
+                # --- Device-lost detection ---
+                # A mid-call USB replug makes PortAudio stop the callback
+                # stream. In the old blocking loop this surfaced as an OSError
+                # on read(); in callback mode the stream simply goes inactive.
+                # Only act on inactive AFTER we've seen it active once, so a
+                # brief startup window (stream opened but audio not yet flowing)
+                # doesn't tear down a healthy open.
+                if stream.is_active():
+                    was_active = True
+                elif was_active:
+                    # Was capturing, now inactive -> device lost. Tear it down
+                    # so the rebuilt PyAudio re-enumerates the device on its NEW
+                    # port, then fall into the reconnect state above.
+                    print(f"  [{label:7}] device lost (stream inactive) — likely "
+                          f"a mid-call port change. Re-finding the device and "
                           f"reopening on its new port...", file=sys.stderr)
+                    _drain()  # flush whatever was captured before the drop
                     try:
                         stream.close()
                     except Exception:
@@ -490,11 +513,29 @@ def record(path: Path, stop: threading.Event, label: str,
                     p = None
                     lost_since = time.monotonic()
                     continue
+                else:
+                    # Not active yet at startup — wait briefly, don't tear down.
+                    if stop.wait(0.05):
+                        break
+                    continue
 
-                wf.writeframes(data)
-                frames_written += avail
-                if not nonsilent_seen and any(data):
-                    nonsilent_seen = True
+                # --- Normal path: drain queued audio to disk, stay stop-aware.
+                # The callback already captured it gap-free; we just persist it.
+                # If nothing's queued, back off briefly (honouring stop) so we
+                # don't spin — but the callback keeps capturing meanwhile, so a
+                # quiet stretch here never costs frames the way the old poll did.
+                if not _drain():
+                    if stop.wait(0.02):
+                        break
+
+            # Stop requested (or the loop broke): flush any audio still queued
+            # so the tail of the call isn't lost.
+            _drain()
+
+            if overflow[0]:
+                print(f"  [{label:7}] WARNING: {overflow[0]} input-overflow "
+                      f"callback(s) — capture buffer briefly backed up; some "
+                      f"frames may have dropped.", file=sys.stderr)
 
             # Loud, non-silent failure: make a missing/empty speaker track
             # obvious in the log instead of a mysterious 0-byte file.
