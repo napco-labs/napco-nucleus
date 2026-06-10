@@ -46,3 +46,30 @@ def ensure_smb_auth(unc_root: str) -> None:
     except Exception as exc:
         import sys
         print(f"  [smb-auth] net use failed: {exc}", file=sys.stderr)
+
+
+def reset_smb_auth(unc_root: str) -> None:
+    """Force a FRESH SMB session: drop any stale mapping, then re-auth.
+
+    On an idle-dropped or half-open SMB session (common at end of day
+    when a dev's PC has sat on the share for hours), a plain
+    ``ensure_smb_auth`` reports "already connected" and does NOT actually
+    reconnect — so a retry copy keeps failing for the same reason. Tear
+    the mapping down first so the following ensure_smb_auth establishes a
+    genuinely live session. This is the cure for the "worked at 6pm,
+    failed at 8pm" fire-once push failures. Windows-only; no-op elsewhere
+    and harmless if nothing was mapped.
+    """
+    if platform.system() != "Windows":
+        return
+    from pathlib import Path
+    parts = Path(unc_root).parts
+    if len(parts) < 2 or not parts[0].startswith("\\\\"):
+        return
+    share = str(Path(parts[0]) / parts[1])
+    try:
+        subprocess.run(["net", "use", share, "/delete", "/y"],
+                       capture_output=True, text=True, timeout=15)
+    except Exception:
+        pass  # best-effort — ensure_smb_auth below re-establishes anyway
+    ensure_smb_auth(unc_root)

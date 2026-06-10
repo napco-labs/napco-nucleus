@@ -407,23 +407,39 @@ def main() -> int:
         print("[push_chat] central upload: skipped "
               "(NUCLEUS_CENTRAL_PATH not set)")
         return 0
-    from teams._central import ensure_smb_auth
-    ensure_smb_auth(os.environ.get("NUCLEUS_CENTRAL_PATH", ""))
-    try:
+    from teams._central import ensure_smb_auth, reset_smb_auth
+    central_root = os.environ.get("NUCLEUS_CENTRAL_PATH", "")
+    ensure_smb_auth(central_root)
+
+    def _do_chat_copy():
         central_dir.mkdir(parents=True, exist_ok=True)
         dst = central_dir / name
         shutil.copy2(str(local_path), str(dst))
         print(f"[push_chat] -> {dst}")
+
+    try:
+        _do_chat_copy()
         print("[push_chat] central upload: OK")
     except Exception as e:
-        print(f"[push_chat] central upload FAILED: {e}", file=sys.stderr)
-        print(f"[push_chat] local copy preserved at {local_path}",
-              file=sys.stderr)
-        # Return non-zero so the Task Scheduler tick records the
-        # failure. Previously we returned 0, making a stuck Samba share
-        # invisible to the scheduler -- chat docs would pile up locally
-        # while the supervisor reported success every tick.
-        return 1
+        # Same fire-once gap as the call push: a transient SMB/network
+        # blip would strand the chat doc local-only. Reset the SMB
+        # session and retry ONCE before reporting failure.
+        print(f"[push_chat] central upload failed ({e}) — "
+              f"resetting SMB, retry once", file=sys.stderr)
+        try:
+            reset_smb_auth(central_root)
+            _do_chat_copy()
+            print("[push_chat] central upload: OK on retry")
+        except Exception as e2:
+            print(f"[push_chat] central upload FAILED (after retry): {e2}",
+                  file=sys.stderr)
+            print(f"[push_chat] local copy preserved at {local_path}",
+                  file=sys.stderr)
+            # Return non-zero so the Task Scheduler tick records the
+            # failure. Previously we returned 0, making a stuck Samba share
+            # invisible to the scheduler -- chat docs would pile up locally
+            # while the supervisor reported success every tick.
+            return 1
 
     if resolved:
         try:

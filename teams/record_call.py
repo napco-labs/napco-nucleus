@@ -522,7 +522,7 @@ def _denoise_mic_wav(path: Path,
                      mains_hz: float = 50.0,
                      max_harmonic_hz: float = 1000.0,
                      notch_width_hz: float = 4.0,
-                     hpf_cutoff_hz: float = 40.0) -> None:
+                     hpf_cutoff_hz: float = 80.0) -> None:
     """Remove mains hum + low-freq rumble from an int16 mic WAV (FFT, in place).
 
     Bangladesh / Europe / most of Asia is on a 50 Hz grid; the US +
@@ -591,22 +591,24 @@ def _denoise_mic_wav(path: Path,
         print(f"  mic denoise FAILED: {e}", file=sys.stderr)
 
 
-def _normalize_mic_wav(path: Path, target_dbfs: float = 1.0,
+def _normalize_mic_wav(path: Path, target_dbfs: float = -17.0,
                        max_gain_db: float = 30.0) -> None:
-    """Peak-normalize an int16 PCM mic WAV to target dBFS in-place.
+    """RMS-normalize an int16 PCM mic WAV to target dBFS + soft-limit, in place.
 
     Teams applies AGC on the outgoing call audio but our recorder
     captures raw mic, so the mic WAV ends up much quieter than the
     speaker loopback (which is post-AGC). Normalizing on disk after
-    the recording stops adapts per-PC and per-call without clipping
-    risk in the realtime path.
+    the recording stops adapts per-PC and per-call.
 
-    `max_gain_db` caps the scale factor so a quiet/silent recording
-    doesn't blow up the noise floor. `target_dbfs` is the peak target;
-    at +1 dBFS a small percentage of transient peaks land slightly
-    past int16 max and get hard-clipped by np.clip below -- perceived
-    loudness bumps ~2 dB vs the prior -1 dBFS target, no distortion
-    on speech since transients are sparse.
+    This is RMS (loudness) normalize, NOT peak normalize: a single
+    loud transient no longer pins the peak and leaves speech ~20 dB
+    quiet (the old peak-norm bug, measured -20.3 dBFS speech on
+    2026-06-09). We target the SPEECH RMS to `target_dbfs` (-17 dBFS
+    is the level Titu approved in the v2 sample), cap the boost at
+    `max_gain_db`, then run a soft tanh limiter so the sparse
+    transients that now exceed -1 dBFS round over smoothly instead of
+    hard-clipping. Runs LAST in the chain (after gate + expander) so
+    it sets the final level on already-cleaned audio.
 
     Override via env: NUCLEUS_MIC_TARGET_DBFS, NUCLEUS_MIC_MAX_GAIN_DB.
     """
@@ -630,17 +632,24 @@ def _normalize_mic_wav(path: Path, target_dbfs: float = 1.0,
                 return
             frames = wf.readframes(n_frames)
         samples = np.frombuffer(frames, dtype=np.int16).astype(np.float32)
-        peak = float(np.max(np.abs(samples)))
-        if peak < 1.0:
+        rms = float(np.sqrt(np.mean(samples ** 2)))
+        if rms < 1.0:
             return  # silent
-        target_peak = 32768.0 * (10 ** (target_dbfs / 20.0))
-        scale = target_peak / peak
+        target_rms = 32768.0 * (10 ** (target_dbfs / 20.0))
+        scale = target_rms / rms
         max_scale = 10 ** (max_gain_db / 20.0)
         scale = min(scale, max_scale)
-        if abs(scale - 1.0) < 0.01:
-            return  # negligible
         gain_db = 20.0 * float(np.log10(scale))
-        samples = np.clip(samples * scale, -32768, 32767).astype(np.int16)
+        y = samples * scale
+        # Soft tanh limiter above -1 dBFS: transients past the ceiling
+        # are compressed into the remaining headroom instead of clipped.
+        ceil = 32768.0 * (10 ** (-1.0 / 20.0))
+        over = np.abs(y) > ceil
+        if np.any(over):
+            head = 32767.0 - ceil
+            y[over] = np.sign(y[over]) * (
+                ceil + head * np.tanh((np.abs(y[over]) - ceil) / head))
+        samples = np.clip(y, -32768, 32767).astype(np.int16)
         # Temp-write + atomic-rename so a crash here can't corrupt the
         # WAV that denoise just successfully produced.
         tmp_path = path.with_suffix(path.suffix + ".normalize.tmp")
@@ -655,74 +664,82 @@ def _normalize_mic_wav(path: Path, target_dbfs: float = 1.0,
                     tmp_path.unlink()
                 except OSError:
                     pass
-        print(f"  mic normalize: peak {peak:.0f} -> "
-              f"{int(peak * scale)}, gain {gain_db:+.1f} dB")
+        print(f"  mic normalize: RMS {20*np.log10(rms/32768.0+1e-9):+.1f} -> "
+              f"{target_dbfs:+.1f} dBFS, gain {gain_db:+.1f} dB"
+              f"{' (capped)' if scale >= max_scale - 1e-9 else ''}")
     except Exception as e:
         print(f"  mic normalize FAILED: {e}", file=sys.stderr)
 
 
-def _spectral_nr_mic_wav(path: Path, alpha: float = 2.5,
-                         beta: float = 0.06) -> None:
-    """Spectral-subtraction noise reduction for the mic WAV, in place.
+def _spectral_gate_mic_wav(path: Path, over: float = 3.2,
+                           floor: float = 0.04,
+                           noise_pct: float = 35.0) -> None:
+    """Wiener-style spectral gate for the mic WAV, in place (v2 denoise).
 
-    The notch denoise + normalize still leave a continuous broadband HISS on
-    the mic (analog headset self-noise) that normalize then amplifies — a
-    constant 'extra sound' under speech (heard 2026-06-09). Learn the noise
-    magnitude spectrum from the quietest window and subtract it across the
-    whole spectrum (over-subtraction `alpha`, spectral floor `beta`) via
-    weighted overlap-add. 'Medium' (alpha 2.5, beta 0.06) is the level Titu
-    picked by ear. Tunable: NUCLEUS_MIC_NR_ALPHA / NUCLEUS_MIC_NR_BETA.
+    Replaces the older spectral-subtraction NR — Titu's ear said that
+    still left audible hiss (2026-06-09). This is the "v2" variant he
+    picked by ear from mic_fix_variants.py on 2026-06-10. Per frequency
+    bin we estimate the noise magnitude as the `noise_pct`-th percentile
+    over time, form an SNR estimate, and apply a Wiener gain
+    g = SNR/(SNR+1) clamped to [`floor`, 1]. `over` over-estimates the
+    noise so the gate cuts harder; `floor` is the residual leak that
+    keeps the result from sounding gated/robotic. Gains are smoothed
+    across frequency to avoid musical-noise artifacts.
+
+    v2 params (over 3.2, floor 0.04, noise_pct 35). Tunable via env:
+    NUCLEUS_MIC_GATE_OVER / NUCLEUS_MIC_GATE_FLOOR /
+    NUCLEUS_MIC_GATE_NOISE_PCT.
     """
     try:
-        alpha = float(os.environ.get("NUCLEUS_MIC_NR_ALPHA", str(alpha)))
-        beta = float(os.environ.get("NUCLEUS_MIC_NR_BETA", str(beta)))
+        over = float(os.environ.get("NUCLEUS_MIC_GATE_OVER", str(over)))
+        floor = float(os.environ.get("NUCLEUS_MIC_GATE_FLOOR", str(floor)))
+        noise_pct = float(os.environ.get(
+            "NUCLEUS_MIC_GATE_NOISE_PCT", str(noise_pct)))
     except ValueError:
         pass
-    N, HOP = 1024, 256
-    win = np.hanning(N)
+    NFFT, HOP = 1024, 256
+    win = np.hanning(NFFT).astype(np.float32)
+    smooth_k = np.array([0.25, 0.5, 0.25], np.float32)
     try:
         with wave.open(str(path), "rb") as wf:
             params = wf.getparams()
             nframes = wf.getnframes()
-            sr = wf.getframerate()
             ch = wf.getnchannels()
             if nframes == 0:
                 return
             raw = wf.readframes(nframes)
         data = np.frombuffer(raw, dtype=np.int16).astype(np.float32)
         data = data.reshape(-1, ch) if ch > 1 else data.reshape(-1, 1)
-        if data.shape[0] < N * 2:
+        if data.shape[0] < NFFT * 2:
             return  # too short to profile reliably
 
-        def _nr(a):
-            wlen = max(sr, N * 2)
-            bi, be = 0, None
-            for i in range(0, max(1, len(a) - wlen), max(1, sr // 2)):
-                e = float(np.sqrt(np.mean(a[i:i + wlen] ** 2)))
-                if be is None or e < be:
-                    be, bi = e, i
-            seg = a[bi:bi + wlen]
-            nmags = [np.abs(np.fft.rfft(seg[j:j + N] * win))
-                     for j in range(0, len(seg) - N, HOP)]
-            if not nmags:
-                return a
-            nm = np.mean(nmags, axis=0)
-            out = np.zeros(len(a) + N)
-            den = np.zeros(len(a) + N)
-            for i in range(0, len(a) - N, HOP):
-                F = np.fft.rfft(a[i:i + N] * win)
-                mag = np.abs(F)
-                clean = np.maximum(mag - alpha * nm, beta * mag)
-                out[i:i + N] += np.fft.irfft(
-                    clean * np.exp(1j * np.angle(F)), n=N) * win
-                den[i:i + N] += win * win
-            den[den < 1e-6] = 1e-6
-            return (out / den)[:len(a)]
+        def _gate(x):
+            pad = (-(len(x) - NFFT)) % HOP
+            xp = np.concatenate([x, np.zeros(pad, np.float32)])
+            nfrm = 1 + (len(xp) - NFFT) // HOP
+            S = np.empty((nfrm, NFFT // 2 + 1), np.complex64)
+            for i in range(nfrm):
+                S[i] = np.fft.rfft(xp[i * HOP:i * HOP + NFFT] * win)
+            mag = np.abs(S)
+            phase = np.angle(S)
+            noise = np.percentile(mag, noise_pct, axis=0)
+            snr = (mag / (noise[None, :] * over + 1e-6)) ** 2
+            g = np.clip(snr / (snr + 1.0), floor, 1.0)
+            for j in range(g.shape[1]):
+                g[:, j] = np.convolve(g[:, j], smooth_k, "same")
+            S2 = (mag * g) * np.exp(1j * phase)
+            y = np.zeros(len(xp), np.float32)
+            wsum = np.zeros(len(xp), np.float32)
+            for i in range(nfrm):
+                fr = np.fft.irfft(S2[i], n=NFFT).astype(np.float32) * win
+                y[i * HOP:i * HOP + NFFT] += fr
+                wsum[i * HOP:i * HOP + NFFT] += win ** 2
+            return (y / np.maximum(wsum, 1e-6))[:len(x)]
 
         for c in range(data.shape[1]):
-            data[:, c] = _nr(data[:, c])
+            data[:, c] = _gate(data[:, c])
         samples = np.clip(data.reshape(-1), -32768, 32767).astype(np.int16)
-        tmp_path = path.with_suffix(path.suffix + ".nr.tmp")
+        tmp_path = path.with_suffix(path.suffix + ".gate.tmp")
         try:
             with wave.open(str(tmp_path), "wb") as wf:
                 wf.setparams(params)
@@ -734,10 +751,81 @@ def _spectral_nr_mic_wav(path: Path, alpha: float = 2.5,
                     tmp_path.unlink()
                 except OSError:
                     pass
-        print(f"  mic noise-reduction: spectral subtraction "
-              f"(alpha {alpha}, beta {beta})")
+        print(f"  mic spectral-gate: Wiener (over {over}, floor {floor}, "
+              f"noise pct {noise_pct})")
     except Exception as e:
-        print(f"  mic noise-reduction FAILED: {e}", file=sys.stderr)
+        print(f"  mic spectral-gate FAILED: {e}", file=sys.stderr)
+
+
+def _expander_mic_wav(path: Path, range_db: float = 14.0,
+                      thresh_over_nf_db: float = 8.0) -> None:
+    """Downward expander for the mic WAV, in place (v2 chain).
+
+    The spectral gate leaves a faint residual between words; this
+    expander attenuates samples whose smoothed envelope sits near the
+    noise floor so the between-word gaps go genuinely quiet, which is
+    what made the v2 sample sound clean to Titu (2026-06-10). Samples
+    whose envelope is below `thresh_over_nf_db` above the estimated
+    noise floor are pulled down by up to `range_db`; the gain is
+    smoothed (~80 ms release) to avoid pumping/chatter.
+
+    v2 params (range 14 dB, thresh 8 dB). Tunable via env:
+    NUCLEUS_MIC_EXP_RANGE_DB / NUCLEUS_MIC_EXP_THRESH_DB. Set range to
+    0 to disable.
+    """
+    try:
+        range_db = float(os.environ.get(
+            "NUCLEUS_MIC_EXP_RANGE_DB", str(range_db)))
+        thresh_over_nf_db = float(os.environ.get(
+            "NUCLEUS_MIC_EXP_THRESH_DB", str(thresh_over_nf_db)))
+    except ValueError:
+        pass
+    if range_db <= 0:
+        return
+    try:
+        with wave.open(str(path), "rb") as wf:
+            params = wf.getparams()
+            nframes = wf.getnframes()
+            sr = wf.getframerate()
+            ch = wf.getnchannels()
+            if nframes == 0:
+                return
+            raw = wf.readframes(nframes)
+        data = np.frombuffer(raw, dtype=np.int16).astype(np.float32)
+        data = data.reshape(-1, ch) if ch > 1 else data.reshape(-1, 1)
+        env_win = max(1, int(sr * 0.02))
+        rel = max(1, int(sr * 0.08))
+        lo = 10 ** (-range_db / 20.0)
+
+        def _expand(x):
+            env = np.sqrt(np.convolve(
+                x ** 2, np.ones(env_win) / env_win, "same") + 1e-9)
+            nf = np.percentile(env, 10)
+            thr = nf * 10 ** (thresh_over_nf_db / 20.0)
+            ratio = np.clip(env / (thr + 1e-9), 0.2, 1.0)
+            g = lo + (1.0 - lo) * np.clip((ratio - 0.2) / 0.8, 0, 1)
+            g = np.convolve(g, np.ones(rel) / rel, "same")
+            return x * g
+
+        for c in range(data.shape[1]):
+            data[:, c] = _expand(data[:, c])
+        samples = np.clip(data.reshape(-1), -32768, 32767).astype(np.int16)
+        tmp_path = path.with_suffix(path.suffix + ".expand.tmp")
+        try:
+            with wave.open(str(tmp_path), "wb") as wf:
+                wf.setparams(params)
+                wf.writeframes(samples.tobytes())
+            _atomic_replace_wav(tmp_path, path)
+        finally:
+            if tmp_path.exists():
+                try:
+                    tmp_path.unlink()
+                except OSError:
+                    pass
+        print(f"  mic expander: downward (range {range_db} dB, "
+              f"thresh {thresh_over_nf_db} dB over noise floor)")
+    except Exception as e:
+        print(f"  mic expander FAILED: {e}", file=sys.stderr)
 
 
 def _write_metadata_and_upload(
@@ -807,9 +895,11 @@ def _write_metadata_and_upload(
     if central_dir is None:
         print("  central upload: skipped (NUCLEUS_CENTRAL_PATH not set)")
         return
-    from teams._central import ensure_smb_auth
-    ensure_smb_auth(os.environ.get("NUCLEUS_CENTRAL_PATH", ""))
-    try:
+    from teams._central import ensure_smb_auth, reset_smb_auth
+    central_root = os.environ.get("NUCLEUS_CENTRAL_PATH", "")
+    ensure_smb_auth(central_root)
+
+    def _do_central_copy():
         central_dir.mkdir(parents=True, exist_ok=True)
         for src in (mic_path, spk_path, meta_path):
             if not src.exists():
@@ -818,10 +908,26 @@ def _write_metadata_and_upload(
             shutil.copy2(str(src), str(dst))
             size_mb = src.stat().st_size / 1024 / 1024
             print(f"  -> {dst}  ({size_mb:.1f} MB)")
+
+    try:
+        _do_central_copy()
         print(f"  central upload: OK ({central_dir})")
     except Exception as e:
-        print(f"  central upload FAILED: {e}", file=sys.stderr)
-        print(f"  WAVs + metadata are still local at {out_dir}", file=sys.stderr)
+        # The live push is fire-once with no scheduled retry, so a single
+        # transient SMB/network blip (idle-dropped session at end of day,
+        # Wi-Fi flap) would otherwise strand the call local-only until the
+        # next logon backfill. Reset the SMB session and try ONCE more.
+        print(f"  central upload failed ({e}) — resetting SMB, retry once",
+              file=sys.stderr)
+        try:
+            reset_smb_auth(central_root)
+            _do_central_copy()
+            print(f"  central upload: OK on retry ({central_dir})")
+        except Exception as e2:
+            print(f"  central upload FAILED (after retry): {e2}",
+                  file=sys.stderr)
+            print(f"  WAVs + metadata are still local at {out_dir} "
+                  f"(run: py -3 -m teams.backfill_central)", file=sys.stderr)
 
 
 def _dev_name() -> str:
@@ -914,9 +1020,11 @@ def _postprocess_and_upload(*, out_dir: Path, stamp: str,
     """
     duration_s = (ended_dt - started_dt).total_seconds()
 
-    # Mic post-processing. Order: denoise (kill hum) -> normalize (level) ->
-    # spectral noise reduction (kill the broadband hiss the notch+normalize
-    # leave behind). NR runs last to match the 'medium' sample Titu approved.
+    # Mic post-processing — the "v2" chain Titu picked by ear (2026-06-10).
+    # Order matters: denoise (HPF<80 + mains notches) -> Wiener spectral-gate
+    # (kill broadband hiss) -> downward expander (silence between-word gaps)
+    # -> RMS-normalize + soft limiter (set final loudness LAST, on already-
+    # cleaned audio, so a transient can't pin the peak and leave speech quiet).
     # All toggleable via env.
     if mic_path.exists() and mic_path.stat().st_size > 0:
         if os.environ.get("NUCLEUS_MIC_DENOISE", "1") != "0":
@@ -925,10 +1033,12 @@ def _postprocess_and_upload(*, out_dir: Path, stamp: str,
             except ValueError:
                 mains_hz = 50.0
             _denoise_mic_wav(mic_path, mains_hz=mains_hz)
+        if os.environ.get("NUCLEUS_MIC_GATE", "1") != "0":
+            _spectral_gate_mic_wav(mic_path)
+        if os.environ.get("NUCLEUS_MIC_EXPANDER", "1") != "0":
+            _expander_mic_wav(mic_path)
         if os.environ.get("NUCLEUS_MIC_NORMALIZE", "1") != "0":
             _normalize_mic_wav(mic_path)
-        if os.environ.get("NUCLEUS_MIC_NR", "1") != "0":
-            _spectral_nr_mic_wav(mic_path)
 
     # Discard sessions shorter than the configured minimum (default 20s) —
     # ringing-then-declined, voice notes, playback blips. Keeps junk off
