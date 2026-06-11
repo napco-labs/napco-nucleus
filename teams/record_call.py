@@ -987,6 +987,85 @@ def _central_calls_dir() -> Path | None:
     return Path(raw) / _dev_name() / day / "calls"
 
 
+def _mirror_raw_to_central(spk_path: Path, mic_path: Path,
+                           stop_mirror: threading.Event) -> None:
+    """Stream the growing raw WAVs to central DURING the call.
+
+    This makes central the primary sink instead of relying on a single
+    post-call push: by the time a call ends, its audio is already on
+    central, so the #1 failure — the dev shutting the PC off the instant
+    the call completes, before the push runs — can no longer strand it
+    (2026-06-11, Titu).
+
+    Deliberately copies ONLY the WAVs, never the json sidecar. On .123 the
+    json is the "transcribe-ready" signal (tools.transcribe_calls keys off
+    <session>.json + both WAVs), written exactly once at completion — so the
+    transcribe worker never picks up a half-mirrored call. The authoritative
+    final copy (cleaned mic + speaker + json LAST) still happens in
+    _postprocess_and_upload after the call; this only guarantees the audio
+    has already arrived. If even the final json is lost to a shutdown, the
+    audio is safe on central and the next logon backfill adds the json.
+
+    Best-effort; never raises. Tunables:
+      NUCLEUS_CENTRAL_LIVE_MIRROR=0       disable entirely
+      NUCLEUS_CENTRAL_MIRROR_INTERVAL_S   cadence in seconds (default 30)
+    """
+    if os.environ.get("NUCLEUS_CENTRAL_LIVE_MIRROR", "1") == "0":
+        return
+    if _central_calls_dir() is None:
+        return
+    try:
+        interval = float(
+            os.environ.get("NUCLEUS_CENTRAL_MIRROR_INTERVAL_S", "30"))
+    except ValueError:
+        interval = 30.0
+    if interval <= 0:
+        return
+
+    from teams._central import ensure_smb_auth, reset_smb_auth
+    central_root = os.environ.get("NUCLEUS_CENTRAL_PATH", "")
+    last_size: dict[str, int] = {}
+
+    def _tick() -> None:
+        central_dir = _central_calls_dir()
+        if central_dir is None:
+            return
+        ensure_smb_auth(central_root)
+        central_dir.mkdir(parents=True, exist_ok=True)
+        for src in (mic_path, spk_path):
+            if not src.exists():
+                continue
+            # Clear any stale .part left by a prior tick that was hard-killed
+            # mid-copy (exactly the abrupt-shutdown case we defend against).
+            tmp = central_dir / (src.name + ".part")
+            if tmp.exists():
+                try:
+                    tmp.unlink()
+                except OSError:
+                    pass
+            sz = src.stat().st_size
+            # Skip empty files and anything that hasn't grown since last tick.
+            if sz == 0 or last_size.get(src.name) == sz:
+                continue
+            # Copy to a .part sibling then atomically rename, so a reader can
+            # never catch a half-written WAV (and .part files are ignored by
+            # transcribe/backfill, which only look at *.json / *_mic.wav).
+            shutil.copy2(str(src), str(tmp))
+            os.replace(str(tmp), str(central_dir / src.name))
+            last_size[src.name] = sz
+
+    while not stop_mirror.wait(interval):
+        try:
+            _tick()
+        except Exception as e:
+            print(f"  [mirror] central mirror tick failed ({e}); "
+                  f"resetting SMB, will retry next tick", file=sys.stderr)
+            try:
+                reset_smb_auth(central_root)
+            except Exception:
+                pass
+
+
 def _write_marker(stamp: str, out_dir: Path, started_dt: datetime.datetime,
                   spk_path: Path, mic_path: Path) -> None:
     """Record that a capture is in progress so a crash can be recovered."""
@@ -1205,6 +1284,15 @@ def main() -> int:
     for t in threads:
         t.start()
 
+    # Live-mirror the raw WAVs to central WHILE recording, so the call is
+    # already on central before it ends — surviving an immediate post-call
+    # shutdown. Stopped + joined below, before the authoritative final upload.
+    mirror_stop = threading.Event()
+    mirror_thread = threading.Thread(
+        target=_mirror_raw_to_central,
+        args=(spk_path, mic_path, mirror_stop), daemon=True)
+    mirror_thread.start()
+
     try:
         # Keep recording as long as AT LEAST ONE track is still alive.
         # Previously this was `all(...)` which meant a single failed
@@ -1225,6 +1313,11 @@ def main() -> int:
         stop.set()
         for t in threads:
             t.join()
+
+    # Stop the live mirror and let its final tick finish before the
+    # authoritative upload, so the two never race on the same central files.
+    mirror_stop.set()
+    mirror_thread.join(timeout=15)
 
     print()
     for path in (spk_path, mic_path):
