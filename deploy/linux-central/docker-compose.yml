@@ -86,7 +86,9 @@ services:
       - GROUPID=1001
     command: >
       -u "${SAMBA_USER:-nucleus};${SAMBA_PASSWORD:?SAMBA_PASSWORD missing in .env}"
-      -s "nucleus-central;/data/nucleus-central;yes;no;no;${SAMBA_USER:-nucleus};${SAMBA_USER:-nucleus}"
+      -s "nucleus-central;/data/nucleus-central;yes;no;yes"
+      -g "map to guest = Bad User"
+      -g "force user = ${SAMBA_USER:-nucleus}"
       -p
     volumes:
       - /srv/nucleus-central:/data/nucleus-central
