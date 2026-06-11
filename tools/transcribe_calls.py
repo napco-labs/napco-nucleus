@@ -350,6 +350,23 @@ def main() -> int:
             result=f"ok:{ok}/failed:{failed}/skipped:{skipped}",
             technical_details={"ok": ok, "failed": failed,
                                "skipped": skipped, "days": args.days})
+
+        # Keep central "Date modified" honest. New calls reach central via the
+        # live mirror / backfill, which stamp files at PUSH time, not call time
+        # — so browsing the share by date is misleading until re-stamped. We run
+        # in-container as root (can utime root-owned files) right after writing
+        # new transcripts, so the newly-landed call's files get their real call
+        # date. Idempotent + best-effort; never let it fail the transcribe run.
+        if ok > 0:
+            try:
+                from tools.normalize_central_mtimes import normalize
+                root = _central_root()
+                if root is not None:
+                    n = normalize(str(root), dry=False, quiet=True)
+                    print(f"  [normalize] re-stamped {n} central mtime(s)")
+            except Exception as e:
+                print(f"  [normalize] skipped ({e})", file=sys.stderr)
+
         return 0 if failed == 0 else 1
 
 
