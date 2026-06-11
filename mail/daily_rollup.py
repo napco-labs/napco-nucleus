@@ -61,9 +61,12 @@ def _split_addresses(raw: str) -> list[str]:
 # Also tolerates the older "1. [P1/S2 ~4h] Title - summary" so prior docs still
 # parse. Groups: 1=number (Requirement# form), 2=number (old "N." form),
 # 3=title. Any "[...]" tag after an old-style number is stripped.
+# The title/summary separator is " - " (whitespace REQUIRED on both sides) so
+# internal hyphens stay intact — otherwise "Re-publish…" truncates to "Re" and
+# "End-to-end…" to "End" (2026-06-11).
 _REQ_LINE = __import__("re").compile(
     r"^\s*(?:Requirement#\s*(\d+):|(\d+)\.)\s*(?:\[[^\]]*\]\s*)?(.+?)"
-    r"(?:\s*[-–—]\s*.+)?$")
+    r"(?:\s+[-–—]\s+.+)?$")
 
 
 def _parse_verification_summary(path: Path) -> list[dict]:
@@ -138,15 +141,13 @@ def _build_message(day: str, to_addrs: list[str], cc_addrs: list[str],
     lines.append("")
     if reqs:
         lines.append(
-            "Requirements identified from the last 24 hours "
-            "(MS Teams calls, chats, email, and Google Drive):")
+            "Below are the requirement TITLES identified from the last "
+            "24 hours (MS Teams calls, chats, email, and Google Drive). "
+            "These are titles only — for the full description, sources, "
+            "and confidence notes, please see the attached document.")
         lines.append("")
         for r in reqs:
             lines.append(f"  Requirement#{r['n']}: {r['title']}")
-        lines.append("")
-        lines.append(
-            "Please see the attached document for the full text, sources, "
-            "and confidence notes.")
     else:
         lines.append(
             "No requirements were found from the MS Teams calls, chats, "
