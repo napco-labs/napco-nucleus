@@ -17,6 +17,13 @@ PyAudioWPatch>=0.2.12
 # Voice daemon — detect when MS Teams has an active audio session (ringing
 # or in-call) so the "Assalamualaikum" start trigger only fires for Teams calls.
 pycaw>=20240210
+# Audio level metering (voice_daemon) + mic denoise/normalize (record_call).
+# Was previously pulled in transitively by faster-whisper; that was removed
+# 2026-06-08, so it MUST be listed explicitly or a fresh venv has no numpy
+# and the daemon crashes at startup (`import numpy` ModuleNotFoundError) —
+# it "starts" then dies before recording. (Root cause of Assad's 2026-06-15
+# no-recording bug; existing machines had leftover numpy and masked it.)
+numpy>=2.0
 # Call transcription is Google STT (cloud) on central; Bangla->English is
 # done by Claude. faster-whisper removed 2026-06-08 — the voice daemon runs
 # auto mode (Teams audio-session trigger, pycaw) and needs no local STT.
