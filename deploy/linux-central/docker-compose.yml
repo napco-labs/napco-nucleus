@@ -137,10 +137,11 @@ services:
     <<: *worker-base
     container_name: nucleus-daily-draft
     command: ["/usr/local/lib/nucleus-workers/daily-draft-loop.sh"]
-    # Daily clock catch-all fires at BD 23:00 (11:00 PM sharp) — the
+    # Sends EXACTLY ONE rollup email per day at BD 23:30 (11:30 PM) — the
     # default baked into daily-draft-loop.sh (DAILY_DRAFT_TARGET_TIME).
-    # The container clock IS BD (TZ=Asia/Dhaka), so that's wall-clock
-    # 11 PM. To override, set DAILY_DRAFT_TARGET_TIME in .env (it's
+    # Per-call (event) emails are DISABLED. The container clock IS BD
+    # (TZ=Asia/Dhaka), so that's wall-clock 11:30 PM. To override, set
+    # DAILY_DRAFT_TARGET_TIME in .env (it's
     # already loaded via env_file on *worker-base) — do NOT add an
     # `environment:` key here, it would clobber the base environment.
     # faster-whisper removed (2026-06-03); pipeline now uses Google STT

@@ -12,7 +12,7 @@ OpenProject workload.
 | `nucleus-transcribe` | every 2 min | Scheduled Task "NAPCO Nucleus - Transcribe Calls" |
 | `nucleus-stage-email` | every 15 min | Scheduled Task "NAPCO Nucleus - Stage Email" |
 | `nucleus-stage-drive` | every 15 min | Scheduled Task "NAPCO Nucleus - Stage Drive" |
-| `nucleus-daily-draft` | daily at BD 23:45 | Scheduled Task "NAPCO Nucleus - Requirement Management (Daily)" |
+| `nucleus-daily-draft` | ONE email daily at BD 23:30 (per-call emails disabled) | Scheduled Task "NAPCO Nucleus - Requirement Management (Daily)" |
 | `nucleus-gha-runner` (optional, `--profile runner`) | always-on | MVPACCESS Windows runner at `C:\actions-runner\` |
 
 All Python workers run from one image (`Dockerfile.worker`). The repo
