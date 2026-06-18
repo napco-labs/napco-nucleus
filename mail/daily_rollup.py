@@ -349,6 +349,16 @@ def main() -> int:
     verif = _verification_doc(day)
     reqs = _parse_verification_summary(verif) if verif.exists() else []
 
+    # Requirements-only CC: addresses that receive the email ONLY when it
+    # actually carries requirements (e.g. an external client rep) — never on
+    # an empty / notification send. Was a central-only uncommitted patch;
+    # folded into the repo here so it stops drifting from origin.
+    if reqs:
+        for a in _split_addresses(
+                os.environ.get("NUCLEUS_ROLLUP_CC_REQS_ONLY", "")):
+            if a not in cc_addrs and a not in to_addrs:
+                cc_addrs.append(a)
+
     # Attach the Requirements Verification doc ONLY when there are
     # requirements. A no-requirements run is a plain notification — do NOT
     # attach a blank/empty doc (per Titu, 2026-06-09). The raw session.docx
