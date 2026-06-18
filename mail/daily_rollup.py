@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import json
 import os
 import smtplib
 import ssl
@@ -50,6 +51,53 @@ SESSION_DOC = REQUIREMENTS_DIR / "sessions" / "current.docx"
 
 def _verification_doc(day: str) -> Path:
     return REQUIREMENTS_DIR / f"Requirements Verification {day}.docx"
+
+
+_COVERAGE_DIR = REQUIREMENTS_DIR / ".coverage"
+
+
+def _coverage_note(day: str, reqs: list) -> tuple[str | None, bool]:
+    """Return (note, escalate) for an empty (no-requirements) email so a
+    silent drop is VISIBLE — without crying wolf on a genuinely quiet day.
+
+    `note` is an informational line about what was processed; `escalate`
+    is True only on a HARD failure (non-zero identify exit) and bumps the
+    subject to [ACTION NEEDED]. Returns (None, False) when there's nothing
+    to add (requirements were found, or no sources came in at all).
+    collect_central writes the signal this reads
+    (data/requirements/.coverage/<day>.json)."""
+    if reqs:
+        return None, False  # requirements listed already — no note needed
+    try:
+        cov = json.loads(
+            (_COVERAGE_DIR / f"{day}.json").read_text(encoding="utf-8"))
+    except Exception:
+        return None, False  # no signal (older/missing) — benign legacy path
+    src = cov.get("sources") or {}
+    calls = int(src.get("calls", 0) or 0)
+    chats = int(src.get("chats", 0) or 0)
+    atts = int(src.get("attachments", 0) or 0)
+    if calls + chats + atts == 0:
+        return None, False  # genuinely nothing came in — quiet day, benign
+    rc = cov.get("verify_rc")
+    if rc not in (0, None):
+        # Hard failure: identify errored (auth/crash/timeout). Shout.
+        note = (
+            f"PIPELINE CHECK NEEDED — {calls} call(s), {chats} chat(s), "
+            f"{atts} attachment(s) were collected for {day}, but the "
+            f"requirement identify step FAILED (exit={rc}) and produced no "
+            f"requirements. This is a failure, not a quiet day — please "
+            f"check the run.")
+        return note, True
+    # Identify ran clean; sources were present but yielded 0 client
+    # requirements. Informational only (e.g. internal/duplicate calls) so
+    # the coverage is visible at a glance — not an alarm.
+    return (
+        f"For your awareness: {calls} call(s), {chats} chat(s), and "
+        f"{atts} attachment(s) were processed for {day}, and 0 new client "
+        f"requirements were identified from them. If you expected "
+        f"requirements here, just reply and I'll re-check that source.",
+        False)
 
 
 def _split_addresses(raw: str) -> list[str]:
@@ -124,7 +172,9 @@ def _record_emailed(day: str, keys: list[str]) -> None:
 
 def _build_message(day: str, to_addrs: list[str], cc_addrs: list[str],
                    attachments: list[Path],
-                   reqs: list[dict]) -> EmailMessage:
+                   reqs: list[dict],
+                   note: str | None = None,
+                   escalate: bool = False) -> EmailMessage:
     sender = (os.environ.get("SMTP_FROM")
               or os.environ.get("SMTP_USER") or "").strip()
     name = (os.environ.get("SMTP_FROM_NAME") or "NAPCO Nucleus").strip()
@@ -134,7 +184,10 @@ def _build_message(day: str, to_addrs: list[str], cc_addrs: list[str],
     msg["To"] = ", ".join(to_addrs)
     if cc_addrs:
         msg["Cc"] = ", ".join(cc_addrs)
-    msg["Subject"] = f"NAPCO Nucleus — daily client requirements ({day})"
+    subject = f"NAPCO Nucleus — daily client requirements ({day})"
+    if escalate:
+        subject = f"[ACTION NEEDED] {subject}"
+    msg["Subject"] = subject
 
     lines: list[str] = []
     lines.append("Dear Team,")
@@ -148,6 +201,8 @@ def _build_message(day: str, to_addrs: list[str], cc_addrs: list[str],
         lines.append("")
         for r in reqs:
             lines.append(f"  Requirement#{r['n']}: {r['title']}")
+    elif note:
+        lines.append(note)
     else:
         lines.append(
             "No requirements were found from the MS Teams calls, chats, "
@@ -205,7 +260,26 @@ def main() -> int:
                          "the daily summary always goes out.")
     args = ap.parse_args()
 
-    day = args.day or dt.date.today().strftime("%Y-%m-%d")
+    if args.day:
+        day = args.day
+    else:
+        # The nightly loop starts collect_central at 23:30; its Claude
+        # identify pass can push THIS emailer past midnight, so
+        # dt.date.today() would name the NEXT day's (nonexistent)
+        # verification doc and send an empty "no requirements" summary
+        # (2026-06-17 incident: collect used 06-17, rollup used 06-18).
+        # In the small-hours window, if today has no doc yet but
+        # yesterday's exists, this run is the tail of last night — use
+        # yesterday so the email reflects the day that was actually
+        # collected.
+        now = dt.datetime.now()
+        today = now.date().strftime("%Y-%m-%d")
+        yday = (now.date() - dt.timedelta(days=1)).strftime("%Y-%m-%d")
+        if now.hour < 6 and not _verification_doc(today).exists() \
+                and _verification_doc(yday).exists():
+            day = yday
+        else:
+            day = today
 
     to_addrs = _split_addresses(os.environ.get("NUCLEUS_ROLLUP_TO", ""))
     cc_addrs = _split_addresses(os.environ.get("NUCLEUS_ROLLUP_CC", ""))
@@ -234,19 +308,26 @@ def main() -> int:
     already = _emailed_keys(day)
     new_reqs = [r for r in reqs if _req_key(r) not in already]
 
+    # On an empty email, surface what was actually processed so a silent
+    # drop is visible — and escalate the subject only on a hard failure.
+    note, escalate = _coverage_note(day, reqs)
+
     print(f"[rollup] day={day}  to={to_addrs}  cc={cc_addrs}  "
           f"attachments={[p.name for p in attachments]}  "
           f"reqs_inlined={len(reqs)}  net_new={len(new_reqs)}  "
-          f"require_new={args.require_new}")
+          f"require_new={args.require_new}  note={bool(note)}  "
+          f"escalate={escalate}")
 
     # Event-triggered runs: skip the team email unless something is net-new.
-    # Kills the empty / duplicate midday blasts; the clock run never sets this.
-    if args.require_new and not new_reqs:
+    # Kills the empty / duplicate midday blasts; the clock run never sets
+    # this. A coverage note still sends — surfacing what happened is the point.
+    if args.require_new and not new_reqs and not note:
         print(f"[rollup] --require-new: {len(reqs)} requirement(s) on file, "
               f"0 net-new since last send — skipping email.")
         return 0
 
-    msg = _build_message(day, to_addrs, cc_addrs, attachments, reqs)
+    msg = _build_message(day, to_addrs, cc_addrs, attachments, reqs,
+                         note, escalate)
     if args.dry_run:
         print("[rollup] --dry-run: not sending.")
         return 0

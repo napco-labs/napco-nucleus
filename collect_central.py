@@ -337,6 +337,31 @@ def _read_chat_docx_lines(path: Path) -> list[str]:
     return lines
 
 
+_COVERAGE_DIR = _HERE / "data" / "requirements" / ".coverage"
+
+
+def _write_coverage(day: str, calls: int, chats: int, atts: int,
+                    verify_rc: int) -> None:
+    """Record what this run collected + whether identify succeeded.
+
+    daily_rollup reads this so it can tell a genuinely-quiet day (no
+    sources) apart from a FAILED run (sources collected but the identify
+    step errored or wrote no verification doc) — and shout in the email
+    instead of sending a silent 'no requirements' notice (2026-06-17:
+    Assad's Bangla calls were collected but the identify step bailed)."""
+    _COVERAGE_DIR.mkdir(parents=True, exist_ok=True)
+    doc = (_HERE / "data" / "requirements"
+           / f"Requirements Verification {day}.docx")
+    payload = {
+        "day": day,
+        "sources": {"calls": calls, "chats": chats, "attachments": atts},
+        "verify_rc": verify_rc,
+        "doc_exists": doc.exists(),
+    }
+    (_COVERAGE_DIR / f"{day}.json").write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(
         description=__doc__,
@@ -583,6 +608,11 @@ def main() -> int:
     # Until that exit-code bug in agent.py is fixed too, we still trust
     # rc here; the daily-draft loop's new "skip rollup on non-zero rc"
     # guard catches the empty-output case from the other side.
+    try:
+        _write_coverage(days_to_scan[0], n_calls, n_chats, n_atts, rc)
+    except Exception as e:
+        print(f"  warn: could not write coverage signal: {e}",
+              file=sys.stderr)
     return rc
 
 

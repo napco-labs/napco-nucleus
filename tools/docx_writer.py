@@ -29,7 +29,11 @@ _OUT_DIR = _HERE / "data" / "requirements"
 
 
 def _text(payload) -> dict:
-    return {"content": [{"type": "text", "text": json.dumps(payload, default=str)}]}
+    # ensure_ascii=False so Bangla reaches the agent as real UTF-8, not
+    # \uXXXX escapes it can't decode in-sandbox (see requirements.py _text).
+    return {"content": [{"type": "text",
+                         "text": json.dumps(payload, ensure_ascii=False,
+                                            default=str)}]}
 
 
 def _today_stamp() -> str:

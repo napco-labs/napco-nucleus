@@ -39,7 +39,14 @@ _REQ_INBOX_ROOT = _HERE / "data" / "requirements" / "inbox"
 
 
 def _text(payload) -> dict:
-    return {"content": [{"type": "text", "text": json.dumps(payload, default=str)}]}
+    # ensure_ascii=False so Bangla (call transcripts, client names) reaches
+    # the agent as real UTF-8, not \uXXXX escapes. With the json default the
+    # identify agent saw escaped Bangla, tried to python/perl-decode it
+    # (blocked by the worker sandbox), and bailed with 0 requirements —
+    # Assad's two Bangla calls, 2026-06-17.
+    return {"content": [{"type": "text",
+                         "text": json.dumps(payload, ensure_ascii=False,
+                                            default=str)}]}
 
 
 # ─── poll_requirement_emails ────────────────────────────────────────
