@@ -109,12 +109,47 @@ REASSURANCE: list[str] = [
     "carries less in their heads.",
     "Nothing here depends on anyone's memory. It depends on what was "
     "actually said — and that's all captured.",
+    "When the client says \"I never asked for that,\" the call is right here "
+    "to settle it — calmly.",
+    "Scope creeping in? Every change is timestamped, so the trail is clear "
+    "— not your word against theirs.",
+    "Half-remembered asks become written tasks here. Less guessing, fewer "
+    "reworks.",
+    "You build; Nucleus remembers. That division of labour is the whole "
+    "idea.",
+    "The list doesn't depend on who was alert on the call — it depends on "
+    "what was said.",
+    "Forgot to note it down mid-call? You were busy doing your job. Nucleus "
+    "had the notepad.",
+    "A clear record today is a shorter argument tomorrow.",
+    "Overloaded? Hand the remembering to Nucleus and keep your focus for "
+    "the building.",
 ]
 
-# One merged rotation: attributed quotes + un-attributed Nucleus reassurance
-# lines. (text, author) — author None marks a reassurance line.
-ITEMS: list[tuple[str, str | None]] = (
-    [(q, a) for q, a in QUOTES] + [(r, None) for r in REASSURANCE])
+
+def _build_rotation(quotes: list[tuple[str, str]],
+                    reassurance: list[str]) -> list[tuple[str, str | None]]:
+    """Interleave the two pools into one daily sequence, reassurance-forward
+    (~2 reassurance days : 1 quote day) and with no two same-type entries
+    landing on the same content back-to-back. Relief for the devs is the
+    point, so it leads; quotes add variety."""
+    q = [(t, a) for t, a in quotes]
+    r = [(t, None) for t in reassurance]
+    pattern = ("r", "r", "q")  # 2:1 toward reassurance
+    out: list[tuple[str, str | None]] = []
+    qi = ri = 0
+    for i in range(len(pattern) * max(len(q), len(r), 1)):
+        kind = pattern[i % len(pattern)]
+        if (kind == "r" and r) or not q:
+            out.append(r[ri % len(r)]); ri += 1
+        else:
+            out.append(q[qi % len(q)]); qi += 1
+    return out
+
+
+# The daily rotation: reassurance-forward interleave of relief lines +
+# quality quotes. _item_for picks ITEMS[date_ordinal % len] each day.
+ITEMS: list[tuple[str, str | None]] = _build_rotation(QUOTES, REASSURANCE)
 
 
 def _s(n: int) -> str:
