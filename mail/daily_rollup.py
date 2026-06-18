@@ -42,6 +42,8 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
+from mail import nucleus_flair
+
 _HERE = Path(__file__).resolve().parent.parent
 load_dotenv(_HERE / ".env", override=True)
 
@@ -136,6 +138,49 @@ def _parse_verification_summary(path: Path) -> list[dict]:
     return out
 
 
+def _week_days(day: str) -> list[str]:
+    try:
+        d = dt.date.fromisoformat(day)
+    except Exception:
+        d = dt.date.today()
+    return [(d - dt.timedelta(days=i)).strftime("%Y-%m-%d") for i in range(7)]
+
+
+def _reqs_this_week(day: str) -> int:
+    """Total requirements across the last 7 days' verification docs — reuses
+    the same parser the email uses, so the number matches what went out."""
+    total = 0
+    for d in _week_days(day):
+        try:
+            total += len(_parse_verification_summary(_verification_doc(d)))
+        except Exception:
+            pass
+    return total
+
+
+def _calls_this_week(day: str) -> int:
+    """Count team calls captured to the central tree in the last 7 days (one
+    *.json per call session). Best-effort — returns 0 on any problem so the
+    flair never breaks the email."""
+    central = (os.environ.get("NUCLEUS_CENTRAL_PATH") or "").strip()
+    if not central:
+        return 0
+    days = set(_week_days(day))
+    n = 0
+    try:
+        root = Path(central)
+        for dev in root.iterdir():
+            if not dev.is_dir():
+                continue
+            for d in days:
+                cdir = dev / d / "calls"
+                if cdir.exists():
+                    n += len(list(cdir.glob("*.json")))
+    except Exception:
+        return 0
+    return n
+
+
 # ── Same-day dedupe of emailed requirements ──────────────────────────────
 # Event-triggered runs (one per transcription) must NOT re-email the team a
 # requirement that already went out earlier today, and must NOT send at all
@@ -209,6 +254,17 @@ def _build_message(day: str, to_addrs: list[str], cc_addrs: list[str],
             "email, or Google Drive last night. This is just a notification "
             "to let you know the scenario. No action needed.")
     lines.append("")
+    # Daily flair: a live coverage insight + a rotating quality quote or a
+    # Nucleus reassurance line for the devs. Fully best-effort — empty on any
+    # error so it can never break or delay the send.
+    try:
+        flair = nucleus_flair.daily_flair(
+            day, _reqs_this_week(day), _calls_this_week(day))
+    except Exception:
+        flair = ""
+    if flair:
+        lines.append(flair)
+        lines.append("")
     lines.append("— NAPCO Nucleus")
     msg.set_content("\n".join(lines))
 
