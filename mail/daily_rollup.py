@@ -244,7 +244,9 @@ def _build_message(day: str, to_addrs: list[str], cc_addrs: list[str],
             "These are titles only — for the full description, sources, "
             "and confidence notes, please see the attached document.")
         lines.append("")
-        for r in reqs:
+        for i, r in enumerate(reqs):
+            if i:
+                lines.append("")  # blank line between requirements for readability
             lines.append(f"  Requirement#{r['n']}: {r['title']}")
     elif note:
         lines.append(note)
