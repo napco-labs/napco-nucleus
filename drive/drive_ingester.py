@@ -221,10 +221,18 @@ def _download_file(drive, file_id: str, out_path: Path) -> None:
     request = drive.files().get_media(fileId=file_id, supportsAllDrives=True)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     with open(out_path, "wb") as fh:
-        downloader = MediaIoBaseDownload(fh, request, chunksize=1024 * 1024)
+        # 32 MB chunks: call .wav files run 500-800 MB. At the old 1 MB chunk that
+        # was 500-800 sequential round-trips per file — so slow it often got
+        # interrupted (loop tick / restart) before finishing and never landed.
+        # Bigger chunks = ~25x fewer requests = far faster and more robust.
+        downloader = MediaIoBaseDownload(fh, request, chunksize=32 * 1024 * 1024)
         done = False
         while not done:
-            _status, done = downloader.next_chunk()
+            # num_retries: a multi-chunk download (e.g. a tens-of-MB call .wav)
+            # crosses many requests; without per-chunk retries a single transient
+            # Drive API blip fails the WHOLE file. Small files (one chunk) rarely
+            # hit it, which is why chat synced but call audio didn't.
+            _status, done = downloader.next_chunk(num_retries=5)
 
 
 # ─────────────────────────── Groq ─────────────────────────────────
