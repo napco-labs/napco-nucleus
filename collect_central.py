@@ -107,7 +107,18 @@ _ATTACHMENT_EXT_KIND = {
 }
 
 
-def _scan_central(central: Path, days, client: str) -> dict:
+def _call_track(calls_dir: Path, stamp: str, kind: str) -> Path | None:
+    """Find a call track by either extension — Opus (compressed) preferred,
+    then legacy WAV. Without this, compressed calls resolve to no audio path
+    and _transcribe_call returns '(both tracks missing)' → zero requirements."""
+    for ext in (".opus", ".wav"):
+        p = calls_dir / f"{stamp}_{kind}{ext}"
+        if p.exists():
+            return p
+    return None
+
+
+def _scan_central(central: Path, days, client: str, calls_within: int = 0) -> dict:
     """Walk central/<dev>/<day>/ for each day and bucket by source.
 
     `days` may be a single date string or a list of strings. The
@@ -149,14 +160,23 @@ def _scan_central(central: Path, days, client: str) -> dict:
                     if not _client_match(metadata, client):
                         continue
                     stamp = metadata.get("session") or meta_path.stem
-                    mic = calls_dir / f"{stamp}_mic.wav"
-                    spk = calls_dir / f"{stamp}_speaker.wav"
+                    # Per-call (event) runs scope to FRESHLY-transcribed calls so
+                    # we don't re-run Google STT over the whole day on every
+                    # trigger. Keyed on the transcript mtime (just written by the
+                    # transcribe loop), so the call's length doesn't matter.
+                    if calls_within > 0:
+                        ref = calls_dir / f"{stamp}_transcript.md"
+                        ts = ref if ref.exists() else meta_path
+                        age_min = (dt.datetime.now().timestamp()
+                                   - ts.stat().st_mtime) / 60.0
+                        if age_min > calls_within:
+                            continue
                     calls.append({
                         "dev": dev_dir.name,
                         "stamp": stamp,
                         "metadata": metadata,
-                        "mic_path": mic if mic.exists() else None,
-                        "speaker_path": spk if spk.exists() else None,
+                        "mic_path": _call_track(calls_dir, stamp, "mic"),
+                        "speaker_path": _call_track(calls_dir, stamp, "speaker"),
                     })
 
             chat_dir = day_dir / "chat"
@@ -384,6 +404,11 @@ def main() -> int:
     ap.add_argument("--last-minutes", type=int, default=15,
                     help="Time window (minutes) for the email + Drive "
                          "pulls. Default: 15.")
+    ap.add_argument("--calls-within-minutes", type=int, default=0,
+                    help="Only include calls transcribed within the last N "
+                         "minutes (by transcript mtime). 0 = all calls for the "
+                         "day. Used by the per-call event run so it (re)processes "
+                         "ONLY the freshly-finished call, not the whole day.")
     ap.add_argument("--no-email", dest="pull_email", action="store_false",
                     help="Skip pulling email from IMAP.")
     ap.set_defaults(pull_email=True)
@@ -419,7 +444,8 @@ def main() -> int:
 
     print(f"\n*** collect_central: client={args.client!r}  day={day_label} ***")
     print(f"central: {central}")
-    bundle = _scan_central(central, days_to_scan, args.client)
+    bundle = _scan_central(central, days_to_scan, args.client,
+                           calls_within=args.calls_within_minutes)
     n_calls = len(bundle["calls"])
     n_chats = len(bundle["chats"])
     n_atts = len(bundle["attachments"])

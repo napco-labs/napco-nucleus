@@ -46,11 +46,12 @@ fi
 
 run_pipeline() {
     local reason="$1"
-    local email_args="${2:-}"   # extra args for daily_rollup (e.g. --require-new)
+    local email_args="${2:-}"     # extra args for daily_rollup (e.g. --require-new)
+    local collect_args="${3:-}"   # extra args for collect_central (e.g. --calls-within-minutes)
     echo "[draft-loop] running pipeline — reason: ${reason}"
     rm -f "$TRIGGER_FILE"
 
-    python collect_central.py --client all --last-minutes "$LOOKBACK_MINUTES"
+    python collect_central.py --client all --last-minutes "$LOOKBACK_MINUTES" ${collect_args}
     local rc=$?
     echo "[draft-loop] collect_central.py exited rc=${rc}"
 
@@ -87,7 +88,9 @@ while true; do
     # means a call that surfaced nothing new sends no email.
     if [ -f "$TRIGGER_FILE" ]; then
         if [ "$EVENT_EMAIL" != 0 ]; then
-            run_pipeline "event:transcription" "--require-new"
+            # Scope to the just-finished call (transcript mtime < 45 min) so we
+            # don't re-transcribe the whole day's calls on every trigger.
+            run_pipeline "event:transcription" "--require-new" "--calls-within-minutes ${DAILY_DRAFT_EVENT_CALLS_WITHIN:-45}"
         else
             rm -f "$TRIGGER_FILE"
             echo "[draft-loop] transcription complete — per-call email disabled"
