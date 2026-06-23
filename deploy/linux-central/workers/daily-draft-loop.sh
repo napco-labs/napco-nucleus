@@ -23,7 +23,11 @@ POLL_SECONDS="${PIPELINE_POLL_SECONDS:-120}"
 TRIGGER_FILE="/data/nucleus-central/.pipeline_trigger"
 CENTRAL="/data/nucleus-central"
 EVENT_EMAIL="${DAILY_DRAFT_EVENT_EMAIL:-1}"   # 0 disables per-call emails
-CLOCK_TARGET="${DAILY_DRAFT_TARGET_TIME:-}"   # empty = no daily clock send
+# The nightly batch is OFF unless explicitly enabled — independent of any
+# DAILY_DRAFT_TARGET_TIME still set in the infra env. Set DAILY_DRAFT_CLOCK=1
+# to bring back the single daily send.
+CLOCK_ENABLED="${DAILY_DRAFT_CLOCK:-0}"
+CLOCK_TARGET="${DAILY_DRAFT_TARGET_TIME:-23:30}"
 LAST_CLOCK_RUN_DATE=""
 
 trap 'echo "[draft-loop] received SIGTERM, exiting"; exit 0' TERM INT
@@ -34,7 +38,11 @@ if [ "$EVENT_EMAIL" != 0 ]; then
 else
     echo "[draft-loop] per-call event email: disabled"
 fi
-echo "[draft-loop] daily clock send: ${CLOCK_TARGET:-OFF}"
+if [ "$CLOCK_ENABLED" = 1 ]; then
+    echo "[draft-loop] daily clock send: ${CLOCK_TARGET}"
+else
+    echo "[draft-loop] daily clock send: OFF"
+fi
 
 run_pipeline() {
     local reason="$1"
@@ -64,7 +72,7 @@ while true; do
     # is per-call. When on, fires once per BD day and always sends a summary.
     today=$(date +%Y-%m-%d)
     current_hm=$(date +%H:%M)
-    if [ -n "$CLOCK_TARGET" ] \
+    if [ "$CLOCK_ENABLED" = 1 ] && [ -n "$CLOCK_TARGET" ] \
        && [[ "$current_hm" > "$CLOCK_TARGET" || "$current_hm" == "$CLOCK_TARGET" ]] \
        && [[ "$LAST_CLOCK_RUN_DATE" != "$today" ]]; then
         LAST_CLOCK_RUN_DATE="$today"
