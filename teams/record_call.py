@@ -870,6 +870,31 @@ def _expander_mic_wav(path: Path, range_db: float = 14.0,
         print(f"  mic expander FAILED: {e}", file=sys.stderr)
 
 
+def _ffmpeg_bin() -> str | None:
+    """Locate ffmpeg WITHOUT relying on the daemon's PATH (which is stale right
+    after a fresh install until reboot). Order: NUCLEUS_FFMPEG env, PATH, then
+    common Windows install dirs (manual C:\\ffmpeg, winget). Returns the exe
+    path or None. This is why no reboot/daemon-restart is needed after install."""
+    import glob
+    cand = os.environ.get("NUCLEUS_FFMPEG")
+    if cand and Path(cand).exists():
+        return cand
+    found = shutil.which("ffmpeg")
+    if found:
+        return found
+    patterns = [
+        r"C:\ffmpeg\ffmpeg.exe",
+        r"C:\ffmpeg\bin\ffmpeg.exe",
+        os.path.expandvars(r"%LOCALAPPDATA%\Microsoft\WinGet\Packages\Gyan.FFmpeg*\**\ffmpeg.exe"),
+        os.path.expandvars(r"%ProgramFiles%\ffmpeg\bin\ffmpeg.exe"),
+    ]
+    for pat in patterns:
+        for m in glob.glob(pat, recursive=True):
+            if Path(m).exists():
+                return m
+    return None
+
+
 def _encode_opus(wav_path: Path) -> Path | None:
     """Encode a finalized WAV track to Opus (.opus, Ogg container) via ffmpeg.
 
@@ -879,15 +904,20 @@ def _encode_opus(wav_path: Path) -> Path | None:
     decode step is needed downstream. Returns the .opus path on success, or
     None if ffmpeg is missing / the encode fails (caller keeps the raw WAV).
     """
+    ffmpeg = _ffmpeg_bin()
+    if not ffmpeg:
+        print("  opus: ffmpeg not found (NUCLEUS_FFMPEG / PATH / common dirs)"
+              " — keeping raw WAV", file=sys.stderr)
+        return None
     out = wav_path.with_suffix(".opus")
     bitrate = (os.environ.get("NUCLEUS_OPUS_BITRATE") or "48k").strip()
-    cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+    cmd = [ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
            "-i", str(wav_path), "-ac", "1",
            "-c:a", "libopus", "-b:a", bitrate, str(out)]
     try:
         subprocess.run(cmd, check=True)
     except FileNotFoundError:
-        print("  opus: ffmpeg not found on PATH — keeping raw WAV",
+        print("  opus: ffmpeg failed to launch — keeping raw WAV",
               file=sys.stderr)
         return None
     except subprocess.CalledProcessError as e:
