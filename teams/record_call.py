@@ -27,6 +27,7 @@ import os
 import queue
 import shutil
 import socket
+import subprocess
 import sys
 import threading
 import time
@@ -1186,23 +1187,37 @@ def _postprocess_and_upload(*, out_dir: Path, stamp: str,
     return 0
 
 
-def finalize_orphan() -> int:
-    """Recover a recording the daemon/PC died on — called at daemon boot.
+def finalize_orphan(marker_path: Path = MARKER_FILE) -> int:
+    """Post-process + upload a recording, off the recorder's critical path.
 
-    Reads MARKER_FILE, repairs the unclosed WAV headers so the partial
-    audio is usable, then runs the same post-process + upload as a normal
-    call. The few seconds lost at the crash instant are unavoidable, but
-    the rest of the call is preserved and pushed to central instead of
-    being thrown away. Always clears the marker so we don't loop.
+    Two callers, one body:
+      * Daemon boot, MARKER_FILE — recover a call the daemon/PC died on
+        mid-capture (repairs the unclosed WAV headers first).
+      * End of a normal call — main() hands the slow denoise+upload to a
+        DETACHED child running ``--finalize <per-call marker>`` so the
+        recorder process can exit the instant the WAVs are closed, instead
+        of staying alive (and blocking the NEXT call) through the long
+        post-processing. WAVs are already closed in this case, so the
+        header repair below is a no-op.
+
+    Always clears the given marker so we don't loop / leak markers.
     """
-    if not MARKER_FILE.exists():
+    def _clear() -> None:
+        try:
+            marker_path.unlink()
+        except FileNotFoundError:
+            pass
+        except Exception as e:
+            print(f"  [marker] clear failed: {e}", file=sys.stderr)
+
+    if not marker_path.exists():
         print("[recover] no in-progress marker — nothing to finalize.")
         return 0
     try:
-        m = json.loads(MARKER_FILE.read_text(encoding="utf-8"))
+        m = json.loads(marker_path.read_text(encoding="utf-8"))
     except Exception as e:
         print(f"[recover] marker unreadable ({e}); clearing it.", file=sys.stderr)
-        _clear_marker()
+        _clear()
         return 0
 
     stamp = m.get("stamp", "")
@@ -1216,19 +1231,19 @@ def finalize_orphan() -> int:
     except Exception:
         started_dt = datetime.datetime.now()
 
-    print(f"[recover] finalizing orphaned recording {stamp} "
-          f"(crash mid-call) — repairing WAV headers...")
+    print(f"[finalize] post-processing recording {stamp} "
+          f"(repairing WAV headers if needed)...")
 
     any_audio = False
     for p in (spk_path, mic_path):
         if p.exists() and _repair_wav_header(p):
             any_audio = True
-            print(f"  [recover] repaired {p.name} "
+            print(f"  [finalize] {p.name} ready "
                   f"({p.stat().st_size/1024/1024:.1f} MB)")
 
     if not any_audio:
-        print("[recover] no recoverable audio on disk; clearing marker.")
-        _clear_marker()
+        print("[finalize] no audio on disk; clearing marker.")
+        _clear()
         return 0
 
     # ended_dt = latest WAV mtime (best estimate of when capture stopped).
@@ -1244,14 +1259,22 @@ def finalize_orphan() -> int:
         started_dt=started_dt, ended_dt=ended_dt,
         spk_path=spk_path, mic_path=mic_path,
     )
-    _clear_marker()
-    print(f"[recover] orphaned recording {stamp} finalized.")
+    _clear()
+    print(f"[finalize] recording {stamp} finalized.")
     return 0
 
 
 def main() -> int:
     if "--finalize-orphan" in sys.argv[1:]:
         return finalize_orphan()
+    # Detached post-processor for a just-ended call: `--finalize <markerpath>`.
+    # Spawned by the normal end-of-call path so denoise+upload run in a
+    # separate process and never hold the recording slot open. Reads the
+    # per-call marker handed to it (not the shared MARKER_FILE).
+    if "--finalize" in sys.argv[1:]:
+        i = sys.argv.index("--finalize")
+        marker = sys.argv[i + 1] if i + 1 < len(sys.argv) else ""
+        return finalize_orphan(Path(marker)) if marker else finalize_orphan()
     out_dir = Path(__file__).parent.parent / "data" / "teams" / "calls"
     out_dir.mkdir(parents=True, exist_ok=True)
     started_dt = datetime.datetime.now()
@@ -1326,18 +1349,62 @@ def main() -> int:
 
     ended_dt = datetime.datetime.now()
 
-    # Post-process + discard-if-too-short + metadata + central upload.
-    # Shared with the crash-recovery finalize path so both behave the same.
+    # Hand post-processing + central upload to a DETACHED child process so
+    # THIS recorder exits the instant the WAVs are closed. The daemon gates
+    # the next call on this process staying alive (`proc.poll() is None`);
+    # when denoise+upload ran inline here the process lingered for many
+    # seconds on a ~400 MB WAV (plus SMB retries) and the NEXT call was
+    # dropped with "already recording, ignoring start". Decoupling is the fix.
+    #
+    # Rename the shared crash-recovery marker to a unique per-call marker
+    # first, so a brand-new capture starting moments from now can write its
+    # OWN MARKER_FILE without this call's finalizer clobbering it. The child
+    # reads + clears the per-call marker.
+    finalize_marker = MARKER_FILE.with_name(f".finalizing_{stamp}.json")
+    spawned = False
     try:
-        _postprocess_and_upload(
-            out_dir=out_dir, stamp=stamp,
-            started_dt=started_dt, ended_dt=ended_dt,
-            spk_path=spk_path, mic_path=mic_path,
+        if MARKER_FILE.exists():
+            os.replace(str(MARKER_FILE), str(finalize_marker))
+        else:
+            finalize_marker = MARKER_FILE  # nothing to rename; pass shared path
+        flags = 0
+        kwargs = {}
+        if sys.platform == "win32":
+            flags = (subprocess.DETACHED_PROCESS
+                     | subprocess.CREATE_NEW_PROCESS_GROUP
+                     | getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        else:
+            kwargs["start_new_session"] = True
+        subprocess.Popen(
+            [sys.executable, "-m", "teams.record_call",
+             "--finalize", str(finalize_marker)],
+            cwd=str(Path(__file__).parent.parent),
+            creationflags=flags, **kwargs,
         )
-    finally:
-        # Clean exit — drop the in-progress marker so the next daemon boot
-        # doesn't treat this finished call as an orphan to recover.
-        _clear_marker()
+        spawned = True
+        print(f"[voice] post-processing handed to detached finalizer "
+              f"({finalize_marker.name}); recorder exiting so the next "
+              f"call isn't blocked.")
+    except Exception as e:
+        print(f"[voice] detached finalize spawn failed ({e}); "
+              f"post-processing inline instead.", file=sys.stderr)
+
+    if not spawned:
+        # Fallback: do it inline (old behaviour) so a spawn failure never
+        # loses the call. Put the marker back where finalize/boot expects it.
+        try:
+            if finalize_marker != MARKER_FILE and finalize_marker.exists():
+                os.replace(str(finalize_marker), str(MARKER_FILE))
+        except Exception:
+            pass
+        try:
+            _postprocess_and_upload(
+                out_dir=out_dir, stamp=stamp,
+                started_dt=started_dt, ended_dt=ended_dt,
+                spk_path=spk_path, mic_path=mic_path,
+            )
+        finally:
+            _clear_marker()
     return 0
 
 
