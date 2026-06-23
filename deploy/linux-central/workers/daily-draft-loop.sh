@@ -1,34 +1,40 @@
 #!/bin/bash
-# Requirement pipeline + email — sends EXACTLY ONE rollup email per day,
-# on the clock at DAILY_DRAFT_TARGET_TIME (default 23:30 BD = 11:30 PM).
+# Requirement pipeline + email — PER-CALL (event) emails.
 #
-# HARD RULE (set by Titu 2026-06-15): never send email except this single
-# nightly run. The old per-call EVENT email (fired within 2 min of every
-# transcription) is DISABLED — transcription still happens continuously,
-# but its .pipeline_trigger no longer triggers an email. The nightly clock
-# run collects the whole day (--last-minutes 1440) and sends one summary.
+# BEHAVIOR (set by Titu 2026-06-23, replacing the single-nightly rule):
+# send a requirement email as soon as a call is processed, containing ONLY
+# the new requirements from it. As each dev (Assad / Rocky / Atik / …)
+# finishes a call, that call flows transcribe -> collect -> email on its own.
 #
 # Trigger paths:
-#   1. EVENT:  transcribe-loop.sh still writes .pipeline_trigger after
-#              transcribing. We CONSUME (delete) it so it doesn't pile up,
-#              but we do NOT run the pipeline or send email on it.
-#   2. CLOCK:  fires once per BD calendar day at DAILY_DRAFT_TARGET_TIME —
-#              the only path that collects + emails. Always sends, even on
-#              a 0-requirement day (one daily summary either way).
+#   1. EVENT (default ON): transcribe-loop.sh writes .pipeline_trigger after
+#      transcribing a call. We collect the recent window and send a rollup of
+#      ONLY new requirements (--require-new skips the send when the call
+#      surfaced nothing new). Disable with DAILY_DRAFT_EVENT_EMAIL=0.
+#   2. CLOCK (default OFF): a single daily send at DAILY_DRAFT_TARGET_TIME.
+#      Only runs if that env is set (e.g. "23:30"); otherwise there is no
+#      nightly batch — sending is purely per-call.
 
 set -uo pipefail
-LOOKBACK_MINUTES="${DAILY_DRAFT_LOOKBACK_MINUTES:-1440}"
+# Recent window per event run; dedup + --require-new mean a generous lookback
+# is safe (already-seen requirements are never re-sent).
+LOOKBACK_MINUTES="${DAILY_DRAFT_LOOKBACK_MINUTES:-360}"
 POLL_SECONDS="${PIPELINE_POLL_SECONDS:-120}"
 TRIGGER_FILE="/data/nucleus-central/.pipeline_trigger"
 CENTRAL="/data/nucleus-central"
-CLOCK_TARGET="${DAILY_DRAFT_TARGET_TIME:-23:30}"
+EVENT_EMAIL="${DAILY_DRAFT_EVENT_EMAIL:-1}"   # 0 disables per-call emails
+CLOCK_TARGET="${DAILY_DRAFT_TARGET_TIME:-}"   # empty = no daily clock send
 LAST_CLOCK_RUN_DATE=""
 
 trap 'echo "[draft-loop] received SIGTERM, exiting"; exit 0' TERM INT
 
 echo "[draft-loop] starting — polling every ${POLL_SECONDS}s"
-echo "[draft-loop] event email: DISABLED (per-call emails off)"
-echo "[draft-loop] single daily send: ${CLOCK_TARGET} BD"
+if [ "$EVENT_EMAIL" != 0 ]; then
+    echo "[draft-loop] per-call event email: ENABLED (lookback ${LOOKBACK_MINUTES}m, new requirements only)"
+else
+    echo "[draft-loop] per-call event email: disabled"
+fi
+echo "[draft-loop] daily clock send: ${CLOCK_TARGET:-OFF}"
 
 run_pipeline() {
     local reason="$1"
@@ -53,27 +59,30 @@ while true; do
     sleep "$POLL_SECONDS" &
     wait $!
 
-    # ── Clock-based catch-all ─────────────────────────────────────
-    # Fires once per day at CLOCK_TARGET even if no event trigger arrived.
+    # ── Clock send (opt-in) ───────────────────────────────────────
+    # Only when DAILY_DRAFT_TARGET_TIME is set. Off by default now that email
+    # is per-call. When on, fires once per BD day and always sends a summary.
     today=$(date +%Y-%m-%d)
     current_hm=$(date +%H:%M)
-    if [[ "$current_hm" > "$CLOCK_TARGET" || "$current_hm" == "$CLOCK_TARGET" ]] \
+    if [ -n "$CLOCK_TARGET" ] \
+       && [[ "$current_hm" > "$CLOCK_TARGET" || "$current_hm" == "$CLOCK_TARGET" ]] \
        && [[ "$LAST_CLOCK_RUN_DATE" != "$today" ]]; then
         LAST_CLOCK_RUN_DATE="$today"
         echo "[draft-loop] clock trigger at ${current_hm} BD (target ${CLOCK_TARGET})"
-        # The ONE daily send: collect the whole day + email, even on a
-        # 0-requirement day. This is the only path that sends email.
         run_pipeline "clock:${CLOCK_TARGET}"
         continue
     fi
 
-    # ── Event trigger — email DISABLED ────────────────────────────
-    # transcribe-loop still writes .pipeline_trigger after each call. We
-    # consume it so it doesn't pile up, but we do NOT collect or email —
-    # all sending is deferred to the single nightly clock run above.
-    # (Manual "send now" still works: run `python -m mail.daily_rollup`.)
+    # ── Event trigger — per-call email ────────────────────────────
+    # A finished call's transcription writes .pipeline_trigger; collect the
+    # recent window and email a rollup of ONLY new requirements. --require-new
+    # means a call that surfaced nothing new sends no email.
     if [ -f "$TRIGGER_FILE" ]; then
-        rm -f "$TRIGGER_FILE"
-        echo "[draft-loop] transcription complete — email deferred to nightly ${CLOCK_TARGET} run"
+        if [ "$EVENT_EMAIL" != 0 ]; then
+            run_pipeline "event:transcription" "--require-new"
+        else
+            rm -f "$TRIGGER_FILE"
+            echo "[draft-loop] transcription complete — per-call email disabled"
+        fi
     fi
 done
