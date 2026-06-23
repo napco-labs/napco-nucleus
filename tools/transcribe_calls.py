@@ -110,6 +110,22 @@ def _write_failed_transcript(calls_dir: Path, session: str) -> None:
                 "Check audio quality and API credentials.)\n")
 
 
+# Call tracks are uploaded as Opus (compressed at capture so the off-net Drive
+# sync survives 500-800 MB recordings); older calls are raw WAV. Resolve
+# whichever exists, preferring Opus. google_stt feeds the file straight to
+# ffmpeg, which reads either format.
+_TRACK_EXTS = (".opus", ".wav")
+
+
+def _track_path(calls_dir: Path, session: str, kind: str) -> Path | None:
+    """kind is 'mic' or 'speaker'. Returns the existing track path or None."""
+    for ext in _TRACK_EXTS:
+        p = calls_dir / f"{session}_{kind}{ext}"
+        if p.exists():
+            return p
+    return None
+
+
 def _pending_sessions(calls_dir: Path) -> list[str]:
     """Session prefixes (e.g. '20260513-203305') with metadata present
     but no transcript yet."""
@@ -118,9 +134,9 @@ def _pending_sessions(calls_dir: Path) -> list[str]:
         session = meta.stem
         if (calls_dir / f"{session}_transcript.md").exists():
             continue
-        if not (calls_dir / f"{session}_mic.wav").exists():
+        if _track_path(calls_dir, session, "mic") is None:
             continue
-        if not (calls_dir / f"{session}_speaker.wav").exists():
+        if _track_path(calls_dir, session, "speaker") is None:
             continue
         pending.append(session)
     return pending
@@ -236,11 +252,11 @@ def _transcribe_session_via_google_stt(session: str, calls_dir: Path,
                                         output_dir: Path) -> Path:
     """Transcribe one session via Google STT, write transcript .md."""
     from tools.google_stt import google_transcribe  # lazy
-    mic = calls_dir / f"{session}_mic.wav"
-    spk = calls_dir / f"{session}_speaker.wav"
-    if not mic.exists() or not spk.exists():
+    mic = _track_path(calls_dir, session, "mic")
+    spk = _track_path(calls_dir, session, "speaker")
+    if mic is None or spk is None:
         raise FileNotFoundError(
-            f"Missing mic.wav and/or speaker.wav for {session}")
+            f"Missing mic and/or speaker track for {session}")
 
     mic_segs = google_transcribe(mic, "You")
     spk_segs = google_transcribe(spk, "Other")

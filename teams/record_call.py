@@ -870,6 +870,55 @@ def _expander_mic_wav(path: Path, range_db: float = 14.0,
         print(f"  mic expander FAILED: {e}", file=sys.stderr)
 
 
+def _encode_opus(wav_path: Path) -> Path | None:
+    """Encode a finalized WAV track to Opus (.opus, Ogg container) via ffmpeg.
+
+    Raw call WAVs run 500-800 MB and choke the off-net Google Drive sync. Opus
+    mono at ~48 kbps is speech-transparent and ~15-20x smaller. ffmpeg reads
+    Opus natively on central (google_stt re-encodes for STT anyway), so no
+    decode step is needed downstream. Returns the .opus path on success, or
+    None if ffmpeg is missing / the encode fails (caller keeps the raw WAV).
+    """
+    out = wav_path.with_suffix(".opus")
+    bitrate = (os.environ.get("NUCLEUS_OPUS_BITRATE") or "48k").strip()
+    cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+           "-i", str(wav_path), "-ac", "1",
+           "-c:a", "libopus", "-b:a", bitrate, str(out)]
+    try:
+        subprocess.run(cmd, check=True)
+    except FileNotFoundError:
+        print("  opus: ffmpeg not found on PATH — keeping raw WAV",
+              file=sys.stderr)
+        return None
+    except subprocess.CalledProcessError as e:
+        print(f"  opus: encode FAILED ({e}) — keeping raw WAV", file=sys.stderr)
+        return None
+    if out.exists() and out.stat().st_size > 0:
+        return out
+    return None
+
+
+def _compress_track(wav_path: Path) -> Path:
+    """Swap a WAV track for its Opus version for upload, deleting the raw WAV on
+    success to reclaim space. Any failure returns the original WAV unchanged so
+    a recording is never lost."""
+    if not (wav_path.exists() and wav_path.stat().st_size > 0):
+        return wav_path
+    opus = _encode_opus(wav_path)
+    if opus is None:
+        return wav_path
+    raw_mb = wav_path.stat().st_size / 1024 / 1024
+    opus_mb = opus.stat().st_size / 1024 / 1024
+    print(f"  opus: {wav_path.name} ({raw_mb:.0f} MB) -> "
+          f"{opus.name} ({opus_mb:.1f} MB)")
+    try:
+        wav_path.unlink()
+    except Exception as e:
+        print(f"  opus: could not remove raw {wav_path.name}: {e}",
+              file=sys.stderr)
+    return opus
+
+
 def _write_metadata_and_upload(
     *,
     out_dir: Path,
@@ -887,6 +936,14 @@ def _write_metadata_and_upload(
     started_at_ms = int(started_dt.timestamp() * 1000)
     ended_at_ms = int(ended_dt.timestamp() * 1000)
     duration_s = round((ended_at_ms - started_at_ms) / 1000.0, 1)
+
+    # Compress the finalized tracks to Opus before metadata + upload. Raw call
+    # WAVs (500-800 MB) choke the off-net Drive sync; Opus is ~15-20x smaller
+    # and central reads it natively via ffmpeg. Opt out with
+    # NUCLEUS_COMPRESS_OPUS=0; falls back to raw WAV if ffmpeg is unavailable.
+    if os.environ.get("NUCLEUS_COMPRESS_OPUS", "1") != "0":
+        mic_path = _compress_track(mic_path)
+        spk_path = _compress_track(spk_path)
 
     # Resolve client via Teams IndexedDB. Best-effort.
     client_info: dict = {"matched": False, "reason": "resolver not run"}

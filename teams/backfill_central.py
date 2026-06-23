@@ -165,7 +165,11 @@ def main() -> int:
         calls_seen += 1
         dst_dir = central / dev / day / "calls"
 
+        # Tracks are Opus once compressed at capture; raw WAV if ffmpeg was
+        # unavailable. List both — the .exists() filter keeps whichever landed.
         srcs = [meta_path,
+                LOCAL_CALLS_DIR / f"{stamp}_mic.opus",
+                LOCAL_CALLS_DIR / f"{stamp}_speaker.opus",
                 LOCAL_CALLS_DIR / f"{stamp}_mic.wav",
                 LOCAL_CALLS_DIR / f"{stamp}_speaker.wav"]
         present = [s for s in srcs if s.exists()]
