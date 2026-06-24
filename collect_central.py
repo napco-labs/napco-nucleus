@@ -162,13 +162,16 @@ def _scan_central(central: Path, days, client: str, calls_within: int = 0) -> di
                     stamp = metadata.get("session") or meta_path.stem
                     # Per-call (event) runs scope to FRESHLY-transcribed calls so
                     # we don't re-run Google STT over the whole day on every
-                    # trigger. Keyed on the transcript mtime (just written by the
-                    # transcribe loop), so the call's length doesn't matter.
+                    # trigger. Use st_ctime (inode-change time) not st_mtime:
+                    # normalize_central_mtimes resets mtime to the call-start
+                    # stamp for Explorer display, making long calls appear
+                    # stale. st_ctime reflects when the transcript was actually
+                    # written and is unaffected by os.utime().
                     if calls_within > 0:
                         ref = calls_dir / f"{stamp}_transcript.md"
                         ts = ref if ref.exists() else meta_path
                         age_min = (dt.datetime.now().timestamp()
-                                   - ts.stat().st_mtime) / 60.0
+                                   - ts.stat().st_ctime) / 60.0
                         if age_min > calls_within:
                             continue
                     calls.append({
