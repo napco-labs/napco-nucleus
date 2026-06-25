@@ -55,6 +55,15 @@ def _verification_doc(day: str) -> Path:
     return REQUIREMENTS_DIR / f"Requirements Verification {day}.docx"
 
 
+def _verification_docs(day: str) -> list[Path]:
+    """All verification docs for the day: the legacy single
+    'Requirements Verification <day>.docx' AND the per-project
+    'Requirements Verification - <label> <day>.docx' files introduced by
+    the 2026-06-25 doc split (one doc per OpenProject project). Sorted so
+    ordering is stable across runs."""
+    return sorted(REQUIREMENTS_DIR.glob(f"Requirements Verification*{day}.docx"))
+
+
 _COVERAGE_DIR = REQUIREMENTS_DIR / ".coverage"
 
 
@@ -151,10 +160,11 @@ def _reqs_this_week(day: str) -> int:
     the same parser the email uses, so the number matches what went out."""
     total = 0
     for d in _week_days(day):
-        try:
-            total += len(_parse_verification_summary(_verification_doc(d)))
-        except Exception:
-            pass
+        for doc in _verification_docs(d):
+            try:
+                total += len(_parse_verification_summary(doc))
+            except Exception:
+                pass
     return total
 
 
@@ -333,8 +343,8 @@ def main() -> int:
         now = dt.datetime.now()
         today = now.date().strftime("%Y-%m-%d")
         yday = (now.date() - dt.timedelta(days=1)).strftime("%Y-%m-%d")
-        if now.hour < 6 and not _verification_doc(today).exists() \
-                and _verification_doc(yday).exists():
+        if now.hour < 6 and not _verification_docs(today) \
+                and _verification_docs(yday):
             day = yday
         else:
             day = today
@@ -347,9 +357,16 @@ def main() -> int:
         return 2
 
     # Parse the curated requirements FIRST — the email shape + attachment
-    # depend on it.
-    verif = _verification_doc(day)
-    reqs = _parse_verification_summary(verif) if verif.exists() else []
+    # depend on it. Gather across ALL per-day docs (legacy single doc +
+    # the per-project split docs), then renumber so the consolidated email
+    # shows one continuous Requirement# sequence instead of each doc
+    # restarting at 1.
+    verif_docs = _verification_docs(day)
+    reqs = []
+    for _doc in verif_docs:
+        reqs.extend(_parse_verification_summary(_doc))
+    for _i, _r in enumerate(reqs, 1):
+        _r["n"] = str(_i)
 
     # Requirements-only CC: addresses that receive the email ONLY when it
     # actually carries requirements (e.g. an external client rep) — never on
@@ -367,8 +384,8 @@ def main() -> int:
     # stays off by default (it contains pre-triage noise); set
     # NUCLEUS_ROLLUP_INCLUDE_SESSION=1 to include it for debugging.
     attachments: list[Path] = []
-    if reqs and verif.exists():
-        attachments.append(verif)
+    if reqs and verif_docs:
+        attachments.extend(verif_docs)  # one per project (CA4K + MVP Access)
         if os.environ.get("NUCLEUS_ROLLUP_INCLUDE_SESSION", "").strip() in (
                 "1", "true", "yes") and SESSION_DOC.exists():
             attachments.append(SESSION_DOC)

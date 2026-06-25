@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from datetime import datetime
 from pathlib import Path
 
@@ -159,8 +160,11 @@ async def write_aggregation_docx_tool(args):
     "Lets the reviewer pull a short audio snippet via "
     "tools/audio_snippet.py to spot-check call-derived requirements). "
     "Output filename format is 'Requirements Verification <YYYY-MM-DD>.docx' "
-    "in data/requirements/. Returns {path, requirement_count}.",
-    {"requirements": list, "output_path": str},
+    "in data/requirements/ — or, when `label` is given (e.g. a project name "
+    "like 'CardAccess 4K' or 'MVP Access'), 'Requirements Verification - "
+    "<label> <YYYY-MM-DD>.docx', so one session can emit one doc per project. "
+    "Returns {path, requirement_count}.",
+    {"requirements": list, "output_path": str, "label": str},
 )
 async def write_verification_docx_tool(args):
     from docx import Document  # lazy
@@ -171,15 +175,26 @@ async def write_verification_docx_tool(args):
         return _text({"error": "requirements must be a non-empty list"})
 
     out_path = args.get("output_path")
+    label = (args.get("label") or "").strip()
     if not out_path:
         _OUT_DIR.mkdir(parents=True, exist_ok=True)
-        out_path = str(_OUT_DIR / f"Requirements Verification {_today_stamp()}.docx")
+        # A `label` (typically the target project) yields one doc per
+        # project from a single session; without it, the legacy single
+        # dated doc. Sanitise the label for safe use in a filename.
+        if label:
+            safe = re.sub(r"[^\w .-]", "", label).strip()
+            out_path = str(_OUT_DIR / f"Requirements Verification - {safe} {_today_stamp()}.docx")
+        else:
+            out_path = str(_OUT_DIR / f"Requirements Verification {_today_stamp()}.docx")
 
     doc = Document()
 
     doc.add_heading("Requirements Verification", level=0)
     sub = doc.add_paragraph()
     sub.add_run(f"Date: {datetime.now().strftime('%Y-%m-%d')}").italic = True
+    if label:
+        proj = doc.add_paragraph()
+        proj.add_run(f"Project: {label}").italic = True
 
     intro = doc.add_paragraph()
     intro.add_run(

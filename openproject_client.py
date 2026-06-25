@@ -6,23 +6,31 @@ publishes to OpenProject Work Packages instead of GitLab Issues.
 
 Public surface (intentionally narrow — same shape as the old GitLab
 client so tools/requirements.py needs minimal changes):
-    list_open_work_packages()                 → [{title, id, web_url}]
+    list_open_work_packages(*, project=None)  → [{title, id, web_url}]
     create_work_package(title, description, *, category=None,
-                         type='Task', status='New')          → dict
+                         type='Task', status='New', project=None)  → dict
     update_work_package(id, *, title=None, status=None,
-                         category=None)                       → dict
-    add_work_package_comment(id, body)                        → dict
+                         category=None, project=None)               → dict
+    add_work_package_comment(id, body)                              → dict
+    default_project()                                               → str
+
+Multi-project (2026-06-25): every public call takes an optional
+`project` (slug or numeric id). When omitted it falls back to
+`OPENPROJECT_PROJECT_ID`. This lets one run publish to BOTH
+`mvp-access` and `cardaccess-4k` — requirements are routed per-task by
+the caller (see tools/requirements.publish_tasks_to_backlog). Types and
+categories are PER-PROJECT (cardaccess-4k has no categories; mvp-access
+has AccessGroup/BadgeHolder/Personnel), so their lookup caches are keyed
+by project; statuses and priorities are global.
 
 Conventions:
     * HAL+JSON. References between resources are URIs in `_links` dicts.
     * Auth: HTTP Basic with username='apikey', password=<API key>.
     * Required env: OPENPROJECT_URL, OPENPROJECT_PROJECT_ID,
                     OPENPROJECT_API_KEY.
-    * `OPENPROJECT_PROJECT_ID` accepts either the numeric id or the
-      project slug (`mvp-access` works); OpenProject's REST API resolves
-      both transparently.
-    * lookup caches for type/status/category/priority are populated on
-      first use and reused for the rest of the process.
+    * `OPENPROJECT_PROJECT_ID` (and the per-call `project`) accept either
+      the numeric id or the project slug (`mvp-access` works);
+      OpenProject's REST API resolves both transparently.
 
 Errors:
     OpenProjectConfigError — env vars missing or invalid.
@@ -30,13 +38,18 @@ Errors:
 
 NOT a tool — this module is a low-level HTTP wrapper. Tools live under
 tools/ and orchestrate this client.
+
+Note: the live instance (openproject.ael-bd.com) is fronted by
+Cloudflare, whose bot rule 403s the bare `urllib` user-agent (error
+1010). `requests`' default UA passes, but we set an explicit UA header
+anyway so a future CF tightening can't silently break publishing.
 """
 from __future__ import annotations
 
 import json
 import logging
 import os
-from typing import Any, Iterable
+from typing import Any
 
 import requests
 from requests.auth import HTTPBasicAuth
@@ -45,6 +58,10 @@ from requests.auth import HTTPBasicAuth
 logger = logging.getLogger(__name__)
 
 DEFAULT_TIMEOUT_S = 30
+
+# Explicit UA so Cloudflare's "banned client signature" rule (the one
+# that 1010s bare urllib) can never catch us — see module docstring.
+_HEADERS = {"User-Agent": "NAPCO-Nucleus/1.0 (requirement-management)"}
 
 
 class OpenProjectError(RuntimeError):
@@ -61,9 +78,12 @@ class OpenProjectAPIError(OpenProjectError):
 
 # ─── Config ───────────────────────────────────────────────────────────
 
-def _config() -> tuple[str, str, str, HTTPBasicAuth]:
+def _config(project: str | None = None) -> tuple[str, str, str, HTTPBasicAuth]:
+    """Resolve (host, project, key, auth). `project` overrides the
+    OPENPROJECT_PROJECT_ID default — pass a slug or numeric id to target
+    a specific project; omit it to use the configured default."""
     host = os.getenv("OPENPROJECT_URL", "").rstrip("/")
-    project = os.getenv("OPENPROJECT_PROJECT_ID", "").strip()
+    project = (project or os.getenv("OPENPROJECT_PROJECT_ID", "")).strip()
     key = os.getenv("OPENPROJECT_API_KEY", "").strip()
     missing = [name for name, val in (
         ("OPENPROJECT_URL", host),
@@ -77,58 +97,49 @@ def _config() -> tuple[str, str, str, HTTPBasicAuth]:
     return host, project, key, HTTPBasicAuth("apikey", key)
 
 
+def default_project() -> str:
+    """The configured fallback project (OPENPROJECT_PROJECT_ID).
+    Raises OpenProjectConfigError if env is unset."""
+    _, project, _, _ = _config()
+    return project
+
+
 # ─── Metadata caches (populated on first use) ─────────────────────────
 #
 # OpenProject types/statuses/categories/priorities are referenced by
 # numeric id in the HAL `_links`. We resolve names → ids once per
-# process and reuse. Cache stays warm for the duration of the agent run.
+# process and reuse. Types and categories are PER-PROJECT (keyed by the
+# project slug/id the caller used); statuses and priorities are global.
 
-_TYPE_CACHE: dict[str, int] = {}
-_STATUS_CACHE: dict[str, int] = {}
-_CATEGORY_CACHE: dict[str, int] = {}
-_PRIORITY_DEFAULT_ID: int | None = None
+_TYPE_CACHE: dict[str, dict[str, int]] = {}      # project → {name: id}
+_CATEGORY_CACHE: dict[str, dict[str, int]] = {}  # project → {name: id}
+_STATUS_CACHE: dict[str, int] = {}               # global
+_PRIORITY_DEFAULT_ID: int | None = None          # global
 
 
-def _ensure_meta_caches() -> None:
+def _list(host: str, auth: HTTPBasicAuth, path: str) -> list[dict]:
+    r = requests.get(f"{host}{path}", auth=auth, headers=_HEADERS,
+                     timeout=DEFAULT_TIMEOUT_S)
+    if not r.ok:
+        raise OpenProjectAPIError(f"GET {path} -> {r.status_code}: {r.text[:300]}")
+    return r.json().get("_embedded", {}).get("elements", []) or []
+
+
+def _ensure_global_caches() -> None:
+    """Populate the global status + default-priority caches once."""
     global _PRIORITY_DEFAULT_ID
-    if _TYPE_CACHE and _STATUS_CACHE and _CATEGORY_CACHE and _PRIORITY_DEFAULT_ID is not None:
+    if _STATUS_CACHE and _PRIORITY_DEFAULT_ID is not None:
         return
+    host, _, _, auth = _config()
 
-    host, project, _, auth = _config()
-
-    def _list(path: str) -> list[dict]:
-        r = requests.get(f"{host}{path}", auth=auth, timeout=DEFAULT_TIMEOUT_S)
-        if not r.ok:
-            raise OpenProjectAPIError(
-                f"GET {path} -> {r.status_code}: {r.text[:300]}"
-            )
-        return r.json().get("_embedded", {}).get("elements", []) or []
-
-    # Types are per-project (only those enabled for the project show up).
-    if not _TYPE_CACHE:
-        for t in _list(f"/api/v3/projects/{project}/types"):
-            name = (t.get("name") or "").strip()
-            if name and t.get("id") is not None:
-                _TYPE_CACHE[name.lower()] = int(t["id"])
-
-    # Statuses are global.
     if not _STATUS_CACHE:
-        for s in _list("/api/v3/statuses"):
+        for s in _list(host, auth, "/api/v3/statuses"):
             name = (s.get("name") or "").strip()
             if name and s.get("id") is not None:
                 _STATUS_CACHE[name.lower()] = int(s["id"])
 
-    # Categories are per-project.
-    if not _CATEGORY_CACHE:
-        for c in _list(f"/api/v3/projects/{project}/categories"):
-            name = (c.get("name") or "").strip()
-            if name and c.get("id") is not None:
-                _CATEGORY_CACHE[name.lower()] = int(c["id"])
-
-    # Priorities are global. Pick the one flagged isDefault, fall back
-    # to "Normal", fall back to the first listed.
     if _PRIORITY_DEFAULT_ID is None:
-        priorities = _list("/api/v3/priorities")
+        priorities = _list(host, auth, "/api/v3/priorities")
         for p in priorities:
             if p.get("isDefault") and p.get("id") is not None:
                 _PRIORITY_DEFAULT_ID = int(p["id"])
@@ -142,19 +153,43 @@ def _ensure_meta_caches() -> None:
             _PRIORITY_DEFAULT_ID = int(priorities[0]["id"])
 
 
-def _resolve_type(name: str | None) -> int:
-    _ensure_meta_caches()
+def _ensure_project_caches(project: str) -> None:
+    """Populate the per-project type + category caches once per project."""
+    if project in _TYPE_CACHE and project in _CATEGORY_CACHE:
+        return
+    host, project, _, auth = _config(project)
+
+    if project not in _TYPE_CACHE:
+        d: dict[str, int] = {}
+        for t in _list(host, auth, f"/api/v3/projects/{project}/types"):
+            name = (t.get("name") or "").strip()
+            if name and t.get("id") is not None:
+                d[name.lower()] = int(t["id"])
+        _TYPE_CACHE[project] = d
+
+    if project not in _CATEGORY_CACHE:
+        d = {}
+        for c in _list(host, auth, f"/api/v3/projects/{project}/categories"):
+            name = (c.get("name") or "").strip()
+            if name and c.get("id") is not None:
+                d[name.lower()] = int(c["id"])
+        _CATEGORY_CACHE[project] = d
+
+
+def _resolve_type(name: str | None, project: str) -> int:
+    _ensure_project_caches(project)
     n = (name or "Task").strip().lower()
-    if n not in _TYPE_CACHE:
+    cache = _TYPE_CACHE.get(project, {})
+    if n not in cache:
         raise OpenProjectError(
-            f"OpenProject type {name!r} not enabled in project. "
-            f"Available: {sorted(_TYPE_CACHE.keys())}"
+            f"OpenProject type {name!r} not enabled in project {project!r}. "
+            f"Available: {sorted(cache.keys())}"
         )
-    return _TYPE_CACHE[n]
+    return cache[n]
 
 
 def _resolve_status(name: str) -> int:
-    _ensure_meta_caches()
+    _ensure_global_caches()
     n = (name or "").strip().lower()
     if n not in _STATUS_CACHE:
         raise OpenProjectError(
@@ -164,20 +199,22 @@ def _resolve_status(name: str) -> int:
     return _STATUS_CACHE[n]
 
 
-def _resolve_category(name: str | None) -> int | None:
+def _resolve_category(name: str | None, project: str) -> int | None:
     if not name:
         return None
-    _ensure_meta_caches()
+    _ensure_project_caches(project)
+    cache = _CATEGORY_CACHE.get(project, {})
     n = name.strip().lower()
-    if n not in _CATEGORY_CACHE:
-        # Don't raise — category mismatches surface in the publish tool's
-        # `failed` list and are not fatal for the rest of the batch.
+    if n not in cache:
+        # Don't raise — category mismatches (e.g. a feature label sent to
+        # cardaccess-4k, which has no categories) are non-fatal; the WP is
+        # still created, just uncategorised.
         logger.warning(
-            "OpenProject category %r not configured. Available: %s",
-            name, sorted(_CATEGORY_CACHE.keys()),
+            "OpenProject category %r not configured in project %r. Available: %s",
+            name, project, sorted(cache.keys()),
         )
         return None
-    return _CATEGORY_CACHE[n]
+    return cache[n]
 
 
 def _wp_web_url(host: str, project: str, wp_id: int) -> str:
@@ -186,17 +223,17 @@ def _wp_web_url(host: str, project: str, wp_id: int) -> str:
 
 # ─── Public API ───────────────────────────────────────────────────────
 
-def list_open_work_packages(per_page: int = 100) -> list[dict]:
-    """Return open work packages as [{title, id, web_url}].
+def list_open_work_packages(per_page: int = 100, *,
+                            project: str | None = None) -> list[dict]:
+    """Return open work packages for `project` as [{title, id, web_url}].
 
-    "Open" here means status not flagged isClosed. We rely on the
-    `status` filter operator `o` ("open") which OpenProject implements
-    server-side."""
-    host, project, _, auth = _config()
+    "Open" means status not flagged isClosed — we use the server-side
+    `status` filter operator `o` ("open")."""
+    host, project, _, auth = _config(project)
     filters = json.dumps([{"status": {"operator": "o", "values": []}}])
     r = requests.get(
         f"{host}/api/v3/projects/{project}/work_packages",
-        auth=auth,
+        auth=auth, headers=_HEADERS,
         params={"filters": filters, "pageSize": per_page},
         timeout=DEFAULT_TIMEOUT_S,
     )
@@ -224,16 +261,17 @@ def create_work_package(
     type: str = "Task",
     status: str = "New",
     category: str | None = None,
+    project: str | None = None,
 ) -> dict:
-    """POST a new work package. Returns {id, web_url, subject}."""
-    host, project, _, auth = _config()
-    _ensure_meta_caches()
+    """POST a new work package into `project`. Returns {id, web_url, subject}."""
+    host, project, _, auth = _config(project)
+    _ensure_global_caches()
 
     body: dict[str, Any] = {
         "subject": title,
         "description": {"format": "markdown", "raw": description},
         "_links": {
-            "type":   {"href": f"/api/v3/types/{_resolve_type(type)}"},
+            "type":   {"href": f"/api/v3/types/{_resolve_type(type, project)}"},
             "status": {"href": f"/api/v3/statuses/{_resolve_status(status)}"},
         },
     }
@@ -241,13 +279,13 @@ def create_work_package(
         body["_links"]["priority"] = {
             "href": f"/api/v3/priorities/{_PRIORITY_DEFAULT_ID}"
         }
-    cat_id = _resolve_category(category)
+    cat_id = _resolve_category(category, project)
     if cat_id is not None:
         body["_links"]["category"] = {"href": f"/api/v3/categories/{cat_id}"}
 
     r = requests.post(
         f"{host}/api/v3/projects/{project}/work_packages",
-        auth=auth, json=body, timeout=DEFAULT_TIMEOUT_S,
+        auth=auth, headers=_HEADERS, json=body, timeout=DEFAULT_TIMEOUT_S,
     )
     if r.status_code not in (200, 201):
         raise OpenProjectAPIError(
@@ -266,7 +304,7 @@ def _get_lock_version(wp_id: int) -> int:
     host, _, _, auth = _config()
     r = requests.get(
         f"{host}/api/v3/work_packages/{wp_id}",
-        auth=auth, timeout=DEFAULT_TIMEOUT_S,
+        auth=auth, headers=_HEADERS, timeout=DEFAULT_TIMEOUT_S,
     )
     if not r.ok:
         raise OpenProjectAPIError(
@@ -286,10 +324,13 @@ def update_work_package(
     title: str | None = None,
     status: str | None = None,
     category: str | None = None,
+    project: str | None = None,
 ) -> dict:
     """PATCH an existing work package. Pulls lockVersion first
-    (OpenProject's optimistic-concurrency requirement)."""
-    host, _, _, auth = _config()
+    (OpenProject's optimistic-concurrency requirement). `project` is only
+    needed to resolve a category name → id; the PATCH endpoint itself is
+    project-agnostic."""
+    host, project, _, auth = _config(project)
     lock_version = _get_lock_version(wp_id)
 
     body: dict[str, Any] = {"lockVersion": lock_version, "_links": {}}
@@ -300,7 +341,7 @@ def update_work_package(
             "href": f"/api/v3/statuses/{_resolve_status(status)}"
         }
     if category is not None:
-        cat_id = _resolve_category(category)
+        cat_id = _resolve_category(category, project)
         if cat_id is not None:
             body["_links"]["category"] = {
                 "href": f"/api/v3/categories/{cat_id}"
@@ -310,7 +351,7 @@ def update_work_package(
 
     r = requests.patch(
         f"{host}/api/v3/work_packages/{wp_id}",
-        auth=auth, json=body, timeout=DEFAULT_TIMEOUT_S,
+        auth=auth, headers=_HEADERS, json=body, timeout=DEFAULT_TIMEOUT_S,
     )
     if not r.ok:
         raise OpenProjectAPIError(
@@ -326,7 +367,7 @@ def add_work_package_comment(wp_id: int, body: str) -> dict:
     host, _, _, auth = _config()
     r = requests.post(
         f"{host}/api/v3/work_packages/{wp_id}/activities",
-        auth=auth,
+        auth=auth, headers=_HEADERS,
         json={"comment": {"format": "markdown", "raw": body}},
         timeout=DEFAULT_TIMEOUT_S,
     )

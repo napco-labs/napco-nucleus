@@ -373,13 +373,15 @@ def _write_coverage(day: str, calls: int, chats: int, atts: int,
     instead of sending a silent 'no requirements' notice (2026-06-17:
     Assad's Bangla calls were collected but the identify step bailed)."""
     _COVERAGE_DIR.mkdir(parents=True, exist_ok=True)
-    doc = (_HERE / "data" / "requirements"
-           / f"Requirements Verification {day}.docx")
+    # Match BOTH the legacy single doc and the per-project split docs
+    # ("Requirements Verification - <label> <day>.docx", 2026-06-25).
+    req_dir = _HERE / "data" / "requirements"
+    docs = list(req_dir.glob(f"Requirements Verification*{day}.docx"))
     payload = {
         "day": day,
         "sources": {"calls": calls, "chats": chats, "attachments": atts},
         "verify_rc": verify_rc,
-        "doc_exists": doc.exists(),
+        "doc_exists": bool(docs),
     }
     (_COVERAGE_DIR / f"{day}.json").write_text(
         json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")

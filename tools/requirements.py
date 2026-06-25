@@ -193,8 +193,10 @@ def _source_bucket(rel_path: str) -> str:
 
 @tool(
     "publish_tasks_to_backlog",
-    "Create one OpenProject Work Package per task in the mvp-access "
-    "project's backlog. Each task must be a dict with keys: title "
+    "Create one OpenProject Work Package per task, routed to the project "
+    "named by each task's `project` field. Each task must be a dict with keys: "
+    "project (REQUIRED — 'mvp-access' or 'cardaccess-4k'; CA4K/MVP aliases "
+    "accepted; falls back to the configured default if omitted), title "
     "(required, <70 chars, imperative), description (required — why + "
     "context), acceptance_criteria (optional list of strings, appended "
     "as a bulleted section), estimate_hours (default 3), source_ref "
@@ -223,12 +225,14 @@ async def publish_tasks_to_backlog_tool(args):
 
     dry_run = os.environ.get("NAPCO_NUCLEUS_DRY_RUN") == "1"
 
-    # 1. Pull open OpenProject Work Packages with id + web_url so the
-    # dedup-skip branch can backfill memory.requirements_seen. Without
-    # this, a reset DB never re-learns prior WPs, the fuzzy-match path
-    # stays empty, and updatedRequirements classification can never fire.
+    # 1. Validate config up front, then pull open Work Packages PER
+    # PROJECT lazily. Dedup is project-scoped — a cardaccess-4k title must
+    # not dedup against an mvp-access title — so each project gets its own
+    # open-title set, fetched on first touch and reused. The skip branch
+    # still backfills memory.requirements_seen with id + web_url so a reset
+    # DB self-heals and updatedRequirements classification can fire.
     try:
-        open_wps = op_client.list_open_work_packages()
+        op_client.default_project()  # raises OpenProjectConfigError if env unset
     except op_client.OpenProjectConfigError as e:
         memory.log_activity(
             task_name="requirement-management:publish_backlog",
@@ -237,20 +241,30 @@ async def publish_tasks_to_backlog_tool(args):
         )
         return _text({"error": f"OpenProject config missing: {e}",
                       "created": [], "updated": [], "skipped_existing": [], "failed": []})
-    except Exception as e:
-        logger.exception("list_open_work_packages failed")
-        memory.log_activity(
-            task_name="requirement-management:publish_backlog",
-            result=f"error:{type(e).__name__}",
-            technical_details={"error": str(e)},
-        )
-        return _text({"error": f"OpenProject list failed: {e}",
-                      "created": [], "updated": [], "skipped_existing": [], "failed": []})
 
-    open_by_title: dict[str, dict] = {
-        i["title"].strip().lower(): i for i in open_wps if i.get("title")
+    # Route each task's free-form `project` to a canonical project slug.
+    _PROJECT_ALIASES = {
+        "mvp-access": "mvp-access", "mvp access": "mvp-access",
+        "mvpaccess": "mvp-access", "mvp": "mvp-access",
+        "cardaccess-4k": "cardaccess-4k", "cardaccess 4k": "cardaccess-4k",
+        "card-access-4k": "cardaccess-4k", "ca4k": "cardaccess-4k",
+        "cardaccess": "cardaccess-4k",
     }
-    open_titles = set(open_by_title.keys())
+
+    def _route(task: dict) -> str:
+        raw = (task.get("project") or "").strip().lower()
+        return _PROJECT_ALIASES.get(raw, raw or op_client.default_project())
+
+    # Per-project open-WP dedup cache: slug -> (open_by_title, open_titles).
+    _open_cache: dict[str, tuple[dict, set]] = {}
+
+    def _open_for(project: str) -> tuple[dict, set]:
+        if project not in _open_cache:
+            wps = op_client.list_open_work_packages(project=project)
+            by_title = {i["title"].strip().lower(): i
+                        for i in wps if i.get("title")}
+            _open_cache[project] = (by_title, set(by_title.keys()))
+        return _open_cache[project]
 
     created, updated, skipped, failed = [], [], [], []
 
@@ -289,6 +303,16 @@ async def publish_tasks_to_backlog_tool(args):
         # service-account role (see openproject_client smoke-test note).
         op_type = "Bug" if "Bug" in task_labels else "Task"
 
+        # Route to the target project and load its open-WP dedup set.
+        task_project = _route(t)
+        try:
+            open_by_title, open_titles = _open_for(task_project)
+        except Exception as e:
+            logger.exception(f"list_open_work_packages failed for {task_project!r}")
+            failed.append({"title": title, "project": task_project,
+                           "error": f"could not list project {task_project}: {e}"})
+            continue
+
         # Compose body sections used by both paths.
         body_parts = [description]
         crit = t.get("acceptance_criteria") or []
@@ -323,6 +347,7 @@ async def publish_tasks_to_backlog_tool(args):
                 op_client.update_work_package(
                     updates_prior_id,
                     title=title,
+                    project=task_project,
                     # No status= — workflow rejects New → In spec for
                     # the API user's role on this instance. The subject
                     # change + the timestamped comment below are the
@@ -406,10 +431,12 @@ async def publish_tasks_to_backlog_tool(args):
             wp = op_client.create_work_package(
                 title=title, description=full_body,
                 type=op_type, status="New", category=op_category,
+                project=task_project,
             )
             wp_id = wp.get("id")
             url = wp.get("web_url")
-            created.append({"title": title, "id": wp_id, "web_url": url})
+            created.append({"title": title, "id": wp_id, "web_url": url,
+                            "project": task_project})
             memory.remember_requirement(
                 title=title, source=source_bucket, source_ref=src,
                 summary=description[:240],
