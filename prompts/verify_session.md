@@ -5,7 +5,7 @@ Dimension: Project Management. Local-only. Manual `workflow_dispatch` for now.
 Goal: read the user's current pull-session Word document (the consolidated capture from Teams chats / emails / Drive files / meetings the user explicitly pulled), extract every distinct client requirement, write a flat numbered Requirements Verification Word doc, and draft ONE email to the client with that doc attached.
 
 > **Inputs this task:** the pull-session doc only (`data/requirements/sessions/current.docx`).
-> **Disabled this task:** OpenProject publish, Teams webhook, the auto-poll inbox flow (`poll_requirement_emails` / `ingest_drive_files` / `read_requirement_inbox`), the records-aggregation email. DO NOT call any of those — the user has already curated what they want identified.
+> **Publishes to OpenProject** (routed per project — `cardaccess-4k` vs `mvp-access`; ONLY requirements at confidence >= 0.80; see step 4.6). **Disabled this task:** Teams webhook, the auto-poll inbox flow (`poll_requirement_emails` / `ingest_drive_files` / `read_requirement_inbox`), the records-aggregation email. DO NOT call any of those — the user has already curated what they want identified.
 
 ---
 
@@ -96,6 +96,7 @@ For each requirement produce a dict with:
 - `severity`: one of `S1` / `S2` / `S3`. S1 = production / security / compliance / revenue impact; S2 = material workflow impact with workaround available; S3 = cosmetic / minor / DX polish. Default to `S2` when uncertain.
 - `estimate_hours`: integer estimated effort for THIS task, targeting ~4 (typical range 2-8). The unit is a single workable task — if a piece of work is clearly larger than ~8h, split it into multiple tasks rather than inflating this number. Default 4.
 - `conflicts_with`: list of Source IDs or open-item ids this requirement contradicts (from step 1.5 open_items and history). Empty list when no conflict. Be conservative — only flag actual contradictions (e.g. "retain audit logs 30 days" vs "retain audit logs 90 days"), not minor wording differences.
+- `project`: which OpenProject project this requirement belongs to — `cardaccess-4k` or `mvp-access`. Route by content: **`cardaccess-4k`** if it names CA4K / CardAccess 4K, a versioned build (`1.2.0`, `1.2.8.180`, the `1.2.x` family), a `PR####` / cherry-pick / backport / branch, or release-engineering work (reproduce → port → cut/ship a fix release). Otherwise **`mvp-access`** (access-platform feature work — access groups, badges, personnel; the default). If it names neither, use `mvp-access` and flag it in the final reply.
 - `time_ranges`: list of `{source_id, start, end}` dicts, ONE per MEETING source you cited. `start` and `end` are wall-clock times in `HH:MM:SS` form copied from the transcript lines (e.g. the line `[10:23:01] You: ...` → start `10:23:01`). Pick the tightest range that captures the relevant exchange — usually a single back-and-forth (3-20 seconds). Empty list for EMAIL / CHAT / DRIVE sources (those don't have audio). Required for MEETING sources so the reviewer can pull an audio snippet via `tools/audio_snippet.py`.
 
 If you cannot identify any requirements (e.g. the session was all process chatter), STOP and report "No requirements identified in this session — nothing drafted." Do not produce an empty verification doc, do not draft an email.
@@ -108,15 +109,19 @@ The remaining requirements (those NOT found in `requirements_seen`) are the NEW 
 
 If ALL candidates were dedup hits, STOP and report "All identified requirements were already drafted in prior sessions. No new requirements to verify." Do not produce an empty verification doc, do not draft an email.
 
-### 3. Write the Requirements Verification doc
+### 3. Write the Requirements Verification doc — ONE PER PROJECT
 
-`write_verification_docx(requirements=<list from step 2>)` — writes `data/requirements/Requirements Verification <YYYY-MM-DD>.docx`. Output shape is a flat numbered list, one paragraph per task: `1. [P1/S2 ~4h] <title> - <summary>`, followed by a small grey citation/confidence/rationale line.
+**Group the requirements by `project`** (from step 2). For EACH non-empty project group, call:
 
-Pass all fields per task (title, summary, source_refs, confidence, rationale, priority, severity, estimate_hours) — the tool renders the `[priority/severity ~Nh]` tag, plus confidence and rationale, and items below 0.75 are highlighted in amber so the reviewer reads them carefully. The tool returns `{path, requirement_count, mean_confidence, low_confidence_count}` — capture all four; surface `mean_confidence` and `low_confidence_count` in the final reply so the reviewer can decide whether to send as-is or re-pull with more data.
+`write_verification_docx(requirements=<this group's list>, label="<CardAccess 4K | MVP Access>")` — writes `data/requirements/Requirements Verification - <label> <YYYY-MM-DD>.docx`. Use the human label (`cardaccess-4k` → `CardAccess 4K`, `mvp-access` → `MVP Access`). Output is a flat numbered list, one paragraph per task: `1. [P1/S2 ~4h] <title> - <summary>`, followed by a small grey citation/confidence/rationale line.
 
-### 4. Draft ONE client email — with TWO attachments
+Pass all fields per task (title, summary, source_refs, confidence, rationale, priority, severity, estimate_hours) — the tool renders the `[priority/severity ~Nh]` tag, plus confidence and rationale, and items below 0.75 are highlighted in amber. Capture EACH group's `{path, requirement_count, mean_confidence, low_confidence_count}`; surface them in the final reply. If only one project has requirements, you write just one doc — that's fine.
 
-`draft_verification_email(docx_path=<path from step 3>, session_docx_path=<session_path from step 1>, client_name="<the client identified in step 1.5>")`.
+### 4. Draft the client email(s) — ONE PER PROJECT, TWO attachments each
+
+For EACH project group from step 3, draft one email carrying that group's verification doc:
+
+`draft_verification_email(docx_path=<that group's doc from step 3>, session_docx_path=<session_path from step 1>, client_name="<the client identified in step 1.5>")`.
 
 Pass `client_name` — the tool uses it to look up `data/templates/draft_<slug>.md` for tone (formal for NAPCO Security, informal for AEL-internal stakeholders) and to address the email correctly. Without `client_name` you get the default template.
 
@@ -145,6 +150,31 @@ This writes the requirement into `requirements_seen` so the NEXT collect_all run
 
 Pick the source value from the section the requirement primarily came from: `EMAIL` → `email`, `TEAMS CHAT` → `chat`, `MEETING` → `meetings`, `DRIVE` → `documents`.
 
+### 4.6 Publish to the OpenProject backlog — routed per project
+
+Build a `tasks` array of the NEW requirements (those that survived step 2.5) at **confidence >= 0.80**, and call ONCE:
+
+```
+publish_tasks_to_backlog(tasks=[
+  {
+    "project": "<cardaccess-4k | mvp-access>",   # the routed project from step 2
+    "title": "<requirement.title, <70 chars>",
+    "description": "<summary>\n\nWhy: <rationale>\nClient: <client> | Priority: <priority> | Severity: <severity>",
+    "estimate_hours": <estimate_hours>,
+    "source_ref": "<first source_refs entry>",
+    "labels": ["<feature category — mvp-access only>", "requirements"],
+    "issue_type": "task"
+  },
+  ...
+])
+```
+
+- **Confidence gate — STRICT.** ONLY include requirements with `confidence >= 0.80`. Lower-confidence items stay in the doc + email for human review; do NOT publish them. If none clear 0.80, SKIP this step (do not call with an empty list).
+- **Feature category — `mvp-access` only.** For mvp-access tasks, classify from content into exactly one of `AccessGroup` (access groups/permissions/roles/door-zone rules), `BadgeHolder` (badges/credentials/cardholders), `Personnel` (people/employee/HR records); if none fit, omit it. **CardAccess 4K has no categories** — use just `["requirements"]`.
+- **Type label** is always `"requirements"`; `issue_type` always `"task"`.
+- Dedup is automatic + **per project** (a CA4K title never collides with an MVP-Access one) and the tool is safe to re-run. It honors `NAPCO_NUCLEUS_DRY_RUN=1` (simulates, creates nothing).
+- Capture `created`, `updated`, `skipped_existing`, `failed` for the final reply (each `created` entry includes its `project`).
+
 ### 5. Log + exit
 
 Log a final `log_activity` row like:
@@ -156,8 +186,9 @@ Surface in your final reply:
 - Section count + section titles
 - Requirements identified (count + titles)
 - **Mean confidence + low-confidence count** from the verification-doc tool's return value
-- Verification doc path
-- Verification email draft path (absolute) + recipient + IMAP push status (so the user knows whether to look in Outlook Drafts or open the .eml directly)
+- Verification doc path(s) — one per project (CardAccess 4K / MVP Access)
+- Verification email draft path(s) (absolute) + recipient + IMAP push status, per project (so the user knows whether to look in Outlook Drafts or open the .eml directly)
+- **OpenProject backlog** — per project: `<C> created, <S> skipped (already tracked), <F> failed`; and flag any requirement routed to MVP Access by ambiguous fallback so Titu can re-file in one click
 - If `low_confidence_count > 0`, explicitly call out the titles of those items in the reply so the reviewer knows which ones to scrutinise before sending.
 
 At the very end of the reply, suggest running the calibration loop:
