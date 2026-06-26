@@ -1,9 +1,17 @@
-"""NAPCO Nucleus — Requirement Management deck (team-facing).
+"""NAPCO Nucleus — Requirement Management deck.
 
-12 slides, 16:9. Tells the team how client requirements get captured,
-identified, and turned into a verification email. Minimal text per
-slide so Titu drives the narration; speaker notes carry the talking
-points.
+18 slides, 16:9. Tells the audience how client requirements get
+captured, identified, and turned into a verification email. Minimal
+text per slide so Titu drives the narration; speaker notes carry
+the talking points.
+
+Audience-targeted blocks:
+- Slides 2-7 (problem, solution, end-to-end journey, tools, security,
+  costs) — boss / non-tech viewers. Self-contained — can be presented
+  standalone.
+- Slides 12-13 (architecture, where AI helps) — engineering team.
+  Pairs the where-the-work-happens diagram with the AI-contribution
+  breakdown so devs see both the topology and the labor split.
 
 Run:
     python scripts\\generate_requirement_management_ppt.py
@@ -286,20 +294,20 @@ def slide_channels(prs):
                    "All four stage to central automatically. No operator action.")
     channels = [
         ("Teams chat",
-         "Read from each dev's local Teams cache. No API, no token.",
-         "Day every 2 hr, Transition 17:30, Evening every 30 min. 24x7 with overnight gap.",
+         "Reads each dev's local Teams. No API, no token, no extra login.",
+         "Pushed throughout the day; more often in the evening when clients are online.",
          CORAL),
         ("Teams calls",
-         "Voice daemon records mic + speaker as separate tracks.",
-         "Auto on Teams audio-session edges, 24x7. Phrase trigger armed as fallback.",
+         "Records mic + speaker as separate tracks while you talk.",
+         "Starts automatically when you join a Teams call. Around the clock.",
          TEAL),
         ("Email",
-         "IMAP poll of khasan@ael-bd.com on the central host.",
-         "Auto-staged to central every 15 min, 24x7. UID-checkpointed.",
+         "Reads my Gmail inbox on the central server.",
+         "Picked up every 15 min, day and night. Never reads the same mail twice.",
          GOLD),
         ("Google Drive",
-         "Service-account read of one shared folder.",
-         "Auto-staged to central every 15 min, 24x7, +5 min offset.",
+         "Reads one shared folder we set up for the project.",
+         "Picked up every 15 min, day and night.",
          PURPLE),
     ]
     w = Inches(5.8)
@@ -315,15 +323,14 @@ def slide_channels(prs):
 
     set_speaker_notes(s, (
         "All four channels stage to central in the background -- nothing "
-        "to remember. Chat push runs on three BD-local schedules (Day "
-        "every 2 hr 10:00-17:00, Transition once at 17:30, Evening every "
-        "30 min 18:00-24:00) with an overnight gap that can be swept "
-        "manually if needed. Teams calls record automatically the moment "
-        "Teams opens its audio session -- no phrases to remember, though "
-        "the verbal-trigger fallback is still armed. Email + Drive run "
-        "24x7 from the central host (offset by 5 min to avoid API "
-        "contention). Dev machines never hold Gmail or Drive credentials "
-        "-- those live on the central host. The Requirement Management "
+        "to remember. Chat push runs on three Dhaka-time schedules: every "
+        "two hours through the workday, once at 17:30 to bridge the gap, "
+        "then every thirty minutes in the evening when most client "
+        "messages come in. Teams calls record themselves the moment Teams "
+        "opens an audio session -- no phrase to say, no button to press. "
+        "Email and Drive run around the clock from the central server. "
+        "Dev machines never hold Gmail or Drive credentials -- those "
+        "live on the central server alone. The Requirement Management "
         "workflow reads from the central store when I'm ready to draft."
     ))
 
@@ -338,9 +345,9 @@ def slide_dev_setup(prs):
          "Python, venv, deps, .env. No App Password needed."),
         ("3", "Confirm one line in .env",
          "NUCLEUS_CENTRAL_PATH=\\\\172.16.205.123\\nucleus-central"),
-        ("4", "Register the chat-push tasks (Day / Transition / Evening)",
+        ("4", "Register the chat-push schedule",
          ".\\scripts\\register-chat-push-task.ps1  (admin PowerShell)"),
-        ("5", "Install the voice daemon (autostarts at logon)",
+        ("5", "Install the voice daemon (starts itself at every logon)",
          "Double-click scripts\\install-voice-daemon.bat"),
     ]
     y = Inches(1.55)
@@ -377,9 +384,9 @@ def slide_daily(prs):
 
     rows = [
         ("Get your chat / attachments to central",
-         "Nothing -- the chat-push tasks (Day / Transition / Evening) handle it"),
+         "Nothing -- it pushes itself throughout the day"),
         ("Record a Teams call",
-         "Nothing -- recording auto-starts when Teams opens its audio session"),
+         "Nothing -- it records the moment you join a call"),
         ("Include a file from Teams chat",
          "Click \"Download\" on the attachment so it lands in ~/Downloads"),
         ("Update to the latest code",
@@ -450,7 +457,7 @@ def slide_titu_command(prs):
 
 def slide_architecture(prs):
     s = base_slide(prs, "Where the work happens",
-                   "Per-dev push + Linux central pull + LLM identify.")
+                   "Dev machines push. The shared server pulls and aggregates. Claude reads.")
 
     # Three columns
     col_w = Inches(3.85)
@@ -459,27 +466,27 @@ def slide_architecture(prs):
     xs = [Inches(0.6), Inches(4.75), Inches(8.9)]
 
     add_box(s, xs[0], y, col_w, col_h, "Dev machines (x N)", [
-        "Read local Teams IndexedDB",
-        "Chat-push tasks (Day / Transition / Evening)",
-        "Voice daemon auto-records Teams calls",
-        "Writes to \\\\172.16.205.123\\nucleus-central",
+        "Read each dev's local Teams data",
+        "Push chat + attachments throughout the day",
+        "Record every Teams call automatically",
+        "Write to \\\\172.16.205.123\\nucleus-central",
         "No secrets. No API keys.",
     ], accent=NAVY)
 
-    add_box(s, xs[1], y, col_w, col_h, "Central host (.123, Linux)", [
-        "docker-compose: 6 services, always on",
-        "Pulls email (IMAP) + Drive every 15 min",
-        "Auto-transcribes new calls (~2 min lag)",
-        "Groq whisper-large-v3 with chunking;",
-        "faster-whisper fallback",
+    add_box(s, xs[1], y, col_w, col_h, "Shared central server", [
+        "Always on, one Linux box for the team",
+        "Pulls email + Drive in the background",
+        "Transcribes every new call within minutes",
+        "Falls back to a local model if needed",
+        "Aggregates everything into one document",
     ], accent=TEAL)
 
-    add_box(s, xs[2], y, col_w, col_h, "LLM identify + draft", [
-        "Claude CLI in nucleus-daily-draft container",
-        "Auto-fires 23:45 BD daily; on-demand too",
-        "Extracts deduped requirement list",
-        "Writes Requirements Verification .docx",
-        "IMAP APPEND to Titu's [Gmail]/Drafts",
+    add_box(s, xs[2], y, col_w, col_h, "Claude identifies + drafts", [
+        "Claude reads the daily document",
+        "Runs every night at 23:45 (Dhaka time)",
+        "Also runs on demand when I trigger it",
+        "Writes the Requirements Verification doc",
+        "Drops the draft email in my Gmail Drafts",
     ], accent=CORAL)
 
     add_arrow(s, xs[0] + col_w + Inches(0.02), y + col_h / 2,
@@ -498,6 +505,303 @@ def slide_architecture(prs):
         "inside a container, and also on demand whenever I trigger it. "
         "Each layer holds the smallest permissions it needs -- dev PCs "
         "have no Gmail or Drive credentials at all."
+    ))
+
+
+def slide_journey(prs):
+    s = base_slide(prs, "End-to-end: one requirement's journey",
+                   "Client said it. Verification email lands the next morning.")
+    steps = [
+        ("1", "Client says it",        "Teams call, chat, email, or Drive",     "live",          CORAL),
+        ("2", "We capture",            "Voice daemon + chat-push, automatic",   "seconds",       NAVY),
+        ("3", "Lands on central",      "Uploaded to the shared server",         "minutes",       NAVY),
+        ("4", "Transcribed",           "Whisper turns audio into text",         "~2 min later",  TEAL),
+        ("5", "Claude drafts",         "Reads the day, writes the email",       "23:45 (Dhaka)", PURPLE),
+        ("6", "I review and send",     "Open the draft, click Send",            "next morning",  GREEN),
+    ]
+    # Six tiles left-to-right
+    start_x = Inches(0.4)
+    y_box = Inches(1.65)
+    box_w = Inches(2.02)
+    box_h = Inches(3.6)
+    gap = Inches(0.13)
+    chip_d = Inches(0.85)
+    chip_y = y_box + Inches(0.25)
+
+    for i, (num, head, body, when, color) in enumerate(steps):
+        x = start_x + (box_w + gap) * i
+        # Card
+        add_rect(s, x, y_box, box_w, box_h,
+                 fill_color=WHITE, line_color=RULE)
+        add_rect(s, x, y_box, box_w, Inches(0.10), fill_color=color)
+        # Big number chip centered horizontally
+        chip_x = x + (box_w - chip_d) / 2
+        add_chip(s, chip_x, chip_y, chip_d, chip_d, num, color)
+        # Step name (bold)
+        tf_h = add_textbox(s, x + Inches(0.1), y_box + Inches(1.30),
+                           box_w - Inches(0.2), Inches(0.6),
+                           anchor=MSO_ANCHOR.TOP)
+        set_text(tf_h, head, size=15, bold=True, color=NAVY,
+                 align=PP_ALIGN.CENTER)
+        # Body (one short line)
+        tf_b = add_textbox(s, x + Inches(0.1), y_box + Inches(1.90),
+                           box_w - Inches(0.2), Inches(1.0),
+                           anchor=MSO_ANCHOR.TOP)
+        set_text(tf_b, body, size=11, color=MUTED,
+                 align=PP_ALIGN.CENTER)
+        # Timing pill at the bottom of the card
+        pill_w = Inches(1.5)
+        pill_h = Inches(0.36)
+        pill_x = x + (box_w - pill_w) / 2
+        pill_y = y_box + box_h - pill_h - Inches(0.15)
+        add_chip(s, pill_x, pill_y, pill_w, pill_h, when, color)
+
+        # Arrow to next box (skip on the last)
+        if i < len(steps) - 1:
+            ay = y_box + box_h / 2
+            ax1 = x + box_w + Inches(0.01)
+            ax2 = ax1 + gap - Inches(0.02)
+            add_arrow(s, ax1, ay, ax2, ay, color=MUTED, width_pt=1.8)
+
+    # Footer
+    tf = add_textbox(s, Inches(0.6), Inches(5.85), Inches(12.1), Inches(0.5),
+                     anchor=MSO_ANCHOR.MIDDLE)
+    set_text(tf, "Capture is automatic. Drafting is automatic. "
+                 "Sending is mine.",
+             size=14, bold=True, color=NAVY, align=PP_ALIGN.CENTER)
+
+    set_speaker_notes(s, (
+        "One concrete example. Say a client mentions during a Teams "
+        "call that they want password reset by SMS. The moment the "
+        "call starts, the voice daemon on my laptop records the "
+        "conversation -- both my mic and Teams' speaker stream. "
+        "Within minutes of the call ending, both audio tracks are on "
+        "the shared central server. The transcription service "
+        "converts them to text in under two minutes. That night at "
+        "23:45 Dhaka time, Claude reads everything captured that day "
+        "-- this call, plus any chat / email / Drive files -- and "
+        "writes a verification email listing the SMS-password-reset "
+        "requirement alongside everything else from the day. Next "
+        "morning I open my Gmail Drafts, review the requirements "
+        "doc, edit if needed, and send. End to end, the human work "
+        "is the call itself, the morning review, and the send. The "
+        "system handles the steps in the middle."
+    ))
+
+
+def slide_tools(prs):
+    s = base_slide(prs, "Tools we use",
+                   "Off-the-shelf, well-known, easy to support.")
+    boxes = [
+        ("AI and language",
+         ["Claude (Anthropic) -- reads the daily document and picks out requirements",
+          "Whisper on Groq -- turns call audio into searchable text"],
+         CORAL),
+        ("Communication",
+         ["MS Teams -- where calls and chat happen",
+          "Gmail -- the verification email lands in my drafts; client replies come back here"],
+         TEAL),
+        ("Storage and sharing",
+         ["Google Drive -- shared client files",
+          "A shared drive on the central server -- everything else (transcripts, drafts, audit trail)"],
+         GOLD),
+        ("Server and code",
+         ["Ubuntu Linux + Docker -- one always-on box hosts the whole pipeline",
+          "Python + GitHub -- our code base and source of truth"],
+         NAVY),
+    ]
+    # 2 x 2 grid
+    box_w = Inches(6.0)
+    box_h = Inches(2.55)
+    positions = [
+        (Inches(0.6), Inches(1.5)),
+        (Inches(6.75), Inches(1.5)),
+        (Inches(0.6), Inches(4.25)),
+        (Inches(6.75), Inches(4.25)),
+    ]
+    for (title, bullets, color), (x, y) in zip(boxes, positions):
+        add_box(s, x, y, box_w, box_h, title, bullets, accent=color)
+
+    set_speaker_notes(s, (
+        "All mainstream choices, nothing exotic. Claude from Anthropic "
+        "handles the requirements identification. Groq runs OpenAI's "
+        "Whisper model for transcription -- same model the open-source "
+        "community uses, just on faster hardware. MS Teams and Gmail "
+        "are already AEL's communication backbone, so we read what's "
+        "there. Google Drive is the shared-files convention we already "
+        "use with clients. The central server is one Ubuntu box "
+        "running Docker, which keeps each service isolated and easy "
+        "to restart. The code is Python on GitHub -- standard, "
+        "auditable, no proprietary lock-in. If we needed to move the "
+        "central server tomorrow, the docker-compose file plus one git "
+        "clone gets us running on a fresh Linux box."
+    ))
+
+
+def slide_security(prs):
+    s = base_slide(prs, "How secure is it?",
+                   "What we capture, where it goes, what stays inside.")
+    items = [
+        ("Recording is MS Teams calls only",
+         "Zoom, Google Meet, and any other meeting app are out of scope. "
+         "Nothing records outside an active Teams call."),
+        ("Dev machines never hold secrets",
+         "Gmail and Drive credentials live only on the central server. "
+         "Your laptop has no API keys."),
+        ("Nothing leaves my mailbox without my click",
+         "Every client email is a draft I review and send. "
+         "There is no auto-send anywhere in the system."),
+        ("External services see only what they must",
+         "Call audio briefly goes to a transcription service; the result "
+         "comes straight back. Everything else stays on AEL's network."),
+    ]
+    y = Inches(1.65)
+    for what, why in items:
+        add_rect(s, Inches(0.6), y, Inches(12.1), Inches(1.15),
+                 fill_color=WHITE, line_color=RULE)
+        add_rect(s, Inches(0.6), y, Inches(0.08), Inches(1.15),
+                 fill_color=GREEN)
+        tf = add_textbox(s, Inches(0.9), y + Inches(0.15),
+                         Inches(11.5), Inches(0.85))
+        set_text(tf, what, size=15, bold=True, color=NAVY)
+        add_para(tf, why, size=12, color=MUTED, space_before=2)
+        y = y + Inches(1.30)
+
+    set_speaker_notes(s, (
+        "Worth being explicit about safety because clients and management "
+        "will ask. Four guarantees. One: only MS Teams audio sessions "
+        "trigger recording -- the process-name check inside the voice "
+        "daemon confirms ms-teams.exe / teams.exe / msteams.exe and "
+        "nothing else, and the bypass flag is off on every dev PC. Two: "
+        "each dev's machine holds no Gmail or Drive credentials -- those "
+        "live only on the central server, so there's one host to secure "
+        "instead of N. Three: the auto-send boundary stays at me; every "
+        "email the client sees, I clicked Send on. Four: audio is sent "
+        "to Groq for transcription over encrypted HTTPS and is not "
+        "retained for AI training; the requirements identification "
+        "step also uses encrypted Claude calls. Everything else -- "
+        "chat, email, Drive files, transcripts, the final draft -- "
+        "stays on AEL's internal network."
+    ))
+
+
+def slide_costs(prs):
+    s = base_slide(prs, "What does it cost to run?",
+                   "Zero per run. Everything we use is already paid for or free.")
+
+    # Hero $0
+    hero_y = Inches(1.4)
+    tf = add_textbox(s, Inches(0.6), hero_y, Inches(12.1), Inches(1.8),
+                     anchor=MSO_ANCHOR.MIDDLE)
+    set_text(tf, "$0", size=160, bold=True, color=GREEN,
+             align=PP_ALIGN.CENTER)
+    tf2 = add_textbox(s, Inches(0.6), hero_y + Inches(1.85),
+                      Inches(12.1), Inches(0.5),
+                      anchor=MSO_ANCHOR.MIDDLE)
+    set_text(tf2, "incremental cost per requirement-management run",
+             size=16, color=MUTED, align=PP_ALIGN.CENTER)
+
+    # 4 reason tiles
+    tiles = [
+        ("Claude", "Flat-rate subscription. All our usage included.", CORAL),
+        ("Groq", "Free tier. Covers our daily audio volume with room to spare.", TEAL),
+        ("Gmail + Drive", "Existing AEL accounts. No new licenses.", GOLD),
+        ("Linux server", "Already running for AEL workloads. No new hardware.", NAVY),
+    ]
+    tile_w = Inches(2.95)
+    tile_h = Inches(1.85)
+    gap = Inches(0.13)
+    start_x = Inches(0.6)
+    tile_y = Inches(5.05)
+    for i, (name, why, color) in enumerate(tiles):
+        x = start_x + (tile_w + gap) * i
+        add_rect(s, x, tile_y, tile_w, tile_h,
+                 fill_color=WHITE, line_color=RULE)
+        add_rect(s, x, tile_y, tile_w, Inches(0.10), fill_color=color)
+        tf_name = add_textbox(s, x + Inches(0.15), tile_y + Inches(0.25),
+                              tile_w - Inches(0.3), Inches(0.5),
+                              anchor=MSO_ANCHOR.TOP)
+        set_text(tf_name, name, size=16, bold=True, color=NAVY,
+                 align=PP_ALIGN.CENTER)
+        tf_why = add_textbox(s, x + Inches(0.15), tile_y + Inches(0.85),
+                             tile_w - Inches(0.3), Inches(0.95),
+                             anchor=MSO_ANCHOR.TOP)
+        set_text(tf_why, why, size=11, color=MUTED,
+                 align=PP_ALIGN.CENTER)
+
+    set_speaker_notes(s, (
+        "Cost question always comes up first, so I lead with the "
+        "answer: zero. The model is flat-rate -- Anthropic's Claude "
+        "subscription bills monthly regardless of how much I run it, "
+        "and one Requirement Management run is a tiny fraction of "
+        "that budget. Call transcription rides on Groq's free tier, "
+        "which currently covers about eight hours of audio a day; "
+        "we're using a small fraction of that. Gmail and Google "
+        "Drive are AEL's existing communication accounts -- this "
+        "system uses what's already paid for. The central Linux "
+        "server was already running before Nucleus existed. So the "
+        "marginal cost of adding this pipeline, and the marginal "
+        "cost of each daily run, is zero. The only meaningful spend "
+        "is the time I spend reviewing the verification email -- "
+        "and that's the part that should stay human."
+    ))
+
+
+def slide_ai_helps(prs):
+    s = base_slide(prs, "Where AI does the work",
+                   "Boring work to the machine. Judgment stays with us.")
+    quadrants = [
+        ("LISTENING", TEAL,
+         "Turns hours of call audio into searchable text in minutes.",
+         "Instead of: replaying calls and typing transcripts."),
+        ("READING", CORAL,
+         "Reads the whole day's content -- chat, calls, email, Drive -- in one pass.",
+         "Instead of: scanning four channels in four places."),
+        ("SORTING", GOLD,
+         "Separates real client requirements from chit-chat; deduplicates across channels.",
+         "Instead of: maintaining a spreadsheet by hand."),
+        ("DRAFTING", PURPLE,
+         "Writes the verification email in clean English, ready to send.",
+         "Instead of: composing from scratch every time."),
+    ]
+    box_w = Inches(6.05)
+    box_h = Inches(2.55)
+    positions = [
+        (Inches(0.6),  Inches(1.5)),
+        (Inches(6.75), Inches(1.5)),
+        (Inches(0.6),  Inches(4.25)),
+        (Inches(6.75), Inches(4.25)),
+    ]
+    for (verb, color, ai_does, replaces), (x, y) in zip(quadrants, positions):
+        add_rect(s, x, y, box_w, box_h,
+                 fill_color=WHITE, line_color=RULE)
+        # Side accent bar
+        add_rect(s, x, y, Inches(0.10), box_h, fill_color=color)
+        # Big verb at top
+        tf_v = add_textbox(s, x + Inches(0.25), y + Inches(0.15),
+                           box_w - Inches(0.4), Inches(0.7),
+                           anchor=MSO_ANCHOR.TOP)
+        set_text(tf_v, verb, size=32, bold=True, color=color)
+        # AI does
+        tf_a = add_textbox(s, x + Inches(0.25), y + Inches(0.95),
+                           box_w - Inches(0.4), Inches(0.65),
+                           anchor=MSO_ANCHOR.TOP)
+        set_text(tf_a, ai_does, size=13, color=INK)
+        # Replaces
+        tf_r = add_textbox(s, x + Inches(0.25), y + Inches(1.65),
+                           box_w - Inches(0.4), Inches(0.65),
+                           anchor=MSO_ANCHOR.TOP)
+        set_text(tf_r, replaces, size=12, color=MUTED)
+
+    set_speaker_notes(s, (
+        "Four jobs AI takes off the team's plate. The principle is "
+        "simple: tedious-but-rule-based work goes to the model; "
+        "judgment stays with us. Listening, reading, sorting, "
+        "drafting -- each one is hours of manual work compressed to "
+        "minutes of compute. What stays human: deciding which "
+        "requirements are right, what makes it into the final email, "
+        "and when to send. The team's hours go into building what "
+        "clients asked for, instead of chasing what they asked for."
     ))
 
 
@@ -548,7 +852,7 @@ def slide_out_of_scope(prs):
         ("Auto-send emails",
          "Every outbound email leaves my mailbox with my explicit click. This is the hard boundary."),
         ("Auto-edit the requirements doc",
-         "The .docx draft is final until I edit it. The LLM does not rewrite it on its own."),
+         "The draft document is final until I edit it. Claude does not rewrite it on its own."),
         ("Push to OpenProject",
          "OpenProject ingest is manual today; auto only when we hit >=80% monthly accuracy."),
         ("Replace client conversations",
@@ -585,8 +889,8 @@ def slide_roadmap(prs):
     rows = [
         ("Now",
          "Each Requirement Management run produces a draft I review. "
-         "Calibration loop, conflict detection, per-run cost telemetry are in.",
-         "Manual, predictable, auditable. Cost ~$0.06/run.",
+         "Calibration loop, conflict detection, and run telemetry are in.",
+         "Manual, predictable, auditable. No incremental cost per run.",
          NAVY),
         ("Next",
          "Tighter dedup across re-runs + Teams attachment auto-resolve "
@@ -677,14 +981,21 @@ def main():
     prs.slide_width = SLIDE_W
     prs.slide_height = SLIDE_H
 
+    # Boss-facing block (1-7)
     slide_title(prs)
     slide_problem(prs)
     slide_solution(prs)
+    slide_journey(prs)
+    slide_tools(prs)
+    slide_security(prs)
+    slide_costs(prs)
+    # Team-facing block
     slide_channels(prs)
     slide_dev_setup(prs)
     slide_daily(prs)
     slide_titu_command(prs)
     slide_architecture(prs)
+    slide_ai_helps(prs)
     slide_outputs(prs)
     slide_out_of_scope(prs)
     slide_roadmap(prs)
