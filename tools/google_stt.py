@@ -1,7 +1,8 @@
 """Google Cloud Speech-to-Text backend for call transcription.
 
-The SOLE call-transcription engine (faster-whisper removed 2026-06-08).
-Bangla->English is done downstream by Claude, not by the STT.
+The SOLE call-transcription engine. Bangla->English is done downstream by
+Claude, not by the STT. HARD RULE: this must run on Chirp (chirp_2, v2) —
+never silently downgrade to a non-Chirp model.
 
 Uses the v1 *synchronous* REST endpoint authenticated with a plain API
 key, so NO service account and NO GCS bucket are required (the
@@ -10,7 +11,7 @@ at ~60 s / 10 MB per request, each track is converted to 16 kHz mono
 LINEAR16 and segmented into <=55 s chunks via ffmpeg, recognized
 chunk-by-chunk, and stitched back onto a continuous timeline.
 
-Returns the SAME segment shape as the Groq / faster-whisper backends:
+Returns the SAME segment shape as the other backends:
 
     [{"start": float, "end": float, "text": str, "speaker": label}, ...]
 
@@ -207,13 +208,17 @@ def google_transcribe(wav_path: Path | None, label: str,
     use_v2 = model.startswith("chirp")
     region = os.getenv("GOOGLE_STT_REGION", "us-central1")
     project = _project_id() if use_v2 else ""
-    # Safety: Chirp (v2) needs a project_id. If one can't be resolved (no SA
-    # JSON / GOOGLE_STT_PROJECT), fall back to the v1 latest_long model so
-    # transcription still runs instead of hard-failing on the v2 endpoint.
+    # HARD RULE: Chirp (chirp_2, v2) is the only acceptable model. Chirp needs
+    # a project_id (from the SA JSON or GOOGLE_STT_PROJECT). We must NOT
+    # silently downgrade to a non-Chirp v1 model when it can't be resolved —
+    # that would produce forbidden output. Fail loudly so the misconfig gets
+    # fixed instead.
     if use_v2 and not project:
-        print("  [google-stt] chirp model needs a project_id but none found "
-              "— falling back to latest_long (v1)")
-        model, use_v2 = "latest_long", False
+        raise RuntimeError(
+            "Chirp STT requires a project_id but none could be resolved. "
+            "Set GOOGLE_STT_PROJECT (or provide GOOGLE_STT_CREDENTIALS, a "
+            "service-account JSON whose project_id is used). Refusing to "
+            "fall back to a non-Chirp model (hard rule).")
 
     try:
         concurrency = max(1, int(os.getenv("GOOGLE_STT_CONCURRENCY", "8")))
