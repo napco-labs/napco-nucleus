@@ -949,6 +949,82 @@ def _compress_track(wav_path: Path) -> Path:
     return opus
 
 
+def _drive_upload_files(files: list[Path], folder_id: str,
+                        creds_path: str) -> int:
+    """Upload the small finalized call artifacts (Opus tracks + JSON sidecar)
+    straight to a Drive **Shared Drive** folder via a service account.
+
+    This is the off-net alternative to the Samba push: a one-shot ~2 MB
+    upload per call so an off-net dev does NOT need the always-on Google
+    Drive Desktop sync client (which loads the PC). Central's drive ingester
+    already reads Shared Drives. Best-effort — logs and returns the count
+    actually uploaded; never raises.
+    """
+    try:
+        from google.oauth2 import service_account  # lazy
+        from googleapiclient.discovery import build  # lazy
+        from googleapiclient.http import MediaFileUpload  # lazy
+    except Exception as e:
+        print(f"  drive upload: google libs unavailable ({e})", file=sys.stderr)
+        return 0
+    try:
+        creds = service_account.Credentials.from_service_account_file(
+            creds_path, scopes=["https://www.googleapis.com/auth/drive"])
+        drive = build("drive", "v3", credentials=creds, cache_discovery=False)
+    except Exception as e:
+        print(f"  drive upload: auth failed ({e})", file=sys.stderr)
+        return 0
+    n = 0
+    for src in files:
+        if not src.exists():
+            continue
+        try:
+            media = MediaFileUpload(str(src), resumable=False)
+            drive.files().create(
+                body={"name": src.name, "parents": [folder_id]},
+                media_body=media, supportsAllDrives=True, fields="id",
+            ).execute()
+            n += 1
+            size_mb = src.stat().st_size / 1024 / 1024
+            print(f"  -> Drive {src.name}  ({size_mb:.1f} MB)")
+        except Exception as e:
+            print(f"  drive upload FAILED for {src.name}: {e}", file=sys.stderr)
+    return n
+
+
+def _maybe_drive_upload(mic_path: Path, spk_path: Path,
+                        meta_path: Path) -> bool:
+    """Upload the call (opus tracks + json) to the configured Drive Shared
+    Drive folder, if Drive upload is configured. Returns True on success.
+
+    Config (set on off-net dev PCs instead of NUCLEUS_CENTRAL_PATH):
+        NUCLEUS_DRIVE_UPLOAD_FOLDER_ID   target Shared Drive folder id
+        NUCLEUS_DRIVE_UPLOAD_CREDENTIALS service-account JSON (defaults to
+                                         GOOGLE_CREDENTIALS_PATH)
+    """
+    folder_id = (os.environ.get("NUCLEUS_DRIVE_UPLOAD_FOLDER_ID") or "").strip()
+    if not folder_id:
+        return False
+    creds_path = (os.environ.get("NUCLEUS_DRIVE_UPLOAD_CREDENTIALS")
+                  or os.environ.get("GOOGLE_CREDENTIALS_PATH") or "").strip()
+    if not creds_path:
+        print("  drive upload: configured (folder id set) but no creds — set "
+              "NUCLEUS_DRIVE_UPLOAD_CREDENTIALS or GOOGLE_CREDENTIALS_PATH",
+              file=sys.stderr)
+        return False
+    cp = Path(creds_path)
+    if not cp.is_absolute():
+        cp = Path(__file__).resolve().parent.parent / creds_path
+    if not cp.exists():
+        print(f"  drive upload: creds file not found at {cp}", file=sys.stderr)
+        return False
+    n = _drive_upload_files([mic_path, spk_path, meta_path], folder_id, str(cp))
+    if n:
+        print(f"  drive upload: OK ({n} file(s) -> folder {folder_id[:14]}...)")
+        return True
+    return False
+
+
 def _write_metadata_and_upload(
     *,
     out_dir: Path,
@@ -1022,7 +1098,13 @@ def _write_metadata_and_upload(
     # Optional central push
     central_dir = _central_calls_dir()
     if central_dir is None:
-        print("  central upload: skipped (NUCLEUS_CENTRAL_PATH not set)")
+        # Off-net dev (no Samba reach): upload the small opus+json straight to
+        # the Drive Shared Drive instead, so central's drive ingester picks it
+        # up — no always-on Drive Desktop sync client needed.
+        if _maybe_drive_upload(mic_path, spk_path, meta_path):
+            return
+        print("  central upload: skipped (NUCLEUS_CENTRAL_PATH not set; "
+              "no Drive upload configured)")
         return
     from teams._central import ensure_smb_auth, reset_smb_auth
     central_root = os.environ.get("NUCLEUS_CENTRAL_PATH", "")
@@ -1055,8 +1137,13 @@ def _write_metadata_and_upload(
         except Exception as e2:
             print(f"  central upload FAILED (after retry): {e2}",
                   file=sys.stderr)
-            print(f"  WAVs + metadata are still local at {out_dir} "
-                  f"(run: py -3 -m teams.backfill_central)", file=sys.stderr)
+            # Last resort: if Drive upload is configured, push the small
+            # opus+json there so the call still reaches central off-net.
+            if _maybe_drive_upload(mic_path, spk_path, meta_path):
+                print("  fell back to Drive upload: OK")
+            else:
+                print(f"  WAVs + metadata are still local at {out_dir} "
+                      f"(run: py -3 -m teams.backfill_central)", file=sys.stderr)
 
 
 def _dev_name() -> str:
