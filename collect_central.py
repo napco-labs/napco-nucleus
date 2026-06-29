@@ -66,6 +66,27 @@ load_dotenv(_HERE / ".env", override=True)
 sys.path.insert(0, str(_HERE))
 
 from tools import _session_doc as session_doc  # noqa: E402
+from tools._retry import run_with_retry  # noqa: E402
+
+
+# Windows SMB enumeration of the central share from a dev PC fails
+# intermittently while the session to the central host flaps or while
+# other processes (chat push, email stager, recorder) write into it.
+# The error code varies with the failure mode, so treat the whole family
+# of transient network-share / sharing codes as retryable:
+#   3    ERROR_PATH_NOT_FOUND      (session mid-reconnect)
+#   32   ERROR_SHARING_VIOLATION   (another process has it open)
+#   33   ERROR_LOCK_VIOLATION      (byte-range lock contention)
+#   64   ERROR_NETNAME_DELETED     (session dropped)
+#   1450 ERROR_NO_SYSTEM_RESOURCES (transient server pressure)
+# The default _retry classifier doesn't cover these, so scope a
+# dedicated classifier just for the central directory scan.
+_SMB_TRANSIENT_WINERR = {3, 32, 33, 64, 1450}
+
+
+def _smb_enum_transient(exc: BaseException) -> bool:
+    return (isinstance(exc, OSError)
+            and getattr(exc, "winerror", None) in _SMB_TRANSIENT_WINERR)
 
 
 def _client_match(metadata: dict, target: str) -> bool:
@@ -139,7 +160,18 @@ def _scan_central(central: Path, days, client: str, calls_within: int = 0) -> di
     if not central.exists():
         raise RuntimeError(f"central path does not exist: {central}")
 
-    for dev_dir in sorted(central.iterdir()):
+    # Materialize the root listing under retry — SMB sharing violations
+    # while devs are pushing into the share are transient (see
+    # _smb_enum_transient). Forcing sorted() inside the retry means any
+    # WinError 32/33 during enumeration is caught and retried, not just
+    # the initial scandir() open.
+    dev_dirs = run_with_retry(
+        lambda: sorted(central.iterdir()),
+        attempts=8, base_delay=0.5, backoff=1.8,
+        is_transient=_smb_enum_transient,
+        op_name="central.iterdir",
+    )
+    for dev_dir in dev_dirs:
         if not dev_dir.is_dir():
             continue
         for day in days:
