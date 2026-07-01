@@ -132,6 +132,53 @@ Set-Location $NN
 
 ---
 
+## Isolated (recording-only) setup — for devs who don't want global installs
+
+> **Use this if:** you only need call mirroring to central (no chat push, no local pipeline). Everything stays inside the one repo folder — no packages are installed globally.
+
+### What you need
+
+- Python 3.12+ installed on the PC (one-time only; tick "Add to PATH")
+- The repo cloned to any folder you choose (e.g. `D:\NNAgent\napco-nucleus`)
+- The `.env` file from Titu placed inside that folder
+
+### Setup — one command
+
+Open a normal (non-admin) PowerShell window, `cd` to the repo folder, then:
+
+```powershell
+.\scripts\setup-recorder.bat
+```
+
+That's it. The script:
+1. Creates `.venv` inside the repo folder (no global pip installs)
+2. Installs only the recording dependencies into the venv
+3. Registers the voice daemon to autostart at logon
+
+After setup, every Teams call is automatically captured and pushed to:
+```
+\\172.16.205.123\nucleus-central\<YourName>\<date>\calls\
+```
+
+### Verify
+
+Make a 20-second test call in Teams, then check:
+```powershell
+Get-ChildItem "\\172.16.205.123\nucleus-central\Assad\$(Get-Date -Format 'yyyy-MM-dd')\calls\"
+```
+You should see `*_mic.wav`, `*_speaker.wav`, `*.json`.
+
+### Uninstall
+
+```powershell
+.\scripts\register-voice-daemon-task.ps1 -Unregister
+Remove-Item -Recurse -Force .venv
+```
+
+Removing the whole repo folder removes everything — nothing was written anywhere else.
+
+---
+
 ## Contact
 
 Titu — `khasan@ael-bd.com`

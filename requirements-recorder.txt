@@ -1,0 +1,30 @@
+# Minimal dependencies for call-recording-only dev PCs (e.g. Assad).
+# Install these into the project .venv instead of globally:
+#
+#     python -m venv .venv
+#     .venv\Scripts\pip install -r requirements-recorder.txt
+#
+# Full requirements.txt (Claude agent, chat push, PDF, OCR, etc.) is NOT
+# needed on recording-only machines — central handles transcription and
+# pipeline. This file omits those heavy/complex deps so setup is fast
+# and self-contained inside the project folder.
+
+# Core
+python-dotenv>=1.0.0
+
+# Call recording — WASAPI loopback capture (Windows only)
+PyAudioWPatch>=0.2.12
+
+# Teams-in-call gate — detects active Teams audio session
+pycaw>=20240210
+
+# Audio level metering used by voice_daemon + record_call
+numpy>=2.0
+
+# HTTP client used by Drive upload helper
+requests>=2.31.0
+
+# Drive upload for off-net devs (push call files when not on office LAN).
+# Skip these two if Assad is always on the office network.
+google-api-python-client>=2.100.0
+google-auth>=2.23.0
