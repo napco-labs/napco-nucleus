@@ -150,30 +150,36 @@ This writes the requirement into `requirements_seen` so the NEXT collect_all run
 
 Pick the source value from the section the requirement primarily came from: `EMAIL` → `email`, `TEAMS CHAT` → `chat`, `MEETING` → `meetings`, `DRIVE` → `documents`.
 
-### 4.6 Publish to the OpenProject backlog — routed per project
+### 4.6 Save to pending backlog (for manual review before OpenProject push)
 
-Build a `tasks` array of the NEW requirements (those that survived step 2.5) at **confidence >= 0.80**, and call ONCE:
+Do NOT auto-publish to OpenProject. Instead, save a pending JSON file so Titu can review and push manually when ready.
 
-```
-publish_tasks_to_backlog(tasks=[
+Build a `tasks` array of the NEW requirements (those that survived step 2.5) at **confidence >= 0.80** using this shape:
+
+```json
+[
   {
-    "project": "<cardaccess-4k | mvp-access>",   # the routed project from step 2
+    "project": "<cardaccess-4k | mvp-access>",
     "title": "<requirement.title, <70 chars>",
     "description": "<summary>\n\nWhy: <rationale>\nClient: <client> | Priority: <priority> | Severity: <severity>",
     "estimate_hours": <estimate_hours>,
     "source_ref": "<first source_refs entry>",
     "labels": ["<feature category — mvp-access only>", "requirements"],
-    "issue_type": "task"
+    "issue_type": "task",
+    "confidence": <float>,
+    "client_name": "<client>"
   },
   ...
-])
+]
 ```
 
-- **Confidence gate — STRICT.** ONLY include requirements with `confidence >= 0.80`. Lower-confidence items stay in the doc + email for human review; do NOT publish them. If none clear 0.80, SKIP this step (do not call with an empty list).
-- **Feature category — `mvp-access` only.** For mvp-access tasks, classify from content into exactly one of `AccessGroup` (access groups/permissions/roles/door-zone rules), `BadgeHolder` (badges/credentials/cardholders), `Personnel` (people/employee/HR records); if none fit, omit it. **CardAccess 4K has no categories** — use just `["requirements"]`.
-- **Type label** is always `"requirements"`; `issue_type` always `"task"`.
-- Dedup is automatic + **per project** (a CA4K title never collides with an MVP-Access one) and the tool is safe to re-run. It honors `NAPCO_NUCLEUS_DRY_RUN=1` (simulates, creates nothing).
-- Capture `created`, `updated`, `skipped_existing`, `failed` for the final reply (each `created` entry includes its `project`).
+- **Confidence gate — STRICT.** ONLY include requirements with `confidence >= 0.80`. Lower-confidence items stay in the doc for human review; do NOT include them here.
+- **Feature category — `mvp-access` only.** Classify into exactly one of `AccessGroup`, `BadgeHolder`, `Personnel`; if none fit, omit it. **CardAccess 4K has no categories** — use just `["requirements"]`.
+- If none clear 0.80, skip this step entirely.
+
+Call `save_pending_backlog(tasks=<list>, date="<YYYY-MM-DD>")` — this writes `data/requirements/pending-backlog-<date>.json` and returns `{path, count}`.
+
+To push to OpenProject later, run: `py -3 push_pending_backlog.py`
 
 ### 5. Log + exit
 
@@ -188,7 +194,7 @@ Surface in your final reply:
 - **Mean confidence + low-confidence count** from the verification-doc tool's return value
 - Verification doc path(s) — one per project (CardAccess 4K / MVP Access)
 - Verification email draft path(s) (absolute) + recipient + IMAP push status, per project (so the user knows whether to look in Outlook Drafts or open the .eml directly)
-- **OpenProject backlog** — per project: `<C> created, <S> skipped (already tracked), <F> failed`; and flag any requirement routed to MVP Access by ambiguous fallback so Titu can re-file in one click
+- **Pending backlog** — path to `pending-backlog-<date>.json` + count of requirements staged; remind Titu to run `py -3 push_pending_backlog.py` to push to OpenProject after review; and flag any requirement routed to MVP Access by ambiguous fallback so Titu can re-file in one click
 - If `low_confidence_count > 0`, explicitly call out the titles of those items in the reply so the reviewer knows which ones to scrutinise before sending.
 
 At the very end of the reply, suggest running the calibration loop:

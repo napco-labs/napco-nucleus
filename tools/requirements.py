@@ -255,15 +255,31 @@ async def publish_tasks_to_backlog_tool(args):
         raw = (task.get("project") or "").strip().lower()
         return _PROJECT_ALIASES.get(raw, raw or op_client.default_project())
 
-    # Per-project open-WP dedup cache: slug -> (open_by_title, open_titles).
-    _open_cache: dict[str, tuple[dict, set]] = {}
+    import re as _re
 
-    def _open_for(project: str) -> tuple[dict, set]:
+    def _norm_title(t: str) -> str:
+        """Normalize a title for fuzzy dedup: lowercase, collapse whitespace,
+        strip common trailing noise ('- summary', 'feature', 'enhancement',
+        PR/ticket refs like 'PR 5082'). Two titles that differ only in these
+        ways are treated as the same requirement."""
+        t = t.strip().lower()
+        t = _re.sub(r"\s+", " ", t)
+        t = _re.sub(r"\s*[-–—]\s*.*$", "", t)   # strip anything after first dash
+        t = _re.sub(r"\bpr\s*\d+\b", "", t)     # strip PR refs
+        t = _re.sub(r"\s+", " ", t).strip()
+        return t
+
+    # Per-project open-WP dedup cache: slug -> (open_by_title, open_by_norm, open_titles).
+    _open_cache: dict[str, tuple[dict, dict, set]] = {}
+
+    def _open_for(project: str) -> tuple[dict, dict, set]:
         if project not in _open_cache:
             wps = op_client.list_open_work_packages(project=project)
             by_title = {i["title"].strip().lower(): i
                         for i in wps if i.get("title")}
-            _open_cache[project] = (by_title, set(by_title.keys()))
+            by_norm = {_norm_title(i["title"]): i
+                       for i in wps if i.get("title")}
+            _open_cache[project] = (by_title, by_norm, set(by_title.keys()))
         return _open_cache[project]
 
     created, updated, skipped, failed = [], [], [], []
@@ -306,7 +322,7 @@ async def publish_tasks_to_backlog_tool(args):
         # Route to the target project and load its open-WP dedup set.
         task_project = _route(t)
         try:
-            open_by_title, open_titles = _open_for(task_project)
+            open_by_title, open_by_norm, open_titles = _open_for(task_project)
         except Exception as e:
             logger.exception(f"list_open_work_packages failed for {task_project!r}")
             failed.append({"title": title, "project": task_project,
@@ -386,13 +402,13 @@ async def publish_tasks_to_backlog_tool(args):
             continue
 
         # ── CREATE PATH ─────────────────────────────────────────────
-        # Standard dedup: skip exact-title matches and fuzzy memory
-        # matches with a known id. On exact-title skip, ALSO upsert
-        # memory.requirements_seen with the existing WP's id +
-        # web_url so a reset DB self-heals — this is what unblocks the
-        # updatedRequirements classification on subsequent runs.
-        if title.lower() in open_titles:
-            existing = open_by_title.get(title.lower(), {})
+        # Three-level dedup: exact title → normalized title → memory FTS.
+        # On exact-title skip, ALSO upsert requirements_seen so a reset
+        # DB self-heals and updatedRequirements can find its prior id.
+        norm = _norm_title(title)
+        existing = (open_by_title.get(title.lower())
+                    or open_by_norm.get(norm))
+        if existing:
             memory.remember_requirement(
                 title=title, source=source_bucket, source_ref=src,
                 summary=description[:240],
@@ -425,6 +441,7 @@ async def publish_tasks_to_backlog_tool(args):
                 summary=description[:240],
             )
             open_titles.add(title.lower())
+            open_by_norm[norm] = {"id": "DRY-RUN", "web_url": None}
             continue
 
         try:
@@ -443,6 +460,7 @@ async def publish_tasks_to_backlog_tool(args):
                 wp_id=wp_id, wp_url=url,
             )
             open_titles.add(title.lower())
+            open_by_norm[norm] = {"id": wp_id, "web_url": url}
         except Exception as e:
             logger.exception(f"create_work_package failed for {title!r}")
             failed.append({"title": title, "error": str(e)})
@@ -542,11 +560,46 @@ async def pull_session_status_tool(args):
     return _text(session_doc.status())
 
 
+_PENDING_BACKLOG_DIR = _HERE / "data" / "requirements"
+
+
+@tool(
+    "save_pending_backlog",
+    "Save identified requirements to a pending JSON file for manual review "
+    "before pushing to OpenProject. Writes data/requirements/pending-backlog-<date>.json. "
+    "Call with tasks (list of requirement dicts) and date (YYYY-MM-DD). "
+    "Returns {path, count}. Run `py -3 push_pending_backlog.py` to push after review.",
+    {"tasks": list, "date": str},
+)
+async def save_pending_backlog_tool(args):
+    import datetime as _dt
+    tasks = args.get("tasks") or []
+    if not isinstance(tasks, list):
+        return _text({"error": "tasks must be a list"})
+    date = (args.get("date") or "").strip()
+    if not date:
+        date = _dt.date.today().strftime("%Y-%m-%d")
+    _PENDING_BACKLOG_DIR.mkdir(parents=True, exist_ok=True)
+    out_path = _PENDING_BACKLOG_DIR / f"pending-backlog-{date}.json"
+    out_path.write_text(
+        json.dumps({"date": date, "tasks": tasks}, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    memory.log_activity(
+        task_name="requirement-management:save_pending_backlog",
+        result=f"saved {len(tasks)} tasks to {out_path.name}",
+        technical_details={"path": str(out_path), "count": len(tasks)},
+    )
+    return _text({"path": str(out_path), "count": len(tasks),
+                  "next_step": "Run `py -3 push_pending_backlog.py` to push to OpenProject after review."})
+
+
 TOOLS = [
     poll_requirement_emails_tool,
     ingest_drive_files_tool,
     read_requirement_inbox_tool,
     publish_tasks_to_backlog_tool,
+    save_pending_backlog_tool,
     read_pull_session_tool,
     start_pull_session_tool,
     pull_session_status_tool,
@@ -557,6 +610,7 @@ TOOL_NAMES = [
     "ingest_drive_files",
     "read_requirement_inbox",
     "publish_tasks_to_backlog",
+    "save_pending_backlog",
     "read_pull_session",
     "start_pull_session",
     "pull_session_status",

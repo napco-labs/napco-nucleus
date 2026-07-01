@@ -49,6 +49,7 @@ This drops a sentinel file the recorder polls every ~0.5s. The recorder closes t
 
 | Developer says | You run |
 |---|---|
+| "push to openproject" / "push pending backlog" / "push requirements" | `py -3 push_pending_backlog.py` — shows pending tasks, asks for confirmation, then creates WPs in OpenProject. Add `--dry-run` to preview, `--yes` to skip prompt. |
 | "push my chat now" / "send chat to central" | `py -3 -m teams.push_chat --last-minutes 15` |
 | "send now" / "pipeline now" / "run pipeline" | Force full pipeline + email immediately: (1) push latest chat, (2) trigger pipeline on .123 only if call transcripts exist, (3) send email. Run these in order: `py -3 -m teams.push_chat --last-minutes 60` then SSH to .123: `ssh ubuntu@172.16.205.123 "cd /home/ubuntu/napco-nucleus && touch /srv/nucleus-central/.pipeline_trigger"` — the draft-loop picks it up within 2 min. If no transcript exists yet, tell the user: transcription is still running, check back later. |
 | "verify install" / "check setup" | `py -3 -m tools.healthcheck` |
