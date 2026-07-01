@@ -403,10 +403,16 @@ def main() -> int:
           f"require_new={args.require_new}  note={bool(note)}  "
           f"escalate={escalate}")
 
-    # Event-triggered runs: skip the team email unless something is net-new.
-    # Kills the empty / duplicate midday blasts; the clock run never sets
-    # this. A coverage note still sends — surfacing what happened is the point.
-    if args.require_new and not new_reqs and not note:
+    # Never send a blank email to anyone.
+    # Skip if there are zero requirements AND no hard-failure escalation.
+    # escalate=True means the identify step crashed — that's an [ACTION NEEDED]
+    # alert worth sending even with no requirements list.
+    if not reqs and not escalate:
+        print(f"[rollup] 0 requirements and no pipeline failure — skipping send.")
+        return 0
+
+    # Event-triggered runs: also skip if everything already went out today.
+    if args.require_new and not new_reqs:
         print(f"[rollup] --require-new: {len(reqs)} requirement(s) on file, "
               f"0 net-new since last send — skipping email.")
         return 0
