@@ -29,6 +29,7 @@ import logging
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 for _stream in (sys.stdout, sys.stderr):
@@ -126,18 +127,52 @@ def _track_path(calls_dir: Path, session: str, kind: str) -> Path | None:
     return None
 
 
+ORPHAN_STABLE_MINUTES = 10
+
+
 def _pending_sessions(calls_dir: Path) -> list[str]:
     """Session prefixes (e.g. '20260513-203305') with metadata present
     but no transcript yet."""
     pending: list[str] = []
+    seen: set[str] = set()
     for meta in sorted(calls_dir.glob("*.json")):
         session = meta.stem
+        seen.add(session)
         if (calls_dir / f"{session}_transcript.md").exists():
             continue
         if _track_path(calls_dir, session, "mic") is None:
             continue
         if _track_path(calls_dir, session, "speaker") is None:
             continue
+        pending.append(session)
+
+    # Self-heal: record_call.py writes mic.wav -> speaker.wav -> <session>.json
+    # in that order, so a crash/interruption between the WAVs and the json can
+    # leave a call with both tracks on central but no completion marker --
+    # invisible to the scan above forever, with no error and no retry. Root-
+    # caused 2026-07-02 (Assad's 20260701-193053 call sat untranscribed with
+    # no .json). Treat mic+speaker as "done" once they've been stable
+    # (untouched) for ORPHAN_STABLE_MINUTES, even without the .json.
+    now = time.time()
+    for mic in sorted(calls_dir.glob("*_mic.*")):
+        session = mic.stem.rsplit("_mic", 1)[0]
+        if session in seen or session in pending:
+            continue
+        if (calls_dir / f"{session}_transcript.md").exists():
+            continue
+        spk = _track_path(calls_dir, session, "speaker")
+        if spk is None:
+            continue
+        try:
+            mtime = max(mic.stat().st_mtime, spk.stat().st_mtime)
+        except OSError:
+            continue
+        if now - mtime < ORPHAN_STABLE_MINUTES * 60:
+            continue  # tracks may still be mid-upload; wait for the real signal
+        logger.warning(
+            "orphaned session %s in %s: tracks present, no .json marker "
+            "after %d+ min -- transcribing anyway (self-heal)",
+            session, calls_dir, ORPHAN_STABLE_MINUTES)
         pending.append(session)
     return pending
 

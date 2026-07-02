@@ -5,7 +5,7 @@ Dimension: Project Management. Local-only. Manual `workflow_dispatch` for now.
 Goal: read the user's current pull-session Word document (the consolidated capture from Teams chats / emails / Drive files / meetings the user explicitly pulled), extract every distinct client requirement, write a flat numbered Requirements Verification Word doc, and draft ONE email to the client with that doc attached.
 
 > **Inputs this task:** the pull-session doc only (`data/requirements/sessions/current.docx`).
-> **Publishes to OpenProject** (routed per project — `cardaccess-4k` vs `mvp-access`; ONLY requirements at confidence >= 0.80; see step 4.6). **Disabled this task:** Teams webhook, the auto-poll inbox flow (`poll_requirement_emails` / `ingest_drive_files` / `read_requirement_inbox`), the records-aggregation email. DO NOT call any of those — the user has already curated what they want identified.
+> **Does NOT publish to OpenProject.** High-confidence requirements (>= 0.80) are saved to a pending-backlog JSON, routed per project (`cardaccess-4k` vs `mvp-access`) for when Titu reviews and pushes manually — see step 4.6. **Disabled this task:** Teams webhook, the auto-poll inbox flow (`poll_requirement_emails` / `ingest_drive_files` / `read_requirement_inbox`), the records-aggregation email. DO NOT call any of those — the user has already curated what they want identified.
 
 ---
 
