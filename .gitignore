@@ -42,9 +42,13 @@ data/requirements/_meeting_tmp/
 data/requirements/Requirements Verification *.docx
 data/requirements/Requirements Verification *.json
 data/requirements/aggregation_*.docx
+data/requirements/_auto*.docx
+data/requirements/*_transcript.md
+data/requirements/.coverage/
 data/requirements/inbox/
 data/requirements/drive-processed.json
 data/requirements/state.json
+docs/*_old*.pptx
 
 # Eval harness output — per-run JSON files in evals/results/.
 # Keep the dir via .gitkeep; don't commit individual runs.
