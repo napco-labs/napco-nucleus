@@ -108,6 +108,28 @@ if errorlevel 1 (
 REM -- Step 6: Start daemon now (no need to log out) --
 powershell -NoProfile -Command "Start-ScheduledTask -TaskName 'NAPCO Nucleus - Voice Daemon'" >nul 2>&1
 
+REM -- Step 7: Save the share credential so File Explorer opens the central
+REM    share with NO password prompt. Windows allows one identity per file
+REM    server per PC; the recorder already authenticates as this user, so
+REM    storing it here means browsing \\<server>\nucleus-central just works
+REM    (and survives reboot). Reads user/pass/server from .env.
+set "SMB_USER="
+set "SMB_PASS="
+set "SMB_UNC="
+for /f "usebackq tokens=1,* delims==" %%A in ("%REPO%\.env") do (
+    if /i "%%A"=="NUCLEUS_SAMBA_USER"     set "SMB_USER=%%B"
+    if /i "%%A"=="NUCLEUS_SAMBA_PASSWORD" set "SMB_PASS=%%B"
+    if /i "%%A"=="NUCLEUS_CENTRAL_PATH"   set "SMB_UNC=%%B"
+)
+set "SMB_SRV="
+if defined SMB_UNC for /f "tokens=1 delims=\" %%H in ("%SMB_UNC%") do set "SMB_SRV=%%H"
+if defined SMB_USER if defined SMB_PASS if defined SMB_SRV (
+    cmdkey /add:%SMB_SRV% /user:%SMB_USER% /pass:%SMB_PASS% >nul 2>&1
+    echo [OK] Saved share credential - browsing \\%SMB_SRV%\nucleus-central needs no password.
+) else (
+    echo [WARN] Could not read Samba creds from .env - skipping passwordless-browse setup.
+)
+
 REM -- Read NUCLEUS_DEV_NAME from .env so the verify path below is correct --
 set "DEVNAME=YOUR_NAME"
 for /f "tokens=2 delims==" %%A in ('findstr /b "NUCLEUS_DEV_NAME=" "%REPO%\.env"') do set "DEVNAME=%%A"

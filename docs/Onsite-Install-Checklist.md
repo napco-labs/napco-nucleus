@@ -224,7 +224,23 @@ Get-Content .\logs\voice_daemon.log -Tail 50
 Once Step 7 shows all three files **with both WAVs non-zero**, this PC is fully wired:
 every Teams call from now on mirrors to central automatically, gets transcribed
 (Google STT Chirp v2), and feeds the requirement pipeline — no further action needed
-on this machine.
+on this machine. The installer also saved the share credential, so this dev can open
+`\\172.16.205.123\nucleus-central` in File Explorer **with no password prompt**.
+
+---
+
+## Giving a browse-only teammate passwordless access (no recorder)
+
+For someone who only needs to *view* the share (not record), run this once **under
+their own Windows login** on their PC — paste the `nucleus` password from `.env`:
+
+```powershell
+cmdkey /add:172.16.205.123 /user:nucleus /pass:<NUCLEUS_SAMBA_PASSWORD>
+net use N: \\172.16.205.123\nucleus-central /persistent:yes   # optional drive letter
+```
+
+`\\172.16.205.123\nucleus-central` then opens with no prompt. The Windows/domain
+username doesn't matter — this stores the shared share credential under that login.
 
 ---
 
