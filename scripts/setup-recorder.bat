@@ -1,5 +1,5 @@
 @echo off
-REM One-click isolated setup for recording-only dev PCs (e.g. Assad).
+REM One-click isolated setup for recording-only dev PCs.
 REM
 REM What it does:
 REM   1. Creates a Python venv inside this repo folder (nothing written globally)
@@ -89,6 +89,10 @@ if errorlevel 1 (
 REM -- Step 6: Start daemon now (no need to log out) --
 powershell -NoProfile -Command "Start-ScheduledTask -TaskName 'NAPCO Nucleus - Voice Daemon'" >nul 2>&1
 
+REM -- Read NUCLEUS_DEV_NAME from .env so the verify path below is correct --
+set "DEVNAME=YOUR_NAME"
+for /f "tokens=2 delims==" %%A in ('findstr /b "NUCLEUS_DEV_NAME=" "%REPO%\.env"') do set "DEVNAME=%%A"
+
 echo.
 echo ================================================================
 echo  Setup complete.
@@ -96,7 +100,7 @@ echo  Voice daemon is running. Teams calls will be mirrored to central.
 echo.
 echo  Verify after a test call:
 echo    - Make a Teams call (at least 20 seconds)
-echo    - Check: \\172.16.205.123\nucleus-central\Assad\TODAY\calls\
+echo    - Check: \\172.16.205.123\nucleus-central\%DEVNAME%\TODAY\calls\
 echo    - You should see _mic.wav, _speaker.wav, .json
 echo.
 echo  Daemon log (to check if something is wrong):
