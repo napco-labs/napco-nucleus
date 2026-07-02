@@ -258,10 +258,35 @@ on the machine (only the one scheduled task + this one folder).
 
 ## Reference — full path registry (fill in after each visit)
 
-| Dev | PC / IP | NUCLEUS_DEV_NAME | Local repo path |
-|---|---|---|---|
-| Atik | ? | `Atik` | `D:\napco-nucleus` *(confirm actual drive used)* |
-| Isruk | ? | `Isruk` | `D:\napco-nucleus` *(confirm actual drive used)* |
+| Dev | PC / IP | Windows login | NUCLEUS_DEV_NAME | Local repo path |
+|---|---|---|---|---|
+| Atik | `172.16.205.108` | `arzaman` | `Atik` | `D:\napco-nucleus` *(confirm actual drive used)* |
+| Isruk | ? | `ihasan` | `Isruk` | `D:\napco-nucleus` *(confirm actual drive used)* |
+
+Note the two separate namespaces: the **central folder** comes from `NUCLEUS_DEV_NAME`
+(e.g. `Atik`), while the **Windows/domain login** (e.g. `arzaman` = Atik) is just the
+account the recorder + saved credential run under. They don't need to match.
 
 Update `docs/Developer_Setup.md`'s "Dev PC IP registry" table with the final IP and
 path once you're back at your desk, so future remote troubleshooting has it.
+
+---
+
+## Domain users who get passwordless share browse
+
+These are the people who should be able to open `\\172.16.205.123\nucleus-central`
+in File Explorer without a prompt. Recorder devs get it automatically from
+`setup-recorder.bat`; browse-only users get it via the one-liner above.
+
+| Domain login | Person | How they get access |
+|---|---|---|
+| `assad`    | Assad Zaman                 | recorder install (`setup-recorder.bat`) |
+| `arhabib`  | Md. Ahsan Habib Rocky       | recorder install |
+| `arzaman`  | Atik (Atikur Zaman - Kaptan)| recorder install |
+| `ihasan`   | Isruk H                     | recorder install |
+| `mferdows` | Mostafa Jannatul Ferdows    | recorder install or browse-only one-liner |
+| `khasan`   | Titu (Mohammad Kamrul Hasan)| browse-only one-liner |
+| `samin`    | Sheikh Amin                 | browse-only one-liner |
+
+Access is granted per Windows login on each PC (the stored share credential), not by
+domain identity — so run the setup/one-liner under each person's own login.
