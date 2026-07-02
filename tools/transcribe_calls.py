@@ -153,15 +153,29 @@ def _pending_sessions(calls_dir: Path) -> list[str]:
     # caused 2026-07-02 (Assad's 20260701-193053 call sat untranscribed with
     # no .json). Treat mic+speaker as "done" once they've been stable
     # (untouched) for ORPHAN_STABLE_MINUTES, even without the .json.
+    #
+    # Only consider *completed* track files (the _TRACK_EXTS whitelist) -- an
+    # in-flight upload leaves a *.part sibling which must be ignored, else we
+    # could hand a half-written file to ffmpeg.
     now = time.time()
-    for mic in sorted(calls_dir.glob("*_mic.*")):
-        session = mic.stem.rsplit("_mic", 1)[0]
+    orphan_sessions: set[str] = set()
+    for ext in _TRACK_EXTS:
+        for mic in calls_dir.glob(f"*_mic{ext}"):
+            session = mic.name[: -len(f"_mic{ext}")]
+            orphan_sessions.add(session)
+    for session in sorted(orphan_sessions):
         if session in seen or session in pending:
             continue
         if (calls_dir / f"{session}_transcript.md").exists():
             continue
+        mic = _track_path(calls_dir, session, "mic")
         spk = _track_path(calls_dir, session, "speaker")
-        if spk is None:
+        if mic is None or spk is None:
+            continue
+        # A lingering *.part sibling means an upload is still in progress for
+        # this session -- don't touch it yet even if the completed track's
+        # mtime looks stable.
+        if any(calls_dir.glob(f"{session}_*.part")):
             continue
         try:
             mtime = max(mic.stat().st_mtime, spk.stat().st_mtime)

@@ -27,6 +27,25 @@ echo  All files stay inside: %REPO%
 echo ================================================================
 echo.
 
+REM -- Step 0: Warn if not running elevated. The recorder disables audio
+REM    exclusive mode via a HKEY_LOCAL_MACHINE write (needs admin); without
+REM    it Teams can grab the device in exclusive mode and produce 0-byte
+REM    recordings. net session succeeds only in an elevated context.
+net session >nul 2>&1
+if errorlevel 1 (
+    echo [WARN] This window is NOT running as Administrator.
+    echo        Recording may still register, but the audio exclusive-mode fix
+    echo        needs admin. Without it you can get 0-byte recordings.
+    echo        Recommended: close this, reopen PowerShell as Administrator,
+    echo        and re-run this script.
+    echo.
+    choice /c YN /m "Continue anyway"
+    if errorlevel 2 exit /b 1
+    echo.
+) else (
+    echo [OK] Running as Administrator.
+)
+
 REM -- Step 1: Check Python is available --
 where python.exe >nul 2>&1
 if errorlevel 1 (

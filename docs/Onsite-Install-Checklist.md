@@ -12,9 +12,25 @@ Total time per PC: ~10 minutes.
 
 Just call recording + mirroring to central (the "recording-only" flow already built
 into the repo, `scripts/setup-recorder.bat`). NOT the full dev environment — no
-global installs, no chat-push, no local pipeline. Everything lives inside one folder
-you create; nothing touches the system outside it. Uninstalling later = delete the
-folder + remove one scheduled task (see bottom).
+global Python packages, no chat-push, no local pipeline. Everything lives inside one
+folder you create; nothing is written outside it *except one system-wide audio
+registry setting* (see next box). Uninstalling later = delete the folder + remove one
+scheduled task (see bottom).
+
+> ### ⚠️ Run everything as Administrator — this is the #1 thing that breaks the visit
+>
+> The recorder disables **exclusive mode** on the PC's audio devices (a write to
+> `HKEY_LOCAL_MACHINE`). Without it, Teams can grab the speaker/mic in exclusive
+> mode and you get **0-byte recordings** — the exact bug we're fixing. That registry
+> write, and registering the autostart task at highest privilege, **both need admin.**
+>
+> - **Open PowerShell with "Run as administrator"** for every step below.
+> - The dev should ideally be a **local admin** on their PC. If they are NOT, recording
+>   still works after this admin setup (the setting persists), **but** if they later
+>   plug in a *different* headset, exclusive mode won't auto-disable on it until an
+>   admin re-runs setup. Note the headset they use today.
+> - Use the **Teams desktop app**, not Teams-in-a-browser — the recorder detects the
+>   `ms-teams.exe` audio session; the web client isn't detected.
 
 ---
 
@@ -38,12 +54,18 @@ folder + remove one scheduled task (see bottom).
    sometimes off-net, that's fine (retry logic exists) but the first verify step
    below needs it reachable at least once.
 
+4. **Confirm you can get admin on each PC** (see the ⚠️ box above). Either the dev is
+   a local admin, or bring/arrange the admin credential. Without admin the recordings
+   can come out 0-byte and you'd have to come back — the whole point of one-shot.
+
 ---
 
 ## AT EACH PC — Step 1: pick a drive and create the folder
 
-Open a **normal PowerShell window** (no admin needed). Check which local drive has
-space (D:, E:, or F: — whichever exists and isn't the system drive):
+Open PowerShell **as Administrator** (Start → type "PowerShell" → right-click → *Run
+as administrator*; accept the UAC prompt). Confirm the title bar says
+"Administrator". Then check which local drive has space (D:, E:, or F: — whichever
+exists and isn't the system drive):
 
 ```powershell
 Get-PSDrive -PSProvider FileSystem | Select-Object Name, @{n='FreeGB';e={[math]::Round($_.Free/1GB,1)}}
@@ -146,12 +168,22 @@ Wait 2 minutes, then:
 
 ```powershell
 $you = ((Select-String -Path .\.env -Pattern '^NUCLEUS_DEV_NAME=').Line -replace 'NUCLEUS_DEV_NAME=','').Trim()
-Get-ChildItem "\\172.16.205.123\nucleus-central\$you\$(Get-Date -Format 'yyyy-MM-dd')\calls\"
+Get-ChildItem "\\172.16.205.123\nucleus-central\$you\$(Get-Date -Format 'yyyy-MM-dd')\calls\" | Select-Object Name, Length
 ```
 
-You should see three files per call: `*_mic.wav`, `*_speaker.wav`, `*.json`. If the
-`.json` is missing, wait another minute and re-run the check — it lands last, after
-both WAVs finish uploading.
+You should see three files per call: `*_mic.wav`, `*_speaker.wav`, `*.json`.
+
+**The real success test is the `Length` column — BOTH `_mic.wav` AND `_speaker.wav`
+must be greater than 0.** A 0-byte track = the exclusive-mode fix didn't apply
+(almost always: PowerShell wasn't run as admin, or the dev isn't a local admin). If
+either track is 0 bytes:
+1. Confirm the PowerShell title bar says "Administrator". If not, close it, reopen as
+   admin, re-run `.\scripts\setup-recorder.bat`, and make a fresh test call.
+2. If it's still 0 bytes and the dev is a standard (non-admin) user, have their admin
+   run the setup once, or temporarily grant admin — the audio-registry fix needs it.
+
+If the `.json` is missing but both WAVs are non-zero, wait another minute and re-run —
+`.json` lands last, after both WAVs finish uploading.
 
 **If nothing shows up at all:**
 
@@ -159,19 +191,23 @@ both WAVs finish uploading.
 Get-Content .\logs\voice_daemon.log -Tail 50
 ```
 
-Look for `[voice] Teams gate OK (connected call, Active audio)` — if that line is
-missing, the daemon never saw an active call (check Teams audio device settings:
-Settings → Devices → Microphone must be the Windows default input, not a virtual
-device). If you see `ping 172.16.205.123` timing out, the PC isn't on the office
-network/VPN.
+- Look for `[voice] Teams gate OK (connected call, Active audio)` — if missing, the
+  daemon never saw an active call. Check it's the **Teams desktop app** (not browser),
+  and Teams → Settings → Devices → Microphone is a real device (the Windows default
+  input), not a virtual/"Default Communications" device.
+- Look for `[audio] exclusive mode disabled for ...` — if instead you see
+  `exclusive mode fix skipped ... Access is denied`, that confirms the admin problem
+  above.
+- `ping 172.16.205.123` timing out → the PC isn't on the office network/VPN.
 
 ---
 
 ## Done — tell Titu (yourself) it's confirmed
 
-Once Step 7 shows all three files, this PC is fully wired: every Teams call from now
-on mirrors to central automatically, gets transcribed (Google STT Chirp v2), and
-feeds the requirement pipeline — no further action needed on this machine.
+Once Step 7 shows all three files **with both WAVs non-zero**, this PC is fully wired:
+every Teams call from now on mirrors to central automatically, gets transcribed
+(Google STT Chirp v2), and feeds the requirement pipeline — no further action needed
+on this machine.
 
 ---
 
