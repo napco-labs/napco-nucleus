@@ -167,11 +167,23 @@ Have the dev make (or join) any Teams call, **at least 20 seconds**, then hang u
 Wait 2 minutes, then:
 
 ```powershell
+# The share only accepts the 'nucleus' Samba user, and Windows blocks
+# anonymous/guest browse — so authenticate the session FIRST, or the listing
+# below (and File Explorer) will say "access denied" even though recording works.
+$u   = ((Select-String -Path .\.env -Pattern '^NUCLEUS_SAMBA_USER=').Line     -replace '^NUCLEUS_SAMBA_USER=','').Trim()
+$p   = ((Select-String -Path .\.env -Pattern '^NUCLEUS_SAMBA_PASSWORD=').Line -replace '^NUCLEUS_SAMBA_PASSWORD=','').Trim()
+net use \\172.16.205.123\nucleus-central /user:$u $p
+
 $you = ((Select-String -Path .\.env -Pattern '^NUCLEUS_DEV_NAME=').Line -replace 'NUCLEUS_DEV_NAME=','').Trim()
 Get-ChildItem "\\172.16.205.123\nucleus-central\$you\$(Get-Date -Format 'yyyy-MM-dd')\calls\" | Select-Object Name, Length
 ```
 
 You should see three files per call: `*_mic.wav`, `*_speaker.wav`, `*.json`.
+
+> **"Access denied" / can't open the share in File Explorer?** That's expected until
+> you run the `net use ... /user:nucleus` line above — the share refuses guest access.
+> It does **not** mean recording is broken; the recorder authenticates itself on every
+> upload. Once you've run `net use`, both File Explorer and the listing work.
 
 **The real success test is the `Length` column — BOTH `_mic.wav` AND `_speaker.wav`
 must be greater than 0.** A 0-byte track = the exclusive-mode fix didn't apply
@@ -198,7 +210,12 @@ Get-Content .\logs\voice_daemon.log -Tail 50
 - Look for `[audio] exclusive mode disabled for ...` — if instead you see
   `exclusive mode fix skipped ... Access is denied`, that confirms the admin problem
   above.
-- `ping 172.16.205.123` timing out → the PC isn't on the office network/VPN.
+- Tell network vs. auth problems apart:
+  - `ping 172.16.205.123` **times out** → network/VPN issue, the PC can't reach central.
+  - `ping` works but the share says **"access denied" / "not accessible"** → auth, not
+    network. Run the `net use \\172.16.205.123\nucleus-central /user:nucleus ...` line
+    from Step 7. The recorder is unaffected (it authenticates itself); this only blocks
+    your manual browse.
 
 ---
 
