@@ -249,15 +249,15 @@ def _build_message(day: str, to_addrs: list[str], cc_addrs: list[str],
     lines.append("")
     if reqs:
         lines.append(
-            "Below are the requirement TITLES identified from the last "
-            "24 hours (MS Teams calls, chats, email, and Google Drive). "
-            "These are titles only — for the full description, sources, "
-            "and confidence notes, please see the attached document.")
+            "Please find attached the Requirements Verification document "
+            "prepared from your recent communications (MS Teams calls, chats, "
+            "email, and Google Drive). It sets out the requirements we "
+            "identified, together with any open questions where we need your "
+            "input to finalise them.")
         lines.append("")
-        for i, r in enumerate(reqs):
-            if i:
-                lines.append("")  # blank line between requirements for readability
-            lines.append(f"  Requirement#{r['n']}: {r['title']}")
+        lines.append(
+            "Kindly review the attached document and reply with your "
+            "confirmation or any corrections, and we will proceed accordingly.")
     elif note:
         lines.append(note)
     else:
@@ -266,6 +266,7 @@ def _build_message(day: str, to_addrs: list[str], cc_addrs: list[str],
             "email, or Google Drive last night. This is just a notification "
             "to let you know the scenario. No action needed.")
     lines.append("")
+
     # Daily flair: a live coverage insight + a rotating quality quote or a
     # Nucleus reassurance line for the devs. Fully best-effort — empty on any
     # error so it can never break or delay the send.

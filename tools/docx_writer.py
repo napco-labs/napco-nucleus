@@ -163,8 +163,18 @@ async def write_aggregation_docx_tool(args):
     "in data/requirements/ — or, when `label` is given (e.g. a project name "
     "like 'CardAccess 4K' or 'MVP Access'), 'Requirements Verification - "
     "<label> <YYYY-MM-DD>.docx', so one session can emit one doc per project. "
+    "Optional `open_questions` is a list of dicts with keys: audience (str — "
+    "WHO can answer, e.g. a person named in the discussion like 'Siva', a "
+    "team like 'Madeye Team', or 'Client') and question (str — one concrete, "
+    "answerable clarifying question). Use it for anything genuinely unclear or "
+    "ambiguous in the sources — a requirement whose scope/behaviour you could "
+    "not pin down, a contradiction, or a decision the client must make. These "
+    "render as a grouped 'Open Questions / Clarifications' section under the "
+    "requirements and flow into the emailed rollup. NEVER invent questions to "
+    "fill the section — omit it when everything was clear. "
     "Returns {path, requirement_count}.",
-    {"requirements": list, "output_path": str, "label": str},
+    {"requirements": list, "output_path": str, "label": str,
+     "open_questions": list},
 )
 async def write_verification_docx_tool(args):
     from docx import Document  # lazy
@@ -320,6 +330,43 @@ async def write_verification_docx_tool(args):
                 run.italic = True
                 run.font.size = Pt(9)
                 run.font.color.rgb = color
+
+    # ── Open Questions / Clarifications ─────────────────────────────
+    # Anything the agent could not pin down becomes a concrete question,
+    # grouped by WHO can answer it. Parsed back out by daily_rollup so the
+    # same items appear in the emailed rollup body. Backward-compatible:
+    # no questions → no section, doc looks exactly as before.
+    raw_questions = args.get("open_questions") or []
+    grouped: dict[str, list[str]] = {}
+    order: list[str] = []
+    if isinstance(raw_questions, list):
+        for q in raw_questions:
+            if not isinstance(q, dict):
+                continue
+            audience = (q.get("audience") or "").strip() or "General"
+            question = (q.get("question") or "").strip()
+            if not question:
+                continue
+            if audience not in grouped:
+                grouped[audience] = []
+                order.append(audience)
+            grouped[audience].append(question)
+
+    if order:
+        doc.add_paragraph()
+        doc.add_heading("Open Questions / Clarifications", level=1)
+        intro_q = doc.add_paragraph()
+        intro_q.add_run(
+            "Some items below were not fully clear from the discussion. "
+            "Please help us close these so the requirements can be finalised."
+        ).italic = True
+        for audience in order:
+            ap = doc.add_paragraph()
+            ap.add_run(f"Questions for {audience}:").bold = True
+            for question in grouped[audience]:
+                qp = doc.add_paragraph()
+                qp.paragraph_format.left_indent = Pt(18)
+                qp.add_run(question)
 
     doc.add_paragraph()
     closing = doc.add_paragraph()

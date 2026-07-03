@@ -109,6 +109,15 @@ The remaining requirements (those NOT found in `requirements_seen`) are the NEW 
 
 If ALL candidates were dedup hits, STOP and report "All identified requirements were already drafted in prior sessions. No new requirements to verify." Do not produce an empty verification doc, do not draft an email.
 
+### 2.6 Collect open questions (clarifications) — DO NOT DROP THEM
+
+Client discussions almost always contain **open questions and decisions that are NOT build tasks** — things that are unclear, ambiguous, or that someone must confirm before a requirement can be finalised (e.g. "Is the Location field mandatory when creating a reader?", "What is the maximum Facility Code?", "Should we sync all personnel or only access-group members?"). Historically these were silently discarded because they aren't requirements — that was a mistake and lost real signal. **Capture them, do not drop them.** For each, produce a dict:
+
+- `audience`: WHO can answer it — a person named in the discussion (e.g. `Siva`), the counterparty team (e.g. `Madeye Team`), or `Client` when unspecified. Group questions under the same audience string so they render together.
+- `question`: ONE concrete, answerable question in plain English (translate from Bangla if needed), phrased so the recipient can reply directly.
+
+Collect these into an `open_questions` list. Include ONLY genuine ambiguities/decisions raised in the sources — NEVER invent questions to fill the section. An empty list is correct when everything was clear.
+
 ### 3. Write the Requirements Verification doc — ONE PER PROJECT
 
 **Group the requirements by `project`** (from step 2). For EACH non-empty project group, call:
@@ -116,6 +125,8 @@ If ALL candidates were dedup hits, STOP and report "All identified requirements 
 `write_verification_docx(requirements=<this group's list>, label="<CardAccess 4K | MVP Access>")` — writes `data/requirements/Requirements Verification - <label> <YYYY-MM-DD>.docx`. Use the human label (`cardaccess-4k` → `CardAccess 4K`, `mvp-access` → `MVP Access`). Output is a flat numbered list, one paragraph per task: `1. [P1/S2 ~4h] <title> - <summary>`, followed by a small grey citation/confidence/rationale line.
 
 Pass all fields per task (title, summary, source_refs, confidence, rationale, priority, severity, estimate_hours) — the tool renders the `[priority/severity ~Nh]` tag, plus confidence and rationale, and items below 0.75 are highlighted in amber. Capture EACH group's `{path, requirement_count, mean_confidence, low_confidence_count}`; surface them in the final reply. If only one project has requirements, you write just one doc — that's fine.
+
+Also pass `open_questions=<the list from step 2.6>` to the project doc the questions relate to (when the session spans both projects, attach each question to its project's doc; if that split is unclear, put them all on the primary project's doc). The tool renders an "Open Questions / Clarifications" section, grouped by audience, under the requirements — and `daily_rollup` mirrors it into the emailed rollup. Even when a project has clarifications but few/no new build tasks, the questions still belong in that project's doc so the team sees them.
 
 ### 4. Draft the client email(s) — ONE PER PROJECT, TWO attachments each
 
