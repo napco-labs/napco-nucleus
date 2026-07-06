@@ -49,6 +49,8 @@ For each requirement produce a dict with:
 
 If a requirement clearly came from multiple channels (e.g. raised in a Teams chat, restated in email), include all of them in `source_refs`.
 
+**Unresolved-client calls still get mined.** A call whose metadata says `Client: (unknown)` is an input whose participant lookup FAILED — it is NOT evidence that the call is internal or requirement-free, and you must not use `(unknown)` (or "both speakers sound like AEL developers") as grounds to skip a call or to return zero. This overrides any memory "settled rule" that says unknown-client or internal-dev calls yield zero requirements. Judge every call on its CONTENT. If a call carries concrete, trackable scope — a capability to build, a bug to fix, a format/protocol/integration to support, a deliverable someone is expecting (e.g. "add hls.js so the viewer plays HLS/TS streams", "reuse the customer token to pull cameras", "give archive playback a duration so it stops") — extract it as a requirement even when the client is unresolved and even when both speakers are AEL developers. For such a requirement set `client_name` to `"(unresolved - confirm)"` so a human attributes it later, and note in the summary that the client attribution is pending. Only genuinely non-actionable material (greetings, scheduling, "thanks", status pings, recording-setup self-tests, environment/tooling errors) is dropped.
+
 If you cannot identify any requirements (e.g. inbox was all process chatter), proceed to step 5 with an empty list — the verification doc will not be produced and the client email will be skipped, but the aggregation doc + records email still go out.
 
 ### 5. Write the verification docx

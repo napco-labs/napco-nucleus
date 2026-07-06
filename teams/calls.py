@@ -248,10 +248,21 @@ def resolve_client_for_recording(
     # Resolve current user's MRI: try authoritative first, then fall back.
     self_mri = _self_mri_from_messages(db, rcinfo) or _self_mri_from_db_names(db)
 
-    best: Optional[dict] = None
-    best_delta_ms: Optional[int] = None
     window_ms = window_seconds * 1000
 
+    # Harvest EVERY Event/Call message once. We then need two different views of
+    # them, because the nearest event to recording-start and the event that
+    # actually carries the participant list are usually NOT the same message:
+    # Teams emits a `callStarted` event (no <partlist>) at pickup and a
+    # `callEnded` event (the partlist WITH displayNames + durations) at hangup.
+    # For a long call the callStarted is nearest to recording-start but empty,
+    # while the callEnded that holds the participants is minutes/hours away —
+    # outside `window`. Matching only the nearest event therefore returned
+    # participants:[] on every longer call and left client_name "(unknown)"
+    # (e.g. Isruk's 47-min call, 2026-07-06). So: collect all events, anchor on
+    # the nearest, then backfill participants from the SAME call's richest
+    # partlist even when it lies outside the window.
+    events: list[dict] = []
     for rec in db[rcinfo.dbid_no]["replychains"].iterate_records():
         v = rec.value
         if not isinstance(v, dict):
@@ -265,14 +276,8 @@ def resolve_client_for_recording(
             arrival = int(msg.get("originalArrivalTime") or 0)
             if not arrival:
                 continue
-            delta = abs(arrival - start_time_unix_ms)
-            if delta > window_ms:
-                continue
-            if best_delta_ms is not None and delta >= best_delta_ms:
-                continue
-            content = msg.get("content") or ""
-            call_type, call_id, parts = _parse_partlist(content)
-            best = {
+            call_type, call_id, parts = _parse_partlist(msg.get("content") or "")
+            events.append({
                 "arrival_ms": arrival,
                 "conversation_id": cid,
                 "call_type": call_type,
@@ -280,7 +285,17 @@ def resolve_client_for_recording(
                 "creator": msg.get("creator", ""),
                 "is_self_caller": bool(msg.get("isSentByCurrentUser", False)),
                 "participants": parts,
-            }
+            })
+
+    # Anchor: the nearest event to recording-start, within the time window.
+    best: Optional[dict] = None
+    best_delta_ms: Optional[int] = None
+    for ev in events:
+        delta = abs(ev["arrival_ms"] - start_time_unix_ms)
+        if delta > window_ms:
+            continue
+        if best_delta_ms is None or delta < best_delta_ms:
+            best = ev
             best_delta_ms = delta
 
     if best is None:
@@ -291,7 +306,26 @@ def resolve_client_for_recording(
             "self_mri": self_mri,
         }
 
-    clients = [p for p in best["participants"]
+    # Backfill participants from the same call's richest partlist when the
+    # anchor (typically callStarted) carried none. Match by callId — the
+    # started/ended events of one call share it — and only fall back to the
+    # conversation when callId is absent. Prefer the event with the most
+    # participants (the callEnded partlist). Deliberately NOT window-limited:
+    # reaching the far-away callEnded is the whole point of this backfill.
+    participants = best["participants"]
+    if not participants:
+        anchor_call = best["call_id"]
+        anchor_conv = best["conversation_id"]
+        for ev in events:
+            if not ev["participants"]:
+                continue
+            same_call = bool(anchor_call) and ev["call_id"] == anchor_call
+            same_conv = (not anchor_call and bool(anchor_conv)
+                         and ev["conversation_id"] == anchor_conv)
+            if (same_call or same_conv) and len(ev["participants"]) > len(participants):
+                participants = ev["participants"]
+
+    clients = [p for p in participants
                if not _is_self(p["identity"], self_mri)]
     primary = clients[0]["name"] if clients else "(unknown)"
 
@@ -304,7 +338,7 @@ def resolve_client_for_recording(
         "started_at_ms": best["arrival_ms"],
         "self_mri": self_mri,
         "is_self_caller": best["is_self_caller"],
-        "participants": best["participants"],
+        "participants": participants,
         "clients": clients,
         "client_name": primary,
         "delta_seconds": (best_delta_ms or 0) / 1000.0,
