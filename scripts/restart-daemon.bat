@@ -28,7 +28,11 @@ schtasks /Run /TN "%TASK%" >nul 2>&1
 ping -n 5 127.0.0.1 >nul
 
 echo.
-echo [restart-daemon] Running voice_daemon processes (expect 1):
+echo [restart-daemon] Running voice_daemon processes:
+echo    NOTE: TWO python.exe here is NORMAL and is ONE logical daemon --
+echo    .venv\Scripts\python.exe is a redirector stub that launches the venv's
+echo    base interpreter (Python312\python.exe) as a child; the child does the
+echo    work. Only worry if you see FOUR+ (a real duplicate) or ZERO.
 powershell -NoProfile -Command "Get-CimInstance Win32_Process -Filter \"Name='python.exe'\" | Where-Object { $_.CommandLine -match 'voice_daemon' } | Select-Object ProcessId, ExecutablePath | Format-Table -AutoSize"
 
 echo [restart-daemon] Done. Live log:  powershell -c \"Get-Content logs\voice_daemon.log -Wait -Tail 50\"
