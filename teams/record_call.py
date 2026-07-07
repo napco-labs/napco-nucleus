@@ -1064,18 +1064,24 @@ def _write_metadata_and_upload(
 
     # Allowlist filter (record-then-filter). The daemon records EVERY call;
     # here at end-of-call we keep only calls that resolve to an allowlisted
-    # chat/member. Discard ONLY a call we could CONFIRM is off the allowlist
-    # (matched + no chat/member hit). An UNRESOLVED call (matched:false) is
-    # KEPT and pushed (fail-open, Titu 2026-07-07) so a wanted call whose
-    # lookup fails is never silently lost — the failure mode that dropped every
-    # call on 2026-07-06. Off (both INCLUDE vars empty) = keep every call.
+    # chat/member. Discard ONLY when we POSITIVELY identified the other
+    # parties and none is on the allowlist. Two "unknown" outcomes are both
+    # KEPT (fail-open, Titu 2026-07-07) so a wanted call is never silently
+    # lost — the failure mode that dropped every call on 2026-07-06:
+    #   - matched:false            -> no call event found at all.
+    #   - matched:true, participants:[] -> event found but Teams hadn't
+    #     flushed the callEnded partlist yet, so client_name is "(unknown)".
+    #     This one intermittently hits real Salman calls, so discarding on it
+    #     would drop him. We require a non-empty participant list before we're
+    #     willing to discard. Off (both INCLUDE vars empty) = keep every call.
     from teams._include import allowlist_active, call_matches_allowlist
-    if (allowlist_active() and client_info.get("matched")
-            and not call_matches_allowlist(
-                client_info.get("conversation_id") or "",
-                client_info.get("participants") or [])):
+    conv_id = client_info.get("conversation_id") or ""
+    participants = client_info.get("participants") or []
+    identified = bool(client_info.get("matched")) and bool(participants)
+    if (allowlist_active() and identified
+            and not call_matches_allowlist(conv_id, participants)):
         client = client_info.get("client_name") or "(unknown)"
-        cid = client_info.get("conversation_id") or ""
+        cid = conv_id
         print(f"  allowlist: call NOT on the allowlist "
               f"(client={client}, cid={cid}) — discarding; no json written, "
               f"so central never transcribes it.")
