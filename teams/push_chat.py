@@ -48,6 +48,7 @@ sys.path.insert(0, str(_HERE))
 
 from teams import attachment_resolver, reader, store  # noqa: E402
 from teams._exclude import excluded_conversation_ids  # noqa: E402
+from teams._include import allowlist_active, chat_included  # noqa: E402
 
 
 LOCAL_OUT_DIR = _HERE / "data" / "teams" / "chat-pushes"
@@ -305,13 +306,42 @@ def main() -> int:
         rows = store.list_chat_registry(order="activity")
     # store.list_chat_registry returns sqlite3.Row; flatten to plain dicts
     # so .get() works downstream (Row only supports __getitem__).
+    def _parse_participants(raw) -> list[str]:
+        # participants_json is a JSON list of display-name strings (store.py).
+        if not raw:
+            return []
+        try:
+            val = json.loads(raw)
+        except (ValueError, TypeError):
+            return []
+        return [str(x) for x in val] if isinstance(val, list) else []
+
     chat_lookup: dict[str, dict] = {
         r["conversation_id"]: {
             "title": r["title"],
             "chat_number": r["chat_number"],
+            "participants": _parse_participants(r["participants_json"]),
         }
         for r in rows
     }
+
+    # Allowlist (NUCLEUS_INCLUDE_CHATS / NUCLEUS_INCLUDE_MEMBERS): when active,
+    # keep ONLY chats whose id is listed or whose participants include a listed
+    # member — the mirror of the voice daemon's call allowlist, so "record only
+    # the official list" holds for chat text too. Off (both vars empty) = keep
+    # every chat, so this stays backward-compatible. Runs before the exclude
+    # filter; exclude still wins as a hard override on top.
+    if allowlist_active():
+        before = len(chat_lookup)
+        kept = {
+            cid: info for cid, info in chat_lookup.items()
+            if chat_included(cid, info.get("participants") or [])
+        }
+        dropped_n = before - len(kept)
+        chat_lookup = kept
+        print(f"[push_chat] allowlist active — keeping {len(chat_lookup)} of "
+              f"{before} chat(s) via NUCLEUS_INCLUDE_CHATS/MEMBERS "
+              f"({dropped_n} skipped).")
 
     excluded = excluded_conversation_ids()
     if excluded:

@@ -1043,15 +1043,10 @@ def _write_metadata_and_upload(
     ended_at_ms = int(ended_dt.timestamp() * 1000)
     duration_s = round((ended_at_ms - started_at_ms) / 1000.0, 1)
 
-    # Compress the finalized tracks to Opus before metadata + upload. Raw call
-    # WAVs (500-800 MB) choke the off-net Drive sync; Opus is ~15-20x smaller
-    # and central reads it natively via ffmpeg. Opt out with
-    # NUCLEUS_COMPRESS_OPUS=0; falls back to raw WAV if ffmpeg is unavailable.
-    if os.environ.get("NUCLEUS_COMPRESS_OPUS", "1") != "0":
-        mic_path = _compress_track(mic_path)
-        spk_path = _compress_track(spk_path)
-
-    # Resolve client via Teams IndexedDB. Best-effort.
+    # Resolve client via Teams IndexedDB FIRST — before compression — so the
+    # allowlist filter below can (a) act on the raw WAV names the live mirror
+    # left on central and (b) skip the CPU cost of compressing a call we're
+    # about to discard. Best-effort.
     client_info: dict = {"matched": False, "reason": "resolver not run"}
     try:
         from teams.calls import resolve_client_for_recording
@@ -1066,6 +1061,37 @@ def _write_metadata_and_upload(
               f"delta={client_info.get('delta_seconds'):.1f}s)")
     else:
         print(f"  client: (unknown) [{client_info.get('reason')}]")
+
+    # Allowlist filter (record-then-filter). The daemon records EVERY call;
+    # here at end-of-call we keep only calls that resolve to an allowlisted
+    # chat/member. Discard ONLY a call we could CONFIRM is off the allowlist
+    # (matched + no chat/member hit). An UNRESOLVED call (matched:false) is
+    # KEPT and pushed (fail-open, Titu 2026-07-07) so a wanted call whose
+    # lookup fails is never silently lost — the failure mode that dropped every
+    # call on 2026-07-06. Off (both INCLUDE vars empty) = keep every call.
+    from teams._include import allowlist_active, call_matches_allowlist
+    if (allowlist_active() and client_info.get("matched")
+            and not call_matches_allowlist(
+                client_info.get("conversation_id") or "",
+                client_info.get("participants") or [])):
+        client = client_info.get("client_name") or "(unknown)"
+        cid = client_info.get("conversation_id") or ""
+        print(f"  allowlist: call NOT on the allowlist "
+              f"(client={client}, cid={cid}) — discarding; no json written, "
+              f"so central never transcribes it.")
+        # The live mirror already streamed the raw WAVs to central; remove them
+        # so no non-allowlisted audio lingers there. Local WAVs stay in out_dir
+        # (gitignored) for audit; without a json central won't pick them up.
+        _discard_from_central((mic_path.name, spk_path.name))
+        return
+
+    # Compress the finalized tracks to Opus before metadata + upload. Raw call
+    # WAVs (500-800 MB) choke the off-net Drive sync; Opus is ~15-20x smaller
+    # and central reads it natively via ffmpeg. Opt out with
+    # NUCLEUS_COMPRESS_OPUS=0; falls back to raw WAV if ffmpeg is unavailable.
+    if os.environ.get("NUCLEUS_COMPRESS_OPUS", "1") != "0":
+        mic_path = _compress_track(mic_path)
+        spk_path = _compress_track(spk_path)
 
     metadata = {
         "session": stamp,
@@ -1160,6 +1186,36 @@ def _central_calls_dir() -> Path | None:
         return None
     day = datetime.date.today().strftime("%Y-%m-%d")
     return Path(raw) / _dev_name() / day / "calls"
+
+
+def _discard_from_central(central_wav_names) -> None:
+    """Delete a non-allowlisted call's mirrored raw WAVs from central.
+
+    _mirror_raw_to_central streams the raw WAVs to central DURING the call,
+    before the allowlist decision can be made (participants aren't known until
+    the call ends). When the finalizer decides the call is off the allowlist,
+    remove those mirrored WAVs (and any stale .part) so no non-allowlisted
+    audio is retained on central. No opus/json is ever written on the discard
+    path, so there is nothing else to clean. Best-effort; never raises.
+    """
+    central_dir = _central_calls_dir()
+    if central_dir is None:
+        return
+    try:
+        from teams._central import ensure_smb_auth
+        ensure_smb_auth(os.environ.get("NUCLEUS_CENTRAL_PATH", ""))
+    except Exception:
+        pass
+    for name in central_wav_names:
+        for target in (central_dir / name, central_dir / f"{name}.part"):
+            try:
+                if target.exists():
+                    target.unlink()
+                    print(f"  allowlist: removed mirrored {target.name} "
+                          f"from central.")
+            except OSError as e:
+                print(f"  allowlist: could not remove {target.name} from "
+                      f"central ({e}).", file=sys.stderr)
 
 
 def _mirror_raw_to_central(spk_path: Path, mic_path: Path,

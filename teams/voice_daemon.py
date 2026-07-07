@@ -63,8 +63,19 @@ from pathlib import Path
 
 import numpy as np
 import pyaudiowpatch as pyaudio
+from dotenv import load_dotenv
 
 _HERE = Path(__file__).parent.parent
+
+# The daemon is launched by scripts/start-daemon.bat, which sets only
+# PYTHONIOENCODING — it does NOT load .env. So, unlike record_call.py, this
+# process would get NONE of the .env config unless we load it here. Without
+# this line NUCLEUS_EXCLUDE_CHATS and the NUCLEUS_INCLUDE_* allowlist are
+# silently empty inside the daemon (the exclude gate never fires). Load once
+# at import; napco_config reads os.environ per-call, so edits apply on the
+# next daemon restart. override=True mirrors record_call.py.
+load_dotenv(_HERE / ".env", override=True)
+
 STOP_FILE = _HERE / "data" / "teams" / ".stop_recording"
 PHRASE_FILE = _HERE / "data" / "teams" / "voice_phrases.json"
 
@@ -361,6 +372,13 @@ def _audio_session_watcher(state: dict, stop_evt: threading.Event,
     recording = False   # are we in an active recording cycle?
     off_streak = 0      # consecutive NOT-Active polls (toward STOP)
     on_streak = 0       # consecutive Active polls (toward START)
+    # The allowlist is NOT enforced here. The daemon records EVERY Teams call;
+    # the allowlist filter runs at end-of-call in record_call's finalizer
+    # (record-then-filter). Enforcing it at call-START failed because Teams
+    # hasn't written the call's participant list to its local DB that early, so
+    # every call resolved to (unknown) and was wrongly dropped (2026-07-06 →
+    # zero recordings, empty requirement rollups). See
+    # teams._include.call_matches_allowlist.
 
     def _audio_state() -> tuple[int, str]:
         try:
@@ -385,11 +403,13 @@ def _audio_session_watcher(state: dict, stop_evt: threading.Event,
 
         if not recording:
             # Look for a call to START: Teams Active, confirmed over N polls.
+            # Record every call — the allowlist is applied at end-of-call in
+            # the finalizer (record-then-filter), not here.
             if is_active:
                 on_streak += 1
                 if on_streak >= start_confirm:
                     print(f"[voice] watcher: call received — recording "
-                          f"(Active confirmed, {on_streak} polls) — {reason}")
+                          f"(Active confirmed {on_streak} polls) — {reason}")
                     _start_recording(state)
                     recording = True
                     off_streak = 0
