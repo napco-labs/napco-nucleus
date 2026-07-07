@@ -100,21 +100,56 @@ def _timed(fn):
 
 @_timed
 def check_smb_share():
-    """NUCLEUS_CENTRAL_PATH is reachable + we can write a probe file."""
+    """Central is reachable + writable *by the exact path the recorder uses*.
+
+    Mirrors teams.record_call's push: authenticate with the .env Samba creds
+    (ensure_smb_auth) BEFORE probing, and write into THIS dev's own calls dir
+    (<central>/<dev>/<today>/calls) — not just the share root — so a per-dev
+    permission or dev-name problem surfaces. This is the check to read first
+    when a dev's calls "aren't reaching central": the detail line reports the
+    central path, the resolved dev name, and whether Samba creds are set,
+    which together pinpoint config vs network vs auth.
+    """
     raw = (os.environ.get("NUCLEUS_CENTRAL_PATH") or "").strip()
     if not raw:
-        return False, "NUCLEUS_CENTRAL_PATH not set"
-    p = Path(raw)
-    if not p.exists():
-        return False, f"path does not exist: {p}"
-    probe = p / ".nucleus_healthcheck.tmp"
+        return False, ("NUCLEUS_CENTRAL_PATH not set — calls stay local / go "
+                       "to Drive only")
+    dev = (os.environ.get("NUCLEUS_DEV_NAME") or os.environ.get("USERNAME")
+           or socket.gethostname() or "unknown").strip()
+    have_creds = bool((os.environ.get("NUCLEUS_SAMBA_USER") or "").strip()
+                      and (os.environ.get("NUCLEUS_SAMBA_PASSWORD") or "").strip())
+    cfg = f"path={raw} dev={dev!r} samba_creds={'set' if have_creds else 'NONE'}"
+
+    # Authenticate exactly like the recorder does, then reset+retry once (the
+    # same idle-session cure record_call uses) so a stale mapping isn't misread
+    # as a hard failure.
     try:
+        from teams._central import ensure_smb_auth, reset_smb_auth
+        ensure_smb_auth(raw)
+    except Exception as e:
+        return False, f"ensure_smb_auth crashed: {e} | {cfg}"
+
+    if not Path(raw).exists():
+        try:
+            reset_smb_auth(raw)
+        except Exception:
+            pass
+        if not Path(raw).exists():
+            return False, (f"share unreachable after auth+reset (network? "
+                           f"creds? off-net?) | {cfg}")
+
+    # Probe the dev's real calls dir — that's the directory the recorder
+    # mkdir()s and copies into; root-only writability can hide a per-dev issue.
+    calls_dir = Path(raw) / dev / dt.date.today().strftime("%Y-%m-%d") / "calls"
+    probe = calls_dir / ".nucleus_healthcheck.tmp"
+    try:
+        calls_dir.mkdir(parents=True, exist_ok=True)
         probe.write_text(f"probe {dt.datetime.now().isoformat()}",
                          encoding="utf-8")
         probe.unlink()
     except Exception as e:
-        return False, f"not writable: {e}"
-    return True, f"reachable + writable: {p}"
+        return False, f"calls dir not writable: {e} | {cfg}"
+    return True, f"reachable + writable as recorder | {cfg}"
 
 
 @_timed

@@ -1206,6 +1206,20 @@ def _write_metadata_and_upload(
         except Exception as e2:
             print(f"  central upload FAILED (after retry): {e2}",
                   file=sys.stderr)
+            # Access-denied with no Samba creds set is the classic dev-PC
+            # misconfig: ensure_smb_auth no-ops when NUCLEUS_SAMBA_USER/
+            # PASSWORD are empty, so the share is hit under the dev's own
+            # Windows account, which lacks permission. Say so explicitly —
+            # this exact case stranded Isruk's calls (2026-07-07).
+            _have_creds = bool(
+                (os.environ.get("NUCLEUS_SAMBA_USER") or "").strip()
+                and (os.environ.get("NUCLEUS_SAMBA_PASSWORD") or "").strip())
+            if not _have_creds:
+                print("  HINT: NUCLEUS_SAMBA_USER / NUCLEUS_SAMBA_PASSWORD are "
+                      "not set in .env — the share almost certainly denied "
+                      "access. Add the shared 'nucleus' share credential (same "
+                      "as a working dev's .env), then re-run "
+                      "`py -3 -m teams.backfill_central`.", file=sys.stderr)
             # Last resort: if Drive upload is configured, push the small
             # opus+json there so the call still reaches central off-net.
             if _maybe_drive_upload(mic_path, spk_path, meta_path):
