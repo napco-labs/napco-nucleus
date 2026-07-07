@@ -27,6 +27,12 @@ $SambaUser = 'nucleus'
 $RepoRoot = Split-Path -Parent $PSScriptRoot
 $envPath  = Join-Path $RepoRoot '.env'
 
+# Prefer the project venv Python (recorder deps are installed there); fall back
+# to the py launcher on machines that installed deps globally. Quoted so a repo
+# path with spaces still works when interpolated into the cmd calls below.
+$venvPy = Join-Path $RepoRoot '.venv\Scripts\python.exe'
+if (Test-Path $venvPy) { $PY = """$venvPy""" } else { $PY = 'py -3' }
+
 Write-Host ""
 Write-Host "=== NN central setup ===" -ForegroundColor Cyan
 Write-Host "repo : $RepoRoot"
@@ -91,7 +97,7 @@ cmd /c """$RepoRoot\scripts\restart-daemon.bat"""
 
 # --- 6. backfill + healthcheck --------------------------------------------
 Write-Host "[6/6] pushing stranded calls to central, then healthcheck..." -ForegroundColor Yellow
-cmd /c "cd /d ""$RepoRoot"" && py -3 -m teams.backfill_central"
-cmd /c "cd /d ""$RepoRoot"" && py -3 -m tools.healthcheck"
+cmd /c "cd /d ""$RepoRoot"" && $PY -m teams.backfill_central"
+cmd /c "cd /d ""$RepoRoot"" && $PY -m tools.healthcheck"
 
 Write-Host "`nDone. Green if the healthcheck's smb-share line shows samba_creds=set and dev='$DevName'." -ForegroundColor Cyan
