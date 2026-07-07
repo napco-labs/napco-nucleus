@@ -1047,13 +1047,50 @@ def _write_metadata_and_upload(
     # allowlist filter below can (a) act on the raw WAV names the live mirror
     # left on central and (b) skip the CPU cost of compressing a call we're
     # about to discard. Best-effort.
-    client_info: dict = {"matched": False, "reason": "resolver not run"}
+    #
+    # Retry while the lookup is incomplete. Teams writes the callEnded partlist
+    # to IndexedDB slightly AFTER the call ends, so the first resolve right at
+    # hangup often finds the call event but no participants (client_name
+    # "(unknown)" — the intermittent "Salman shows as unknown"). Re-resolving a
+    # few times lets that write land, which recovers correct attribution AND
+    # lets the allowlist make a real keep/discard decision instead of always
+    # falling through to fail-open. This runs in the DETACHED finalizer, so the
+    # wait never blocks the next call. Tunables (0 retries = old behaviour):
+    #   NUCLEUS_RESOLVE_RETRIES=3         attempts after the first
+    #   NUCLEUS_RESOLVE_RETRY_WAIT_S=5    seconds between attempts
     try:
-        from teams.calls import resolve_client_for_recording
-        client_info = resolve_client_for_recording(
-            started_at_ms, window_seconds=180)
-    except Exception as e:
-        client_info = {"matched": False, "reason": f"resolver error: {e}"}
+        _retries = max(0, int(os.environ.get("NUCLEUS_RESOLVE_RETRIES", "3")))
+    except (ValueError, TypeError):
+        _retries = 3
+    try:
+        _retry_wait = float(
+            os.environ.get("NUCLEUS_RESOLVE_RETRY_WAIT_S", "5"))
+    except (ValueError, TypeError):
+        _retry_wait = 5.0
+
+    def _resolve_once() -> dict:
+        try:
+            from teams.calls import resolve_client_for_recording
+            return resolve_client_for_recording(
+                started_at_ms, window_seconds=180)
+        except Exception as e:
+            return {"matched": False, "reason": f"resolver error: {e}"}
+
+    client_info: dict = _resolve_once()
+    for _attempt in range(1, _retries + 1):
+        # Done once we have participants — that's what attribution and the
+        # allowlist filter both need.
+        if client_info.get("matched") and client_info.get("participants"):
+            break
+        print(f"  client: incomplete [{client_info.get('reason')}], "
+              f"retry {_attempt}/{_retries} in {_retry_wait:.0f}s...")
+        time.sleep(_retry_wait)
+        _nxt = _resolve_once()
+        # Take the newer result when it's strictly more informative (has
+        # participants, or newly matched) — never downgrade a good result.
+        if _nxt.get("participants") or (
+                _nxt.get("matched") and not client_info.get("matched")):
+            client_info = _nxt
 
     if client_info.get("matched"):
         print(f"  client: {client_info.get('client_name')} "
