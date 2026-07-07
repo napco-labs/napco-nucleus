@@ -1,18 +1,21 @@
 """Health check for the NAPCO Nucleus deployment.
 
-Verifies every external dependency the pipeline relies on:
+Verifies every external dependency the deployment relies on. Checks tagged
+[central] run only on the central box — set NUCLEUS_ROLE=central there. On a
+record-and-push dev laptop they auto-skip (that machine neither transcribes
+nor runs the agent), so a healthy dev laptop reports all-green.
 
     1. Central SMB share reachable + writable (NUCLEUS_CENTRAL_PATH)
-    2. IMAP login works (REQ_IMAP_*)
+    2. IMAP login works (REQ_IMAP_*)                          [central]
     3. Google Drive credentials valid + folder reachable
        (GOOGLE_CREDENTIALS_PATH + GDRIVE_AUDIO_FOLDER_ID)
-    4. faster-whisper model cached locally (one-off ~3 GB download
-       happens on first use otherwise — surfacing this avoids a
-       surprise during the first real call)
-    5. Claude CLI binary exists (CLAUDE_CLI_PATH or PATH)
-    6. nucleus_memory.db reachable and writable
-    7. Recent push activity per dev in the last 24h on central
-    8. Free disk space on the volume holding data/requirements/
+    4. Claude CLI binary exists (CLAUDE_CLI_PATH or PATH)     [central]
+    5. nucleus_memory.db reachable and writable
+    6. Recent push activity per dev in the last 24h on central
+    7. Free disk space on the volume holding data/requirements/
+
+(Call transcription is Google STT, not local Whisper, since 2026-06-08 — the
+former faster-whisper model check was removed with that switch.)
 
 Exit code 0 on all-green, 1 on any failure. With --alert-on-fail,
 also emails a summary via the existing SMTP credentials when
@@ -207,35 +210,6 @@ def check_drive():
 
 
 @_timed
-def check_whisper_model():
-    """Whisper large-v3 weights cached locally so the first real call
-    doesn't trigger a ~3 GB download."""
-    cache_root = (os.environ.get("HF_HOME")
-                  or os.environ.get("HUGGINGFACE_HUB_CACHE")
-                  or str(Path.home() / ".cache" / "huggingface" / "hub"))
-    cache_dir = Path(cache_root)
-    if not cache_dir.exists():
-        return False, f"HuggingFace cache not found at {cache_dir}"
-    # Look for any subdir containing "large-v3"
-    hits = list(cache_dir.rglob("*large-v3*"))
-    if not hits:
-        return False, (f"large-v3 weights not cached under {cache_dir} "
-                       f"(first call will trigger ~3 GB download)")
-    # Best-effort size check
-    total_bytes = 0
-    for d in hits[:3]:
-        if d.is_dir():
-            for f in d.rglob("*"):
-                if f.is_file():
-                    try:
-                        total_bytes += f.stat().st_size
-                    except OSError:
-                        pass
-    return True, (f"cached at {hits[0].relative_to(cache_dir).as_posix()} "
-                  f"(~{total_bytes / 1e9:.1f} GB)")
-
-
-@_timed
 def check_claude_cli():
     """The local Claude CLI binary the SDK shells out to."""
     try:
@@ -303,8 +277,8 @@ def check_recent_pushes():
 
 @_timed
 def check_disk_space():
-    """Free space on the data volume — Whisper transcription + verification
-    docs + drafts can chew through a few GB before you notice."""
+    """Free space on the data volume — transcription + verification docs +
+    drafts can chew through a few GB before you notice."""
     target = _HERE / "data" / "requirements"
     target.mkdir(parents=True, exist_ok=True)
     try:
@@ -324,22 +298,41 @@ _ALL_CHECKS = [
     check_smb_share,
     check_imap,
     check_drive,
-    check_whisper_model,
     check_claude_cli,
     check_memory_db,
     check_recent_pushes,
     check_disk_space,
 ]
 
+# Checks that only make sense on the central pipeline box — transcription, the
+# agent, and the requirement-email inbox all live there, not on a dev laptop.
+# Auto-skipped unless NUCLEUS_ROLE=central, so a record-and-push laptop reports
+# all-green. Drive is deliberately NOT here: dev laptops use Drive as the
+# off-net upload fallback, so verifying it there is meaningful.
+_CENTRAL_ONLY = {"imap", "claude-cli"}
+
+
+def _is_central() -> bool:
+    """True only on the central box (NUCLEUS_ROLE=central). Everywhere else
+    defaults to False so the central-only checks skip on dev laptops."""
+    return (os.environ.get("NUCLEUS_ROLE") or "").strip().lower() == "central"
+
 
 # ── Reporting ────────────────────────────────────────────────────
 
 def run_checks(skip: set[str]) -> list[CheckResult]:
+    central = _is_central()
     results: list[CheckResult] = []
     for fn in _ALL_CHECKS:
         name = fn.check_name
         if name in skip:
             results.append(CheckResult(name, True, "(skipped)", 0.0))
+            continue
+        if name in _CENTRAL_ONLY and not central:
+            results.append(CheckResult(
+                name, True,
+                "(skipped: central-only; set NUCLEUS_ROLE=central to run)",
+                0.0))
             continue
         print(f"  checking {name}... ", end="", flush=True)
         r = fn()
