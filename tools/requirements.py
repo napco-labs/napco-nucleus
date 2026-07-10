@@ -573,6 +573,13 @@ _PENDING_BACKLOG_DIR = _HERE / "data" / "requirements"
 )
 async def save_pending_backlog_tool(args):
     import datetime as _dt
+    if (os.environ.get("NUCLEUS_CHECK_MODE") or "").strip() == "1":
+        # Pipeline health check ("check my pipeline"): draft to Titu but do
+        # NOT write the pending backlog, so a check run never pollutes the
+        # manual-review queue. Mirrors the remember_requirement guard.
+        tasks = args.get("tasks") or []
+        return _text({"path": None, "count": 0, "check_mode": True,
+                      "note": "skipped pending-backlog write (NUCLEUS_CHECK_MODE=1)"})
     tasks = args.get("tasks") or []
     if not isinstance(tasks, list):
         return _text({"error": "tasks must be a list"})

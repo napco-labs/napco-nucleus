@@ -29,6 +29,15 @@ def _eval_mode() -> bool:
     return (os.environ.get("NAPCO_NUCLEUS_EVAL_MODE") or "").strip() == "1"
 
 
+def _check_mode() -> bool:
+    """True when NUCLEUS_CHECK_MODE=1 — a pipeline health check ("check my
+    pipeline") that STILL drafts a real verification email (to Titu) but
+    must NOT persist to requirements_seen / the pending backlog. Otherwise
+    a check run would dedup those requirements out of the scheduled 23:30
+    client draft. Distinct from dry-run, which suppresses the draft too."""
+    return (os.environ.get("NUCLEUS_CHECK_MODE") or "").strip() == "1"
+
+
 def _text(payload) -> dict:
     # ensure_ascii=False so Bangla reaches the agent as real UTF-8, not
     # \uXXXX escapes it can't decode in-sandbox (see requirements.py _text).
@@ -106,6 +115,11 @@ async def remember_requirement_tool(args):
         # itself on the second run.
         return _text({"remembered": False, "eval_mode": True,
                       "note": "skipped DB write (NAPCO_NUCLEUS_EVAL_MODE=1)"})
+    if _check_mode():
+        # Pipeline health check: draft to Titu but leave requirements_seen
+        # untouched so the scheduled client run still drafts these.
+        return _text({"remembered": False, "check_mode": True,
+                      "note": "skipped DB write (NUCLEUS_CHECK_MODE=1)"})
     ok = memory.remember_requirement(
         title=args.get("title", ""),
         source=args.get("source", ""),
