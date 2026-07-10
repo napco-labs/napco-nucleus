@@ -1111,12 +1111,17 @@ def _write_metadata_and_upload(
     #     This one intermittently hits real Salman calls, so discarding on it
     #     would drop him. We require a non-empty participant list before we're
     #     willing to discard. Off (both INCLUDE vars empty) = keep every call.
+    # Match on `clients` (participants MINUS self), never on `participants`:
+    # the local dev is on every one of their own calls, so an allowlist that
+    # names them would match every call through self and filter nothing. The
+    # question is "who ELSE was on this call", and `clients` answers it.
     from teams._include import allowlist_active, call_matches_allowlist
     conv_id = client_info.get("conversation_id") or ""
     participants = client_info.get("participants") or []
+    others = client_info.get("clients") or []
     identified = bool(client_info.get("matched")) and bool(participants)
     if (allowlist_active() and identified
-            and not call_matches_allowlist(conv_id, participants)):
+            and not call_matches_allowlist(conv_id, others)):
         client = client_info.get("client_name") or "(unknown)"
         cid = conv_id
         print(f"  allowlist: call NOT on the allowlist "

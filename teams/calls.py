@@ -1,7 +1,18 @@
 """Resolve client info for a recorded call by walking Teams IndexedDB.
 
-Each Teams call writes one `Event/Call` message into the local IndexedDB
-replychain database. The message carries:
+Two storage shapes exist, and we read both:
+
+`Teams:call-history-manager:` / `call-history` is the CURRENT source. Teams
+stopped writing Event/Call into the replychain on 2026-05-08 (verified on
+Titu's PC: 909 Event/Call rows, newest 2026-05-08 15:41, while chat in the
+same store stayed current). Every call since then resolved `(unknown)` with
+`matched:false, reason="no Event/Call within ..."`. Each call-history record
+carries `startTime`/`endTime` (ISO-8601 UTC), `callId`, `callType`,
+`callDirection`, and `originatorParticipant`/`targetParticipant` objects with
+an MRI `id` plus a `displayName`.
+
+`Event/Call` messages in the replychain database are the LEGACY source, kept
+as a fallback for calls predating the migration. The message carries:
   - `originalArrivalTime` (epoch ms) — when the call event landed
   - `creator` — MRI of who placed the call (e.g. "8:live:susmoy.saha")
   - `conversationId` — the chat the call belongs to
@@ -20,10 +31,151 @@ from __future__ import annotations
 
 import re
 import xml.etree.ElementTree as ET
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
 from teams.reader import LEVELDB_PATH, _find_db
+
+
+# ─── call-history (current Teams storage) ───────────────────────────
+
+_UNDEF = "<Undefined>"
+
+
+def _iso_to_ms(value) -> int:
+    """Parse a call-history ISO-8601 UTC timestamp to epoch ms. 0 on failure.
+
+    Teams writes 7 fractional digits ("...:00.8645883Z"); fromisoformat only
+    accepts 3 or 6, so the fraction is truncated before parsing.
+    """
+    if not isinstance(value, str) or not value or value == _UNDEF:
+        return 0
+    s = value.strip().replace("Z", "+00:00")
+    m = re.match(r"^(.*\.\d{6})\d*(\+\d{2}:\d{2})$", s)
+    if m:
+        s = m.group(1) + m.group(2)
+    try:
+        return int(datetime.fromisoformat(s).timestamp() * 1000)
+    except Exception:
+        return 0
+
+
+def _participant(raw) -> Optional[dict]:
+    """Normalize a call-history participant object to {identity, name}."""
+    if not isinstance(raw, dict):
+        return None
+    mri = (raw.get("id") or "").strip()
+    if not mri:
+        return None
+    name = raw.get("displayName")
+    return {"identity": mri, "name": (name or "").strip()}
+
+
+def _harvest_call_history(db, chinfo) -> list[dict]:
+    """Read every `call-history` record into the same shape the anchor logic
+    below expects: start/end bounds, callId, and the parties on the call."""
+    calls: list[dict] = []
+    for rec in db[chinfo.dbid_no]["call-history"].iterate_records():
+        v = rec.value
+        if not isinstance(v, dict) or v.get("isDeleted"):
+            continue
+
+        arrival = v.get("originalArrivalTime")
+        try:
+            start_ms = int(arrival) if arrival else 0
+        except (TypeError, ValueError):
+            start_ms = 0
+        start_ms = start_ms or _iso_to_ms(v.get("startTime"))
+        if not start_ms:
+            continue
+        end_ms = _iso_to_ms(v.get("endTime")) or start_ms
+
+        parts: list[dict] = []
+        seen: set[str] = set()
+        candidates = [v.get("originatorParticipant"), v.get("targetParticipant")]
+        candidates += list(v.get("participantList") or [])
+        for raw in candidates:
+            p = _participant(raw)
+            if p and p["identity"] not in seen:
+                seen.add(p["identity"])
+                parts.append(p)
+
+        calls.append({
+            "start_ms": start_ms,
+            "end_ms": max(end_ms, start_ms),
+            "call_id": (v.get("callId") or "").strip(),
+            "conversation_id": (v.get("groupChatThreadId") or "") or "",
+            "call_type": (v.get("callType") or "").strip(),
+            "is_self_caller": v.get("callDirection") == "Outgoing",
+            "participants": parts,
+        })
+    return calls
+
+
+def _name_map(calls: list[dict]) -> dict[str, str]:
+    """Map MRI -> display name, assembled across ALL call-history records.
+
+    A record only names the *remote* party of an INCOMING call; on outgoing
+    calls the target is a bare MRI with `displayName: null`. So a person is
+    named only in the records where they called us, and that name has to be
+    carried over to the records where we called them.
+    """
+    names: dict[str, str] = {}
+    for c in calls:
+        for p in c["participants"]:
+            if p["name"] and p["identity"] not in names:
+                names[p["identity"]] = p["name"]
+    return names
+
+
+def _resolve_from_call_history(db, chinfo, start_time_unix_ms: int,
+                               window_seconds: int,
+                               self_mri: Optional[str]) -> Optional[dict]:
+    """Anchor a recording onto a call-history record. None if nothing matches."""
+    calls = _harvest_call_history(db, chinfo)
+    if not calls:
+        return None
+
+    window_ms = window_seconds * 1000
+
+    # Prefer a call whose [start, end] span actually contains the recording
+    # start (recording begins a beat after pickup). Fall back to the nearest
+    # start within the window, which is what a still-open call looks like:
+    # Teams has not written endTime yet, so end_ms == start_ms.
+    best: Optional[dict] = None
+    best_delta_ms: Optional[int] = None
+    for c in calls:
+        if c["start_ms"] - window_ms <= start_time_unix_ms <= c["end_ms"] + window_ms:
+            delta = abs(c["start_ms"] - start_time_unix_ms)
+            if best_delta_ms is None or delta < best_delta_ms:
+                best, best_delta_ms = c, delta
+    if best is None:
+        return None
+
+    names = _name_map(calls)
+    participants = [
+        {"identity": p["identity"],
+         "name": p["name"] or names.get(p["identity"]) or p["identity"]}
+        for p in best["participants"]
+    ]
+    clients = [p for p in participants if not _is_self(p["identity"], self_mri)]
+
+    return {
+        "matched": True,
+        "reason": "matched (call-history)",
+        "source": "call-history",
+        "call_id": best["call_id"],
+        "conversation_id": best["conversation_id"],
+        "call_type": best["call_type"],
+        "started_at_ms": best["start_ms"],
+        "self_mri": self_mri,
+        "is_self_caller": best["is_self_caller"],
+        "participants": participants,
+        "clients": clients,
+        "client_name": clients[0]["name"] if clients else "(unknown)",
+        "delta_seconds": (best_delta_ms or 0) / 1000.0,
+    }
 
 
 # ─── self-MRI detection ─────────────────────────────────────────────
@@ -242,11 +394,25 @@ def resolve_client_for_recording(
         return {"matched": False, "reason": f"failed to open IndexedDB: {e}"}
 
     rcinfo = _find_db(db, "Teams:replychain-manager:")
-    if not rcinfo:
-        return {"matched": False, "reason": "replychain DB not present"}
 
     # Resolve current user's MRI: try authoritative first, then fall back.
-    self_mri = _self_mri_from_messages(db, rcinfo) or _self_mri_from_db_names(db)
+    self_mri = (_self_mri_from_messages(db, rcinfo) if rcinfo else None) \
+        or _self_mri_from_db_names(db)
+
+    # Current storage first. Only calls older than the 2026-05-08 migration
+    # fall through to the legacy Event/Call scan below.
+    chinfo = _find_db(db, "Teams:call-history-manager:")
+    if chinfo:
+        hit = _resolve_from_call_history(
+            db, chinfo, start_time_unix_ms, window_seconds, self_mri)
+        if hit:
+            return hit
+
+    if not rcinfo:
+        return {"matched": False,
+                "reason": ("no call-history match and replychain DB not present"
+                           if chinfo else "replychain DB not present"),
+                "self_mri": self_mri}
 
     window_ms = window_seconds * 1000
 
@@ -301,8 +467,8 @@ def resolve_client_for_recording(
     if best is None:
         return {
             "matched": False,
-            "reason": (f"no Event/Call within +/-{window_seconds}s of "
-                       f"{start_time_unix_ms}"),
+            "reason": (f"no call-history record and no Event/Call within "
+                       f"+/-{window_seconds}s of {start_time_unix_ms}"),
             "self_mri": self_mri,
         }
 
@@ -332,6 +498,7 @@ def resolve_client_for_recording(
     return {
         "matched": True,
         "reason": "matched",
+        "source": "event-call",
         "call_id": best["call_id"],
         "conversation_id": best["conversation_id"],
         "call_type": best["call_type"],
