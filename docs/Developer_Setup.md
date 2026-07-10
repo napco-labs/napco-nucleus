@@ -227,7 +227,7 @@ $cred_at = New-Object PSCredential('AEL\khasan', $pwd_at)
 | Dev | IP | NUCLEUS_DEV_NAME | Repo path |
 |---|---|---|---|
 | Titu (yours) | `172.16.205.71` | `Titu` | `E:\Projects\NAPCO-Nucleus` |
-| Atik | `172.16.205.108` | `Atik` | `F:\Titu vai\napco-nucleus` |
+| Atik | `172.16.205.108` | `Atik` | `C:\napco-nucleus` |
 | Rocky | `172.16.205.195` | `Rocky` | `D:\POC Projects\napco-nucleus` |
 | Ferdows | ? | `Ferdows` | ? |
 | Amin | ? | `Amin` | ? |
