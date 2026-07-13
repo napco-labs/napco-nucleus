@@ -49,11 +49,25 @@ run_pipeline() {
     local email_args="${2:-}"     # extra args for daily_rollup (e.g. --require-new)
     local collect_args="${3:-}"   # extra args for collect_central (e.g. --calls-within-minutes)
     echo "[draft-loop] running pipeline — reason: ${reason}"
+    # Claim the trigger up front so a call that finishes DURING this run still
+    # leaves a fresh trigger for the next iteration. On failure we restore it
+    # (below) so a failed run RETRIES the call instead of silently dropping it.
     rm -f "$TRIGGER_FILE"
 
     python collect_central.py --client all --last-minutes "$LOOKBACK_MINUTES" ${collect_args}
     local rc=$?
     echo "[draft-loop] collect_central.py exited rc=${rc}"
+
+    # A failed collect leaves a partial/empty session doc — never email off it,
+    # and never let the just-finished call vanish. Restore the trigger so the
+    # next poll re-collects it; the emailed/requirements_seen dedup makes the
+    # retry idempotent. (rc=75 = lock contention with a concurrent run — also a
+    # retry, not a drop.)
+    if [ "$rc" -ne 0 ]; then
+        echo "[draft-loop] collect failed (rc=${rc}) — restoring trigger, skipping email"
+        touch "$TRIGGER_FILE"
+        return
+    fi
 
     if [ -n "${NUCLEUS_ROLLUP_TO:-}" ]; then
         echo "[draft-loop] sending email ${email_args}"
