@@ -34,6 +34,7 @@ import argparse
 import datetime as dt
 import json
 import os
+import re
 import smtplib
 import ssl
 import sys
@@ -133,16 +134,23 @@ def _split_addresses(raw: str) -> list[str]:
 # The title/summary separator is " - " (whitespace REQUIRED on both sides) so
 # internal hyphens stay intact — otherwise "Re-publish…" truncates to "Re" and
 # "End-to-end…" to "End" (2026-06-11).
-_REQ_LINE = __import__("re").compile(
+_REQ_LINE = re.compile(
     r"^\s*(?:Requirement#\s*(\d+):|(\d+)\.)\s*(?:\[[^\]]*\]\s*)?(.+?)"
     r"(?:\s+[-–—]\s+.+)?$")
+
+# The "Requirement#N:" / "N." number prefix (+ optional "[...]" tag). Stripped
+# to derive a renumber-stable dedup body from the full requirement line.
+_REQ_PREFIX = re.compile(r"^\s*(?:Requirement#\s*\d+:|\d+\.)\s*(?:\[[^\]]*\]\s*)?")
 
 
 def _parse_verification_summary(path: Path) -> list[dict]:
     """Pull a one-line headline per requirement out of the verification .docx
     so the email body can summarise them at-a-glance. Returns a list of
-    {"n": "1", "title": "..."} dicts. Returns [] if the file is missing or
-    has no recognisable requirement lines (best-effort, never raises)."""
+    {"n": "1", "title": "...", "body": "..."} dicts. `title` is the short
+    display headline; `body` is the full requirement text (title + summary)
+    minus the number prefix, used for a collision-resistant dedup key. Returns
+    [] if the file is missing or has no recognisable requirement lines
+    (best-effort, never raises)."""
     try:
         from docx import Document  # lazy: optional dep on the host side
         d = Document(str(path))
@@ -150,10 +158,12 @@ def _parse_verification_summary(path: Path) -> list[dict]:
         return []
     out: list[dict] = []
     for p in d.paragraphs:
-        m = _REQ_LINE.match(p.text or "")
+        text = p.text or ""
+        m = _REQ_LINE.match(text)
         if m:
             out.append({"n": (m.group(1) or m.group(2)),
-                        "title": m.group(3).strip()})
+                        "title": m.group(3).strip(),
+                        "body": _REQ_PREFIX.sub("", text).strip()})
     return out
 
 
@@ -211,8 +221,44 @@ def _calls_this_week(day: str) -> int:
 _EMAILED_DIR = REQUIREMENTS_DIR / ".emailed"
 
 
+_NORM_TITLE = None
+
+
+def _norm_title(s: str) -> str:
+    """Normalize a requirement's text for dedup. Reuses the DB layer's
+    memory._norm_title so the email dedup and requirements_seen dedup agree on
+    what "the same requirement" is; falls back to a minimal normalizer if
+    memory isn't importable on this host. Lazy so importing memory (which opens
+    the SQLite layer) never happens at module import time."""
+    global _NORM_TITLE
+    if _NORM_TITLE is None:
+        try:
+            from memory import _norm_title as _fn  # lazy
+            _NORM_TITLE = _fn
+        except Exception:
+            _NORM_TITLE = lambda x: (x or "").strip().lower()  # noqa: E731
+    return _NORM_TITLE(s or "")
+
+
+def _doc_label(path: Path, day: str) -> str:
+    """Project/client label a verification doc is scoped to, from its filename.
+    'Requirements Verification - CA4K 2026-07-13.docx' -> 'CA4K'; the legacy
+    single 'Requirements Verification 2026-07-13.docx' -> '' (unscoped)."""
+    m = re.match(r"Requirements Verification\s*-\s*(.+?)\s*"
+                 + re.escape(day) + r"$", path.stem)
+    return m.group(1).strip() if m else ""
+
+
 def _req_key(r: dict) -> str:
-    return (r.get("title") or "").strip().lower()
+    # (project/client scope :: normalized full requirement text). Scoped by the
+    # verification doc's project/client label so a DIFFERENT client's identically
+    # -titled ask ("Add SSO") isn't suppressed as a duplicate; keyed on the full
+    # body (not the title truncated at the first " - ") via the shared
+    # _norm_title so "Add SSO - Azure AD" and "Add SSO - Okta" stay distinct and
+    # trivial re-rendering across event runs doesn't count as net-new.
+    label = (r.get("doc") or "").strip().lower()
+    text = r.get("body") or r.get("title") or ""
+    return f"{label}::{_norm_title(text)}"
 
 
 def _emailed_keys(day: str) -> set[str]:
@@ -381,7 +427,10 @@ def main() -> int:
     verif_docs = _verification_docs(day)
     reqs = []
     for _doc in verif_docs:
-        reqs.extend(_parse_verification_summary(_doc))
+        _label = _doc_label(_doc, day)
+        for _r in _parse_verification_summary(_doc):
+            _r["doc"] = _label  # project/client scope for the dedup key
+            reqs.append(_r)
     for _i, _r in enumerate(reqs, 1):
         _r["n"] = str(_i)
 
