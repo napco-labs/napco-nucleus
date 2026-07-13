@@ -95,12 +95,12 @@ CREATE TABLE IF NOT EXISTS requirements_seen (
     sent_at TEXT,
     sent_email_uid TEXT
 );
-CREATE UNIQUE INDEX IF NOT EXISTS ux_requirements_norm_source
-    ON requirements_seen(title_norm, source);
--- idx_requirements_client_last is created inside _migrate_requirements_seen
--- so it runs AFTER the ALTER TABLE that adds the client_name column on
--- legacy DBs. On fresh installs the column is present in the CREATE
--- TABLE above, so the migration is a no-op except for the index.
+-- Dedup identity for requirements_seen is CLIENT-AWARE (2026-07-13): the unique
+-- index (title_norm, source, normalized client) is created in
+-- _migrate_requirements_seen, not here, so it runs AFTER the ALTER TABLE that
+-- adds client_name on legacy DBs (same reason idx_requirements_client_last
+-- lives there). The old (title_norm, source) index — which let a second
+-- client's identically-titled ask collapse onto the first — is dropped there.
 
 -- One row per suite-run.
 CREATE TABLE IF NOT EXISTS test_run_history (
@@ -264,6 +264,20 @@ def _migrate_requirements_seen(conn: sqlite3.Connection) -> None:
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_requirements_confirmation "
         "ON requirements_seen(confirmation_status, client_name)")
+    # 2026-07-13: make the dedup identity client-aware. The old
+    # (title_norm, source) unique index collapsed a DIFFERENT client's
+    # identically-titled ask onto the first client's row (and the upsert's
+    # COALESCE then froze the first client), silently suppressing the second
+    # client's requirement. Replace it with (title_norm, source, normalized
+    # client); NULL/blank client -> '' so unknown-client rows still dedup among
+    # themselves. Widening the key cannot create duplicates among existing rows
+    # (already unique on the narrower pair), so the swap is safe on live data.
+    # (Rows previously mis-merged stay merged — this prevents FUTURE collapses.)
+    conn.execute("DROP INDEX IF EXISTS ux_requirements_norm_source")
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS ux_requirements_norm_source_client "
+        "ON requirements_seen(title_norm, source, "
+        "COALESCE(LOWER(TRIM(client_name)), ''))")
 
 
 @contextmanager
@@ -334,7 +348,9 @@ def remember_requirement(
     wp_url: str | None = None,
     client_name: str | None = None,
 ) -> bool:
-    """Upsert into requirements_seen. Dedup key is (title_norm, source).
+    """Upsert into requirements_seen. Dedup key is (title_norm, source,
+    normalized client_name) — client-aware so a different client's identically
+    -titled ask gets its own row instead of collapsing onto the first client's.
     Merges summary + Work Package link on repeat; increments touch_count.
 
     `wp_id` / `wp_url` point at the OpenProject Work Package this
@@ -353,12 +369,14 @@ def remember_requirement(
         return False
     ts = _now()
     client = (client_name or "").strip() or None
+    client_norm = (client or "").lower()  # '' for unknown-client rows
     try:
         with _conn() as c:
             existing = c.execute(
                 "SELECT id, summary, wp_id, wp_url, client_name "
-                "FROM requirements_seen WHERE title_norm = ? AND source = ?",
-                (norm, source),
+                "FROM requirements_seen WHERE title_norm = ? AND source = ? "
+                "AND COALESCE(LOWER(TRIM(client_name)), '') = ?",
+                (norm, source, client_norm),
             ).fetchone()
             if existing:
                 c.execute(
