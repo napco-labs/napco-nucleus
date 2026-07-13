@@ -15,8 +15,10 @@ Usage:
     python agent.py --task e2e-test [--dry-run]
 
 Exit codes:
-    0 — clean finish (work done or intentionally skipped)
-    1 — error (auth, config, unreachable API, etc.)
+    0 — clean finish (work done, or intentionally skipped)
+    1 — error (auth, config, unreachable API, an SDK error result, or a work
+        task that made zero tool calls — e.g. an expired token — so the caller
+        can retry/escalate instead of treating an empty run as success)
 """
 from __future__ import annotations
 
@@ -51,6 +53,22 @@ TASKS = {
     "requirement-management",
     "verify_session",
     "agent_mode",
+    "daily-report-detailed",
+    "daily-report-summary",
+    "api-functional-test",
+    "api-integration-test",
+    "api-load-test",
+    "e2e-test",
+}
+
+
+# Tasks that MUST do real work via MCP tools on any healthy run. Even a run that
+# finds zero requirements still calls several tools (memory check-in,
+# read_pull_session, log_activity, ...). Zero tool calls on one of these means
+# the agent never actually ran (auth/token failure) — see main().
+_WORK_TASKS = {
+    "requirement-management",
+    "verify_session",
     "daily-report-detailed",
     "daily-report-summary",
     "api-functional-test",
@@ -135,7 +153,44 @@ def _extract_text(msg) -> str:
     return ""
 
 
-async def run_agent(task: str, dry_run: bool) -> None:
+def _count_tool_uses(msg) -> int:
+    """Count tool_use blocks in an SDK message (assistant tool invocations)."""
+    content = getattr(msg, "content", None)
+    if content is None and isinstance(msg, dict):
+        content = msg.get("content")
+    if not isinstance(content, list):
+        return 0
+    n = 0
+    for block in content:
+        btype = (block.get("type") if isinstance(block, dict)
+                 else getattr(block, "type", None))
+        if btype == "tool_use" or type(block).__name__ == "ToolUseBlock":
+            n += 1
+    return n
+
+
+def _result_error(msg):
+    """If msg is a terminal SDK result message, return True/False for whether it
+    carries an error flag; return None when msg isn't a result message."""
+    is_result = (type(msg).__name__ == "ResultMessage"
+                 or (isinstance(msg, dict) and msg.get("type") == "result"))
+    if not is_result:
+        return None
+    is_err = getattr(msg, "is_error", None)
+    if is_err is None and isinstance(msg, dict):
+        is_err = msg.get("is_error")
+    subtype = getattr(msg, "subtype", None)
+    if subtype is None and isinstance(msg, dict):
+        subtype = msg.get("subtype")
+    if is_err is None and subtype is None:
+        return None
+    if is_err:
+        return True
+    # subtypes other than success (e.g. error_max_turns, error_during_execution)
+    return bool(subtype) and subtype != "success"
+
+
+async def run_agent(task: str, dry_run: bool) -> dict | None:
     # Code-level dry-run safety: tools check this env var and short-circuit
     # any mutating path (SMTP send, GitLab issue create, etc.).
     if dry_run:
@@ -209,12 +264,19 @@ async def run_agent(task: str, dry_run: bool) -> None:
         kickoff = user_input
     else:
         kickoff = TASK_KICKOFF[task]
+    tool_calls = 0
+    result_error = False
     async with ClaudeSDKClient(options=options) as client:
         await client.query(kickoff)
         async for msg in client.receive_response():
+            tool_calls += _count_tool_uses(msg)
+            err = _result_error(msg)
+            if err is not None:
+                result_error = err
             text = _extract_text(msg)
             if text:
                 print(text)
+    return {"tool_calls": tool_calls, "result_error": result_error}
 
 
 def main() -> int:
@@ -239,8 +301,28 @@ def main() -> int:
         os.environ["AGENT_INPUT"] = args.input
 
     print(f"=== NAPCO Nucleus: task={args.task} dry_run={args.dry_run} ===\n", flush=True)
-    anyio.run(run_agent, args.task, args.dry_run)
+    status = anyio.run(run_agent, args.task, args.dry_run)
     print("\n=== Done ===", flush=True)
+
+    # Success is NOT "the loop finished" — an expired OAuth/Max token or a 401
+    # surfaces as an error result (or as the model emitting text and doing
+    # nothing), and used to exit 0. That produced silent empty Gmail drafts that
+    # looked like success for a week (see collect_central.py). Fail loudly so the
+    # caller (collect_central / draft-loop) retries or escalates instead:
+    #   * an SDK result flagged is_error, or
+    #   * a work task that made ZERO tool calls (a healthy run always calls
+    #     several tools even when it finds no requirements).
+    if status is None:
+        return 0  # agent_mode with no input / intentionally-skipped run
+    if status.get("result_error"):
+        print("agent.py: SDK returned an error result — failing so the caller "
+              "can escalate.", file=sys.stderr)
+        return 1
+    if args.task in _WORK_TASKS and status.get("tool_calls", 0) == 0:
+        print("agent.py: task made ZERO tool calls — the agent did no work "
+              "(likely expired token / 401 / refusal). Failing so the caller "
+              "escalates instead of sending an empty result.", file=sys.stderr)
+        return 1
     return 0
 
 
