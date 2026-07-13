@@ -428,8 +428,13 @@ def main() -> int:
         print(f"[rollup] 0 requirements and no pipeline failure — skipping send.")
         return 0
 
-    # Event-triggered runs: also skip if everything already went out today.
-    if args.require_new and not new_reqs:
+    # Event-triggered runs: also skip if everything already went out today —
+    # UNLESS this is a hard-failure escalation. Without the escalate guard the
+    # --require-new gate re-suppresses the very [ACTION NEEDED] alert the block
+    # above deliberately let through (on a crash/STT failure reqs=[] so
+    # new_reqs=[]), so pipeline failures reached no one under the live per-call
+    # config (clock send is OFF, every event run passes --require-new).
+    if args.require_new and not new_reqs and not escalate:
         print(f"[rollup] --require-new: {len(reqs)} requirement(s) on file, "
               f"0 net-new since last send — skipping email.")
         return 0
