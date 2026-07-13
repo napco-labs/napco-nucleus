@@ -368,7 +368,16 @@ def remember_requirement(
     if not norm:
         return False
     ts = _now()
-    client = (client_name or "").strip() or None
+    # Canonicalize to the roster bucket so this write stores the same client the
+    # read path (poll_replies / get_client_history) looks up — a NAPCO call that
+    # arrives as "Michael Carrieri" is stored as "NAPCO Security". Single source
+    # of truth in napco_config; lazy import to avoid an import cycle.
+    client_raw = (client_name or "").strip() or None
+    try:
+        from napco_config import canonical_client  # lazy
+        client = canonical_client(client_raw)
+    except Exception:
+        client = client_raw
     client_norm = (client or "").lower()  # '' for unknown-client rows
     try:
         with _conn() as c:

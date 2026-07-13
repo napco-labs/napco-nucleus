@@ -161,6 +161,19 @@ def _resolve_from_call_history(db, chinfo, start_time_unix_ms: int,
     ]
     clients = [p for p in participants if not _is_self(p["identity"], self_mri)]
 
+    # Store the canonical requirement bucket, not the raw participant display
+    # name — a NAPCO participant ("Michael Carrieri") becomes "NAPCO Security"
+    # so call metadata, the session doc, and downstream memory/reply matching
+    # all agree on the client. Best-effort: unchanged if not a roster match.
+    if clients:
+        try:
+            from napco_config import canonical_client  # lazy
+            client_name = canonical_client(clients[0]["name"]) or clients[0]["name"]
+        except Exception:
+            client_name = clients[0]["name"]
+    else:
+        client_name = "(unknown)"
+
     return {
         "matched": True,
         "reason": "matched (call-history)",
@@ -173,7 +186,7 @@ def _resolve_from_call_history(db, chinfo, start_time_unix_ms: int,
         "is_self_caller": best["is_self_caller"],
         "participants": participants,
         "clients": clients,
-        "client_name": clients[0]["name"] if clients else "(unknown)",
+        "client_name": client_name,
         "delta_seconds": (best_delta_ms or 0) / 1000.0,
     }
 

@@ -220,6 +220,58 @@ def roster_display_name(email: str) -> str | None:
     return None
 
 
+# Canonical requirement "client" buckets. The whole pipeline — memory dedup,
+# get_client_history, reply matching — keys on these, so every WRITE path must
+# store the SAME bucket the READ path looks up (CLAUDE.md "Client identity &
+# roster filter"): all @napcosecurity.com senders/people collapse to
+# "NAPCO Security"; each @ael-bd.com person is their own bucket = their roster
+# display name.
+NAPCO_SECURITY_BUCKET = "NAPCO Security"
+_NAPCO_DOMAIN = "napcosecurity.com"
+_AEL_DOMAIN = "ael-bd.com"
+
+
+def _napco_display_names() -> set[str]:
+    return {v.lower() for k, v in REQUIREMENT_ROSTER.items()
+            if k.lower().endswith("@" + _NAPCO_DOMAIN)}
+
+
+def _ael_display_names() -> dict[str, str]:
+    return {v.lower(): v for k, v in REQUIREMENT_ROSTER.items()
+            if k.lower().endswith("@" + _AEL_DOMAIN)}
+
+
+def canonical_client(raw: str | None) -> str | None:
+    """Map a raw client identifier — an email, a 'Name <email>' string, or a
+    bare display name (e.g. a Teams call participant) — to the canonical
+    requirement bucket used across the pipeline:
+
+      * @napcosecurity.com, or a known NAPCO person's name  -> "NAPCO Security"
+      * @ael-bd.com, or a known AEL person's name           -> roster display name
+      * anything else                                       -> unchanged (best-effort)
+
+    None/blank pass through. This is the SINGLE SOURCE OF TRUTH so the write
+    path (call metadata, remember_requirement) stores the same bucket the read
+    path (poll_replies, get_client_history) resolves to — otherwise a client's
+    reply confirmation never matches the requirement it confirms."""
+    if not raw:
+        return raw
+    s = raw.strip()
+    if not s:
+        return raw
+    low = s.lower()
+    if "@" + _NAPCO_DOMAIN in low:
+        return NAPCO_SECURITY_BUCKET
+    if "@" + _AEL_DOMAIN in low:
+        return roster_display_name(low) or s
+    if low in _napco_display_names():
+        return NAPCO_SECURITY_BUCKET
+    ael = _ael_display_names()
+    if low in ael:
+        return ael[low]
+    return s
+
+
 def _msg_addresses(msg: email.message.Message) -> set[str]:
     """Bare lowercased addresses from From + To + Cc + Bcc headers."""
     headers: list[str] = []
