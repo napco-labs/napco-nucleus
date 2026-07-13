@@ -72,13 +72,12 @@ def _coverage_note(day: str, reqs: list) -> tuple[str | None, bool]:
     silent drop is VISIBLE — without crying wolf on a genuinely quiet day.
 
     `note` is an informational line about what was processed; `escalate`
-    is True only on a HARD failure (non-zero identify exit) and bumps the
-    subject to [ACTION NEEDED]. Returns (None, False) when there's nothing
-    to add (requirements were found, or no sources came in at all).
-    collect_central writes the signal this reads
+    is True on a HARD failure (non-zero identify exit, or one or more calls
+    that could not be transcribed) and bumps the subject to [ACTION NEEDED].
+    Hard failures escalate EVEN when some requirements were found, because the
+    failed part may hide additional requirements. Returns (None, False) when
+    there's nothing to add. collect_central writes the signal this reads
     (data/requirements/.coverage/<day>.json)."""
-    if reqs:
-        return None, False  # requirements listed already — no note needed
     try:
         cov = json.loads(
             (_COVERAGE_DIR / f"{day}.json").read_text(encoding="utf-8"))
@@ -88,18 +87,29 @@ def _coverage_note(day: str, reqs: list) -> tuple[str | None, bool]:
     calls = int(src.get("calls", 0) or 0)
     chats = int(src.get("chats", 0) or 0)
     atts = int(src.get("attachments", 0) or 0)
-    if calls + chats + atts == 0:
-        return None, False  # genuinely nothing came in — quiet day, benign
     rc = cov.get("verify_rc")
+    stt_failures = int(cov.get("stt_failures", 0) or 0)
+
+    # HARD FAILURES escalate regardless of whether requirements were found —
+    # a partial success must never mask a broken run.
     if rc not in (0, None):
-        # Hard failure: identify errored (auth/crash/timeout). Shout.
-        note = (
+        return (
             f"PIPELINE CHECK NEEDED — {calls} call(s), {chats} chat(s), "
             f"{atts} attachment(s) were collected for {day}, but the "
-            f"requirement identify step FAILED (exit={rc}) and produced no "
-            f"requirements. This is a failure, not a quiet day — please "
-            f"check the run.")
-        return note, True
+            f"requirement identify step FAILED (exit={rc}). This is a failure, "
+            f"not a quiet day — please check the run.", True)
+    if stt_failures > 0:
+        return (
+            f"PIPELINE CHECK NEEDED — {stt_failures} of {calls} call(s) on "
+            f"{day} could not be transcribed (audio error or missing track), "
+            f"so their requirements may be missing. This is a capture/"
+            f"transcription failure, not a quiet day — please check the "
+            f"recordings.", True)
+
+    if reqs:
+        return None, False  # clean run, requirements listed — standard send
+    if calls + chats + atts == 0:
+        return None, False  # genuinely nothing came in — quiet day, benign
     # Identify ran clean; sources were present but yielded 0 client
     # requirements. Informational only (e.g. internal/duplicate calls) so
     # the coverage is visible at a glance — not an alarm.
@@ -258,6 +268,12 @@ def _build_message(day: str, to_addrs: list[str], cc_addrs: list[str],
         lines.append(
             "Kindly review the attached document and reply with your "
             "confirmation or any corrections, and we will proceed accordingly.")
+        # A hard-failure note (e.g. a call that could not be transcribed) must
+        # still be surfaced even when other requirements WERE found, so a
+        # partial run doesn't quietly hide a broken source.
+        if note:
+            lines.append("")
+            lines.append(note)
     elif note:
         lines.append(note)
     else:

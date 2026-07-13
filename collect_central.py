@@ -346,10 +346,16 @@ def _segs_to_body_lines(all_segs: list[dict],
 
 
 def _transcribe_call(mic: Path | None, speaker: Path | None,
-                     stamp: str) -> list[str]:
-    """Return body lines for the MEETING section using Google STT."""
+                     stamp: str) -> tuple[list[str], bool]:
+    """Return (MEETING-section body lines, transcription_failed).
+
+    transcription_failed=True flags a call whose audio should have produced
+    speech but errored (STT exception) or whose tracks never arrived. The
+    caller counts these so a failed call is NOT silently mistaken for a quiet
+    day — its requirements may be missing. A genuinely silent call
+    ("no speech detected") is not a failure."""
     if not mic and not speaker:
-        return ["(both tracks missing)"]
+        return (["(both tracks missing)"], True)
 
     try:
         started = dt.datetime.strptime(stamp, "%Y%m%d-%H%M%S")
@@ -363,12 +369,13 @@ def _transcribe_call(mic: Path | None, speaker: Path | None,
         all_segs = sorted(mic_segs + spk_segs, key=lambda s: s["start"])
         if all_segs:
             print(f"  transcribed via Google STT ({len(all_segs)} segments)")
-            return _segs_to_body_lines(all_segs, started, source_label="Bangla")
-        return ["(no speech detected in call audio)"]
+            return (_segs_to_body_lines(all_segs, started,
+                                        source_label="Bangla"), False)
+        return (["(no speech detected in call audio)"], False)
     except Exception as e:
         print(f"  Google STT failed: {e}", file=sys.stderr)
-        return ["(call audio could not be transcribed — "
-                "requirements from this call may be missing)"]
+        return (["(call audio could not be transcribed — "
+                 "requirements from this call may be missing)"], True)
 
 
 def _read_chat_docx_lines(path: Path) -> list[str]:
@@ -396,14 +403,19 @@ _COVERAGE_DIR = _HERE / "data" / "requirements" / ".coverage"
 
 
 def _write_coverage(day: str, calls: int, chats: int, atts: int,
-                    verify_rc: int) -> None:
+                    verify_rc: int, stt_failures: int = 0) -> None:
     """Record what this run collected + whether identify succeeded.
 
     daily_rollup reads this so it can tell a genuinely-quiet day (no
     sources) apart from a FAILED run (sources collected but the identify
     step errored or wrote no verification doc) — and shout in the email
     instead of sending a silent 'no requirements' notice (2026-06-17:
-    Assad's Bangla calls were collected but the identify step bailed)."""
+    Assad's Bangla calls were collected but the identify step bailed).
+
+    stt_failures counts calls whose audio could not be transcribed (errored
+    or missing tracks). Those are collected and counted like any call, so
+    without this signal an all-errored day looks exactly like a quiet day —
+    daily_rollup escalates on it instead."""
     _COVERAGE_DIR.mkdir(parents=True, exist_ok=True)
     # Match BOTH the legacy single doc and the per-project split docs
     # ("Requirements Verification - <label> <day>.docx", 2026-06-25).
@@ -413,6 +425,7 @@ def _write_coverage(day: str, calls: int, chats: int, atts: int,
         "day": day,
         "sources": {"calls": calls, "chats": chats, "attachments": atts},
         "verify_rc": verify_rc,
+        "stt_failures": stt_failures,
         "doc_exists": bool(docs),
     }
     (_COVERAGE_DIR / f"{day}.json").write_text(
@@ -556,6 +569,7 @@ def main() -> int:
                   file=sys.stderr)
 
     # ── Append calls (each one is one MEETING section) ────────────
+    stt_failures = 0
     for c in bundle["calls"]:
         md = c["metadata"]
         stamp = c["stamp"]
@@ -572,8 +586,11 @@ def main() -> int:
             ),
             "",
         ]
-        body_lines += _transcribe_call(
+        call_lines, stt_failed = _transcribe_call(
             c["mic_path"], c["speaker_path"], stamp)
+        body_lines += call_lines
+        if stt_failed:
+            stt_failures += 1
 
         session_doc.append_section(
             source="MEETING",
@@ -672,7 +689,8 @@ def main() -> int:
     # rc here; the daily-draft loop's new "skip rollup on non-zero rc"
     # guard catches the empty-output case from the other side.
     try:
-        _write_coverage(days_to_scan[0], n_calls, n_chats, n_atts, rc)
+        _write_coverage(days_to_scan[0], n_calls, n_chats, n_atts, rc,
+                        stt_failures=stt_failures)
     except Exception as e:
         print(f"  warn: could not write coverage signal: {e}",
               file=sys.stderr)
