@@ -39,6 +39,7 @@ from __future__ import annotations
 import base64
 import os
 import subprocess
+import sys
 import tempfile
 import wave
 from pathlib import Path
@@ -179,9 +180,21 @@ def _recognize_chunk_v2(chunk_path: Path, params: dict, headers: dict,
     }
     url = (f"https://{region}-speech.googleapis.com/v2/projects/{project}"
            f"/locations/{region}/recognizers/_:recognize")
-    r = requests.post(url, params=params, headers=headers, json=body,
-                      timeout=300)
-    if r.status_code != 200:
+    # Retry transient errors just like the v1 path — without this a single
+    # 429/5xx on any chunk of a long call propagated out and discarded the
+    # ENTIRE call transcript.
+    import time as _time
+    for _attempt in range(3):
+        r = requests.post(url, params=params, headers=headers, json=body,
+                          timeout=300)
+        if r.status_code == 200:
+            break
+        if r.status_code in (429, 500, 502, 503) and _attempt < 2:
+            wait = (5, 15)[_attempt]
+            print(f"  [google-stt v2] {r.status_code} on attempt "
+                  f"{_attempt+1}; retrying in {wait}s...")
+            _time.sleep(wait)
+            continue
         raise RuntimeError(f"Google STT v2 {r.status_code}: {r.text[:300]}")
     parts: list[str] = []
     for res in r.json().get("results", []):
@@ -227,31 +240,65 @@ def google_transcribe(wav_path: Path | None, label: str,
 
     def _do(item: tuple[Path, float]) -> dict | None:
         chunk_path, offset = item
-        if use_v2:
-            text = _recognize_chunk_v2(chunk_path, params, headers,
-                                       language, model, region, project)
-        else:
-            text = _recognize_chunk(chunk_path, params, headers,
-                                    language, model)
+        dur = _chunk_duration_s(chunk_path)
+        try:
+            if use_v2:
+                text = _recognize_chunk_v2(chunk_path, params, headers,
+                                           language, model, region, project)
+            else:
+                text = _recognize_chunk(chunk_path, params, headers,
+                                        language, model)
+        except Exception as e:
+            # One chunk failing (after its own retries) must NOT discard the
+            # whole call — return a gap marker so the good chunks survive and
+            # the caller can tell partial loss from total failure.
+            print(f"  [google-stt] chunk @ {int(offset)}s failed: "
+                  f"{str(e)[:200]}", file=sys.stderr)
+            return {"__error__": True, "start": offset,
+                    "end": offset + dur, "speaker": label, "err": str(e)[:200]}
         if not text:
             return None
         return {
             "start": offset,
-            "end": offset + _chunk_duration_s(chunk_path),
+            "end": offset + dur,
             "text": text,
             "speaker": label,
         }
 
-    segments: list[dict] = []
+    results: list[dict] = []
     with tempfile.TemporaryDirectory(prefix="gstt_") as td:
         chunks = _segment_to_16k_mono(wav_path, Path(td))
-        # Recognize chunks concurrently — the bearer token is shared and
-        # the sync endpoint handles parallel requests. An exception in any
-        # chunk propagates to the caller (Google STT is the only engine).
+        # Recognize chunks concurrently — the bearer token is shared and the
+        # sync endpoint handles parallel requests. Per-chunk failures are
+        # captured (not raised) so a single bad chunk can't lose the call.
         from concurrent.futures import ThreadPoolExecutor
         with ThreadPoolExecutor(max_workers=concurrency) as ex:
             for seg in ex.map(_do, chunks):
                 if seg is not None:
-                    segments.append(seg)
+                    results.append(seg)
+
+    good = [s for s in results if not s.get("__error__")]
+    failed = [s for s in results if s.get("__error__")]
+    # Every recognized chunk errored (and it wasn't just silence) — a genuine
+    # transcription failure, not a quiet call. Raise so the caller counts it
+    # (collect_central stt_failures) instead of reading it as "no speech".
+    if failed and not good:
+        raise RuntimeError(
+            f"Google STT: all {len(failed)} chunk(s) failed to transcribe; "
+            f"last error: {failed[0].get('err')}")
+    # Partial success: keep the good segments and turn each failed chunk into a
+    # visible, flagged gap marker so a reviewer/LLM sees a requirement may live
+    # in the lost span rather than silently missing it.
+    segments: list[dict] = list(good)
+    for s in failed:
+        segments.append({
+            "start": s["start"],
+            "end": s["end"],
+            "speaker": s["speaker"],
+            "text": (f"(~{int(s['end'] - s['start'])}s of audio could not be "
+                     f"transcribed here — requirements in this span may be "
+                     f"missing)"),
+            "uncertain": True,
+        })
     segments.sort(key=lambda s: s["start"])
     return segments
