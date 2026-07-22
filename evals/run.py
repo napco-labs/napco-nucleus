@@ -89,12 +89,19 @@ def _today_stamp() -> str:
     return dt.date.today().strftime("%Y-%m-%d")
 
 
-def _sidecar_path() -> Path:
-    return DATA_REQ_DIR / f"Requirements Verification {_today_stamp()}.json"
+def _sidecar_paths() -> list[Path]:
+    """All of today's verification JSON sidecars. Production names them
+    'Requirements Verification[ - <project>] <date>.json' (the project
+    segment was added after the harness was first written — matching by
+    glob keeps the eval from silently reading a filename that no longer
+    exists)."""
+    return sorted(DATA_REQ_DIR.glob(
+        f"Requirements Verification*{_today_stamp()}.json"))
 
 
-def _verification_docx_path() -> Path:
-    return DATA_REQ_DIR / f"Requirements Verification {_today_stamp()}.docx"
+def _verification_docx_paths() -> list[Path]:
+    return sorted(DATA_REQ_DIR.glob(
+        f"Requirements Verification*{_today_stamp()}.docx"))
 
 
 # ── Production-state snapshot / restore ───────────────────────────
@@ -109,16 +116,14 @@ class ProductionState:
     """
 
     def __init__(self) -> None:
-        self._paths = [
-            session_doc.SESSION_PATH,
-            session_doc.META_PATH,
-            _verification_docx_path(),
-            _sidecar_path(),
-        ]
         self._saved: dict[Path, bytes | None] = {}
 
+    def _current_paths(self) -> list[Path]:
+        return ([session_doc.SESSION_PATH, session_doc.META_PATH]
+                + _verification_docx_paths() + _sidecar_paths())
+
     def save(self) -> None:
-        for p in self._paths:
+        for p in self._current_paths():
             try:
                 self._saved[p] = p.read_bytes() if p.exists() else None
             except Exception as e:
@@ -126,6 +131,14 @@ class ProductionState:
                 self._saved[p] = None
 
     def restore(self) -> None:
+        # Remove any verification files the eval created that didn't
+        # exist at snapshot time, then restore the snapshot.
+        for p in self._current_paths():
+            if p not in self._saved:
+                try:
+                    p.unlink()
+                except Exception as e:
+                    print(f"  ! cleanup failed for {p}: {e}", file=sys.stderr)
         for p, blob in self._saved.items():
             try:
                 if blob is None:
@@ -183,12 +196,11 @@ def _stage_fixture(session_fixture: Path, case_name: str) -> Path:
 
 
 def _clear_today_verification_outputs() -> None:
-    """Remove today's verification doc + sidecar so a stale file from a
-    previous run isn't mistaken for this run's output."""
-    for p in (_verification_docx_path(), _sidecar_path()):
+    """Remove today's verification docs + sidecars so a stale file from
+    a previous run isn't mistaken for this run's output."""
+    for p in _verification_docx_paths() + _sidecar_paths():
         try:
-            if p.exists():
-                p.unlink()
+            p.unlink()
         except Exception as e:
             print(f"  ! couldn't remove {p}: {e}", file=sys.stderr)
 
@@ -202,9 +214,13 @@ def _run_agent_verify_session(timeout_s: int = 600) -> dict:
     cmd = [sys.executable, "agent.py", "--task", "verify_session",
            "--dry-run"]
     try:
+        # encoding + errors are explicit: agent output is UTF-8 (arrows,
+        # Bangla) and the Windows default cp1252 reader thread crashes
+        # on it, silently losing all captured output.
         proc = subprocess.run(
             cmd, env=env, cwd=str(_ROOT),
             capture_output=True, text=True, timeout=timeout_s,
+            encoding="utf-8", errors="replace",
         )
     except subprocess.TimeoutExpired as e:
         return {
@@ -222,18 +238,32 @@ def _run_agent_verify_session(timeout_s: int = 600) -> dict:
 
 
 def _read_sidecar() -> dict:
-    """Load the predicted-requirements JSON sidecar written by
-    write_verification_docx. Empty dict (count=0, requirements=[]) if
-    the file doesn't exist (the identifier correctly emitted no
-    requirements)."""
-    p = _sidecar_path()
-    if not p.exists():
+    """Load the predicted-requirements JSON sidecar(s) written by
+    write_verification_docx. Production may write one file per project
+    ('Requirements Verification - <project> <date>.json'); merge them.
+    Empty result (count=0, requirements=[]) if none exist (the
+    identifier correctly emitted no requirements)."""
+    paths = _sidecar_paths()
+    if not paths:
         return {"requirement_count": 0, "requirements": [], "missing": True}
-    try:
-        return json.loads(p.read_text(encoding="utf-8"))
-    except Exception as e:
-        return {"requirement_count": 0, "requirements": [],
-                "parse_error": str(e)}
+    merged: dict = {"requirement_count": 0, "requirements": [],
+                    "sidecar_files": [p.name for p in paths]}
+    errors = []
+    for p in paths:
+        try:
+            doc = json.loads(p.read_text(encoding="utf-8"))
+        except Exception as e:
+            errors.append(f"{p.name}: {e}")
+            continue
+        reqs = doc.get("requirements") or []
+        merged["requirements"].extend(reqs)
+        merged["requirement_count"] += doc.get("requirement_count", len(reqs))
+        for k, v in doc.items():
+            if k not in ("requirements", "requirement_count") and k not in merged:
+                merged[k] = v
+    if errors:
+        merged["parse_error"] = "; ".join(errors)
+    return merged
 
 
 def run_case(case: dict, *, no_replay: bool, skip_llm_judge: bool) -> dict:
