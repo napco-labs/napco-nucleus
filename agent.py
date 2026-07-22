@@ -156,7 +156,14 @@ async def run_agent(task: str, dry_run: bool) -> None:
         tools=ALL_TOOLS,
     )
     allowed = [f"mcp__napco-nucleus__{n}" for n in TOOL_NAMES]
-    allowed.extend(["WebSearch", "WebFetch"])
+    # Prompt-injection hardening: tasks that read UNTRUSTED external
+    # content (client emails, attachments, chat pulls) must not also
+    # hold web egress tools — a hostile email could otherwise steer an
+    # exfiltration fetch. Web tools stay available for the operator-
+    # driven and test tasks, which consume trusted inputs only.
+    _UNTRUSTED_INPUT_TASKS = {"verify_session", "requirement-management"}
+    if task not in _UNTRUSTED_INPUT_TASKS:
+        allowed.extend(["WebSearch", "WebFetch"])
 
     system_prompt = _load_prompt(task)
     # Calibration feedback — only injected for identify-style tasks
