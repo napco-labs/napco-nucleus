@@ -30,6 +30,16 @@ Usage:
 
 Exit code 0 if all cases ran (regardless of pass/fail). Non-zero if a
 case errored before scoring (missing fixture, agent crashed, etc.).
+
+With --gate the run becomes a quality gate (for CI): exit 1 if any case
+errored, if nothing was scored, or if mean F1 falls below --min-f1
+(default 0.75). This is what the evals workflow runs on every prompt
+change so a regression can't ship silently.
+
+Production state: the live session doc, its meta, and today's
+verification .docx/.json are snapshotted before the first case and
+restored after the last one, so an eval run never clobbers real
+pipeline state.
 """
 from __future__ import annotations
 
@@ -85,6 +95,49 @@ def _sidecar_path() -> Path:
 
 def _verification_docx_path() -> Path:
     return DATA_REQ_DIR / f"Requirements Verification {_today_stamp()}.docx"
+
+
+# ── Production-state snapshot / restore ───────────────────────────
+
+class ProductionState:
+    """Snapshot the live files an eval run mutates, restore them after.
+
+    Covers: sessions/current.docx, .current_meta.json, and today's
+    Requirements Verification .docx + .json sidecar. Files that don't
+    exist at snapshot time are removed at restore time if the eval
+    created them.
+    """
+
+    def __init__(self) -> None:
+        self._paths = [
+            session_doc.SESSION_PATH,
+            session_doc.META_PATH,
+            _verification_docx_path(),
+            _sidecar_path(),
+        ]
+        self._saved: dict[Path, bytes | None] = {}
+
+    def save(self) -> None:
+        for p in self._paths:
+            try:
+                self._saved[p] = p.read_bytes() if p.exists() else None
+            except Exception as e:
+                print(f"  ! snapshot failed for {p}: {e}", file=sys.stderr)
+                self._saved[p] = None
+
+    def restore(self) -> None:
+        for p, blob in self._saved.items():
+            try:
+                if blob is None:
+                    if p.exists():
+                        p.unlink()
+                else:
+                    p.parent.mkdir(parents=True, exist_ok=True)
+                    p.write_bytes(blob)
+            except Exception as e:
+                print(f"  ! restore failed for {p}: {e}", file=sys.stderr)
+        if self._saved:
+            print("[state] production session + verification files restored")
 
 
 # ── Case discovery ─────────────────────────────────────────────────
@@ -362,12 +415,20 @@ def main() -> int:
                          "confidence stats. Useful when iterating on "
                          "the runner itself without paying for Claude "
                          "calls.")
+    ap.add_argument("--gate", action="store_true",
+                    help="CI quality gate: exit 1 if any case errored, "
+                         "nothing was scored, or mean F1 < --min-f1.")
+    ap.add_argument("--min-f1", type=float, default=0.75,
+                    help="Minimum mean F1 required when --gate is set "
+                         "(default 0.75).")
     args = ap.parse_args()
 
     options = {
         "case_filter": args.case,
         "no_replay": args.no_replay,
         "skip_llm_judge": args.skip_llm_judge,
+        "gate": args.gate,
+        "min_f1": args.min_f1,
     }
 
     cases = discover_cases(args.case)
@@ -378,20 +439,55 @@ def main() -> int:
 
     print(f"Discovered {len(cases)} case(s).")
 
+    # Snapshot live pipeline state; restored even if a case crashes.
+    state = ProductionState()
+    if not args.no_replay:
+        state.save()
+
     case_results: list[dict] = []
-    for case in cases:
-        try:
-            r = run_case(case,
-                          no_replay=args.no_replay,
-                          skip_llm_judge=args.skip_llm_judge)
-        except Exception as e:
-            print(f"[{case['name']}] !! unhandled error: {e}",
-                  file=sys.stderr)
-            r = {"case_name": case["name"], "error": f"{type(e).__name__}: {e}"}
-        case_results.append(r)
+    try:
+        for case in cases:
+            try:
+                r = run_case(case,
+                              no_replay=args.no_replay,
+                              skip_llm_judge=args.skip_llm_judge)
+            except Exception as e:
+                print(f"[{case['name']}] !! unhandled error: {e}",
+                      file=sys.stderr)
+                r = {"case_name": case["name"], "error": f"{type(e).__name__}: {e}"}
+            case_results.append(r)
+    finally:
+        if not args.no_replay:
+            state.restore()
 
     result_path = _write_results(case_results, options)
     _print_run_summary(case_results, result_path)
+
+    if args.gate:
+        return _gate_verdict(case_results, args.min_f1)
+    return 0
+
+
+def _gate_verdict(case_results: list[dict], min_f1: float) -> int:
+    """CI gate: 0 = pass, 1 = fail. Prints the reason either way."""
+    s = _summarize(case_results)
+    hard_errors = sum(1 for c in case_results if "error" in c)
+    reasons = []
+    if hard_errors:
+        reasons.append(f"{hard_errors} case(s) crashed before scoring")
+    if s["errored_count"]:
+        reasons.append(f"{s['errored_count']} case(s) errored in scoring")
+    if s["scored_count"] == 0:
+        reasons.append("no case produced a score")
+    f1 = s.get("mean_f1")
+    if f1 is not None and f1 < min_f1:
+        reasons.append(f"mean F1 {f1:.3f} < required {min_f1:.2f}")
+    if reasons:
+        print(f"\nGATE: FAIL - " + "; ".join(reasons))
+        return 1
+    print(f"\nGATE: PASS - mean F1 "
+          f"{f1:.3f} >= {min_f1:.2f}" if f1 is not None else
+          "\nGATE: PASS")
     return 0
 
 

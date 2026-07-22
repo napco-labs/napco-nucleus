@@ -1,0 +1,83 @@
+name: Evals
+
+# Quality gate for the Requirement Management identify step. Fires on
+# every push that touches prompts/ or evals/, plus on demand. Runs the
+# golden-case eval suite (evals/run.py) with --gate: the job FAILS if
+# any case errors, nothing scores, or mean F1 drops below the
+# threshold. This is what makes "run evals after a prompt change"
+# (CLAUDE.md) an enforced rule instead of an honor-system one.
+#
+# Runs inside the nucleus-daily-draft container on central (.123) so it
+# shares Claude auth and env with production, same as the Requirement
+# Management workflow. The eval runner snapshots and restores the live
+# session doc + today's verification outputs, so a gate run never
+# disturbs pipeline state.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'prompts/**'
+      - 'evals/**'
+  workflow_dispatch:
+    inputs:
+      case:
+        description: 'Run a single case (empty = all cases)'
+        required: false
+        default: ''
+        type: string
+      min_f1:
+        description: 'Minimum mean F1 to pass the gate'
+        required: false
+        default: '0.75'
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: evals
+  cancel-in-progress: false
+
+jobs:
+  gate:
+    runs-on: [self-hosted, linux, nucleus-central]
+    timeout-minutes: 55
+
+    steps:
+      - name: Show fire context
+        run: |
+          echo "case=${{ inputs.case }}"
+          echo "min_f1=${{ inputs.min_f1 }}"
+          echo "host=$(hostname)"
+          echo "date=$(date -Iseconds)"
+          docker ps --filter name=nucleus-daily-draft --format '{{.Names}} {{.Status}}'
+
+      - name: Pull latest code on host
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git config --global --add safe.directory /home/ubuntu/napco-nucleus
+          cd /home/ubuntu/napco-nucleus
+          git -c "credential.helper=!f(){ echo username=x-access-token; echo password=${GITHUB_TOKEN}; };f" \
+            fetch --quiet origin main
+          git reset --hard origin/main
+
+      - name: Run eval gate inside daily-draft container
+        run: |
+          set -euo pipefail
+          args=(--gate --min-f1 "${{ inputs.min_f1 || '0.75' }}")
+          if [ -n "${{ inputs.case }}" ]; then
+            args+=(--case "${{ inputs.case }}")
+          fi
+          echo "Running: docker exec nucleus-daily-draft python -m evals.run ${args[*]}"
+          docker exec nucleus-daily-draft python -m evals.run "${args[@]}"
+
+      - name: Upload eval results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-results
+          path: /home/ubuntu/napco-nucleus/evals/results/*.json
+          if-no-files-found: ignore
+          retention-days: 30

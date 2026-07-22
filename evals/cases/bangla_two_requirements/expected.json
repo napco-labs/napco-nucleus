@@ -1,0 +1,31 @@
+{
+  "case_name": "bangla_two_requirements",
+  "description": "Two real requirements through two channels: an English client email with a deadline (report export, scheduled mail, live before 15 August) and a romanized-Bangla Teams chat (SMS alert when stock drops below 10). One chat window of lunch noise. Tests multi-channel extraction, Bangla-to-English requirement titles, and deadline capture.",
+  "expected_requirements": [
+    {
+      "title": "Daily sales report export to Excel and PDF with scheduled 9 PM email",
+      "summary_keywords": [
+        "report",
+        "export",
+        "Excel",
+        "PDF",
+        "email"
+      ],
+      "expected_min_confidence": 0.80,
+      "expected_source_id_pattern": "^email/rahim-jamuna-retail\\.com/.*"
+    },
+    {
+      "title": "SMS alert when any item's stock falls below 10 units",
+      "summary_keywords": [
+        "SMS",
+        "alert",
+        "stock",
+        "below"
+      ],
+      "expected_min_confidence": 0.70,
+      "expected_source_id_pattern": "^chat/131-.*"
+    }
+  ],
+  "expected_noise_count": 1,
+  "notes": "Chat #133 (lunch chatter) is noise. The Bangla chat requirement must be translated to an English title. The email requirement should carry the 15 August deadline in its detail. Missing either requirement is a recall failure; extracting the lunch chat is a false positive."
+}
