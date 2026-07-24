@@ -1,9 +1,13 @@
 {
-  "_note": "Fill 'devs' with each developer's Teams display name (exactly as it shows in Teams search). 'messages' are rotated so the reminder does not look identical every time.",
-  "devs": [],
-  "messages": [
-    "Hi, this is Napco Nucleus. Please add me to your client calls and chats so I can capture the requirements for you automatically. Thanks!",
-    "Reminder from Napco Nucleus: add me to your meetings and I will take care of capturing everything discussed. Thank you.",
-    "Hello from Napco Nucleus. Quick reminder to add me to your client conversations so nothing a client asks for gets missed."
-  ]
+  "_note": "Each dev: 'search' = the Teams login/email used to open their chat (Ctrl+N), 'name' = how to address them (name + bhai). 'added' = names/emails to STOP reminding once they add the assistant.",
+  "devs": [
+    {"search": "rockycs33@hotmail.com", "name": "Rocky"},
+    {"search": "zaman_ael@hotmail.com", "name": "Zaman"},
+    {"search": "mjferdows@hotmail.com", "name": "Ferdows"},
+    {"search": "ihasan.ael@outlook.com", "name": "Isruk"},
+    {"search": "sheikhamin.ael@outlook.com", "name": "Amin"},
+    {"search": "kaptan.cse@outlook.com", "name": "Atik"},
+    {"search": "titucse@hotmail.com", "name": "Titu"}
+  ],
+  "added": []
 }

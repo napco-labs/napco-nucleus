@@ -1,15 +1,14 @@
-"""Gentle scheduled reminder to devs: add Napco Nucleus to your meetings.
+"""Proactive daily engagement to devs from Napco Nucleus.
 
-Sends a short, friendly nudge to each developer in teams/dev_list.json via
-Teams. Designed to be NON-annoying and rule-bound:
-  * Bangladesh time (UTC+6) only.
-  * Only between 17:00 and 22:00 (5 PM - 10 PM BST).
-  * At most TWICE per day, and the two sends are spaced >= 2 hours apart.
-  * Skips Saturday and Sunday.
-Run it often (e.g. a scheduled task every 30 min); the gating below decides
-whether this run actually sends. State persists in data/reminder_state.json so
-the twice-a-day / spacing rules survive restarts.
-
+Once a day (max), reaches out to each developer in teams/dev_list.json with a
+VARIED message, like a human colleague:
+  * often a meeting nudge ("do you have a client meeting today? add me")
+  * sometimes a joke, a quiz/riddle, or a fun one-liner
+Rules (non-annoying):
+  * Bangladesh time (UTC+6) only, between 17:00 and 22:00 (5-10 PM BST).
+  * At most ONCE per day. Skips Saturday and Sunday.
+  * Skips any dev who has already added/engaged the assistant.
+Run often (scheduled task every 30 min); the gate decides if it actually sends.
 Only works while the MASTAN2 screen is UNLOCKED (UI automation limitation).
 
 Run:  py -3 -m teams.remind_devs        (add --force to bypass the time gate)
@@ -19,6 +18,7 @@ import json
 import time
 import random
 import datetime
+import subprocess
 from datetime import timezone, timedelta
 from pathlib import Path
 
@@ -29,37 +29,39 @@ _HERE = Path(__file__).parent
 _REPO = _HERE.parent
 LIST_FILE = _HERE / "dev_list.json"
 STATE_FILE = _REPO / "data" / "reminder_state.json"
-REACHED_FILE = _REPO / "data" / "reached_devs.json"   # devs who already added him
+REACHED_FILE = _REPO / "data" / "reached_devs.json"
 LOG = r"E:\napco-nucleus\logs\remind_devs.log"
 
-BST = timezone(timedelta(hours=6))       # Bangladesh Standard Time
-WINDOW_START, WINDOW_END = 17, 22        # 5 PM .. 10 PM
-MAX_PER_DAY = 2
-MIN_GAP_MIN = 120                        # >= 2 hours between the two sends
+BST = timezone(timedelta(hours=6))
+WINDOW_START, WINDOW_END = 17, 22
+MAX_PER_DAY = 1
+MODEL = "claude-haiku-4-5-20251001"
 
-SOFT_DEFAULT = [
-    "Hi :) gentle reminder to add Napco Nucleus to your client meetings so I "
-    "can capture the requirements for you. Thanks so much!",
-    "Hello :) just a soft nudge, add Napco Nucleus to your calls and chats and "
-    "I will take care of capturing everything. Appreciate it!",
-    "Hi there :) whenever you have a client meeting, add Napco Nucleus so "
-    "nothing gets missed. Thank you!",
+# message TYPES for the day; "meeting" weighted higher (that is the real goal)
+ENGAGE_TYPES = ["meeting", "meeting", "meeting", "joke", "quiz", "fun"]
+
+MEETING_TEMPLATES = [
+    "{name} bhai, do you have any client meeting today? Please add Napco Nucleus so I can capture everything for you :)",
+    "{name} bhai, kono client call ache aj? Amake add korte vulben na jeno, ami sob capture kore nibo :)",
+    "Hi {name} bhai, if you have a client call today, add me in so nothing gets missed.",
+    "{name} ভাই, আজ কোনো ক্লায়েন্ট মিটিং থাকলে আমাকে অ্যাড করে নেবেন :)",
+    "{name} bhai, meeting thakle amake dhukiye diyen, note-taking ta ami samle nibo :)",
 ]
-# gentle, workplace-friendly humor - used SOMETIMES so it stays fresh
-JOKE_DEFAULT = [
-    "Psst :) it's Napco Nucleus. Add me to your client calls and I'll do the "
-    "boring note-taking while you look brilliant. Deal?",
-    "Hi :) your friendly AI here. Add me to your meetings and I promise to "
-    "remember every requirement. My memory never needs coffee :)",
-    "Knock knock :) it's Napco Nucleus. Add me to your calls and no requirement "
-    "will ever sneak past. I do not blink!",
-    "Hi :) I work for zero salary and never take lunch breaks. Just add me to "
-    "your client meetings and your requirements are safe with me :)",
-    "Reminder from Napco Nucleus :) add me to the call. I am great at listening "
-    "and terrible at forgetting. Thanks a ton!",
+JOKE_FALLBACK = [
+    "{name} bhai, why did the developer go broke? He used up all his cache :)",
+    "{name} bhai, ekta bug ar ekta feature er difference ki? Documentation :)",
+    "{name} bhai, koto jon programmer lage ekta bulb lagate? Zero, that's a hardware problem :)",
 ]
-JOKE_CHANCE = 0.25                       # low per-run chance...
-MAX_JOKES_PER_WEEK = 2                    # ...capped so humor is once/twice a WEEK
+QUIZ_FALLBACK = [
+    "{name} bhai, quick riddle: I speak without a mouth and hear without ears. What am I?",
+    "{name} bhai, puzzle: what has keys but opens no locks, space but no room? :)",
+    "{name} bhai, ekta puzzle: 8 ta 8 diye kivabe 1000 banabe? (Hint: 888+88+8+8+8) :)",
+]
+FUN_FALLBACK = [
+    "{name} bhai, ei to, chup kore boshe apnader requirement gulo capture korchi :)",
+    "{name} bhai, zero salary, no lunch break, never forgets. Just add me to your meetings :)",
+    "{name} bhai, adda dite mon chaiche but kaj age! Add me to a call na :)",
+]
 
 
 def log(m):
@@ -86,55 +88,73 @@ def _save_state(s):
 
 
 def _gate(now, force):
-    """Return (ok, reason). now is a BST-aware datetime."""
     if force:
         return True, "forced"
-    if now.weekday() >= 5:                        # 5=Sat, 6=Sun
+    if now.weekday() >= 5:
         return False, "weekend (skip Sat/Sun)"
     if not (WINDOW_START <= now.hour < WINDOW_END):
         return False, f"outside 17:00-22:00 BST (now {now:%H:%M})"
     st = _load_state()
-    today = now.strftime("%Y-%m-%d")
-    if st.get("date") != today:
-        return True, "first send today"
-    if st.get("count", 0) >= MAX_PER_DAY:
-        return False, "already sent twice today"
-    last = st.get("last_ts", 0)
-    if last and (now.timestamp() - last) < MIN_GAP_MIN * 60:
-        mins = int((MIN_GAP_MIN * 60 - (now.timestamp() - last)) / 60)
-        return False, f"too soon (wait ~{mins} min for spacing)"
-    return True, "second send allowed"
+    if st.get("date") == now.strftime("%Y-%m-%d") and st.get("count", 0) >= MAX_PER_DAY:
+        return False, "already reached out today"
+    return True, "ok"
 
 
-def _bump_state(now, joke_run=False):
+def _bump_state(now):
     st = _load_state()
     today = now.strftime("%Y-%m-%d")
     if st.get("date") != today:
         st["date"] = today
         st["count"] = 0
-        st["last_ts"] = 0
     st["count"] = st.get("count", 0) + 1
-    st["last_ts"] = now.timestamp()
-    week = now.strftime("%G-W%V")            # ISO year-week
-    if st.get("joke_week") != week:
-        st["joke_week"] = week
-        st["joke_week_count"] = 0
-    if joke_run:
-        st["joke_week_count"] = st.get("joke_week_count", 0) + 1
     _save_state(st)
 
 
+def _claude_gen(kind, name):
+    """Fresh joke/quiz/fun line via Claude, in colleague tone. None on failure."""
+    prompts = {
+        "joke": (f"Write ONE short, clean, friendly joke for a dev teammate named "
+                 f"{name}. Address them as '{name} bhai'. Mix English and a little "
+                 f"Bangla naturally. One or two lines. Output only the joke text."),
+        "quiz": (f"Write ONE short fun riddle or quiz for a dev teammate named "
+                 f"{name}, asking them to solve it. Address as '{name} bhai'. "
+                 f"Playful, one or two lines. Output only the message text."),
+        "fun": (f"Write ONE short fun, friendly one-liner to a dev teammate named "
+                f"{name} (address as '{name} bhai'), light and human, gently "
+                f"hinting to add Napco Nucleus to their meetings. Output only text."),
+    }
+    try:
+        p = subprocess.run(["claude", "--print", "--model", MODEL],
+                           input=prompts[kind], capture_output=True, text=True,
+                           cwd=str(_REPO), timeout=45, shell=True)
+        out = (p.stdout or "").strip()
+        return out or None
+    except Exception as e:
+        log(f"claude gen failed ({kind}): {str(e)[:80]}")
+        return None
+
+
+def compose(name):
+    kind = random.choice(ENGAGE_TYPES)
+    if kind == "meeting":
+        return "meeting", random.choice(MEETING_TEMPLATES).replace("{name}", name)
+    gen = _claude_gen(kind, name)
+    if gen:
+        return kind, gen
+    fb = {"joke": JOKE_FALLBACK, "quiz": QUIZ_FALLBACK, "fun": FUN_FALLBACK}[kind]
+    return kind, random.choice(fb).replace("{name}", name)
+
+
 def open_chat_with(win, name):
-    """Open a 1:1 chat with `name` via Teams new-chat (Ctrl+N)."""
     ar.activate_window(win)
     time.sleep(0.6)
     auto.SendKeys("{Ctrl}n", waitTime=0.1)
     time.sleep(1.3)
     auto.SendKeys(ar._sk_escape(name), waitTime=0.05)
     time.sleep(1.6)
-    auto.SendKeys("{Enter}", waitTime=0.1)       # pick first suggestion
+    auto.SendKeys("{Enter}", waitTime=0.1)
     time.sleep(0.9)
-    auto.SendKeys("{Enter}", waitTime=0.1)       # focus the message box
+    auto.SendKeys("{Enter}", waitTime=0.1)
     time.sleep(1.0)
 
 
@@ -146,38 +166,43 @@ def main():
         log(f"skip: {reason}")
         print(f"skip: {reason}")
         return 0
-
     try:
         data = json.loads(LIST_FILE.read_text(encoding="utf-8"))
     except Exception as e:
         log(f"dev_list unreadable: {e}")
         return 1
-    devs = [str(d).strip() for d in data.get("devs", []) if str(d).strip()]
-    soft = data.get("messages") or SOFT_DEFAULT
-    jokes = data.get("jokes") or JOKE_DEFAULT
+    devs = []
+    for d in data.get("devs", []):
+        if isinstance(d, dict):
+            s = str(d.get("search", "")).strip()
+            n = str(d.get("name", "")).strip()
+            if s:
+                devs.append({"search": s, "name": n or s})
+        elif str(d).strip():
+            s = str(d).strip()
+            devs.append({"search": s, "name": s})
     if not devs:
-        log("dev_list empty - no names to remind (add Teams display names)")
+        log("dev_list empty - add devs to teams/dev_list.json")
         print("dev_list empty")
         return 0
 
-    # skip devs who have already added / engaged the assistant
     reached = []
     try:
         if REACHED_FILE.exists():
             reached += json.loads(REACHED_FILE.read_text(encoding="utf-8"))
     except Exception:
         pass
-    reached += data.get("added", [])                 # manual opt-out list too
-    reached_low = {str(r).strip().lower() for r in reached}
-    pending = [d for d in devs if d.lower() not in reached_low]
-    skipped = [d for d in devs if d.lower() in reached_low]
-    if skipped:
-        log(f"skipping (already added): {', '.join(skipped)}")
-    if not pending:
-        log("all listed devs have already added the assistant - nothing to send")
+    reached += data.get("added", [])
+    reached_low = [str(r).strip().lower() for r in reached if str(r).strip()]
+
+    def _is_reached(d):
+        nm, se = d["name"].lower(), d["search"].lower()
+        return any((r in nm or nm in r or r == se) for r in reached_low)
+    devs = [d for d in devs if not _is_reached(d)]
+    if not devs:
+        log("all listed devs already added the assistant - nothing to send")
         print("all devs reached")
         return 0
-    devs = pending
 
     win = ar._teams_window()
     if win is None:
@@ -185,35 +210,25 @@ def main():
         print("Teams not found")
         return 1
 
-    # humor only VERY sometimes: <= 2 per ISO week, low per-run chance
-    week = now.strftime("%G-W%V")
-    st0 = _load_state()
-    jokes_wk = st0.get("joke_week_count", 0) if st0.get("joke_week") == week else 0
-    joke_run = (bool(jokes) and jokes_wk < MAX_JOKES_PER_WEEK
-                and random.random() < JOKE_CHANCE)
-    pool = jokes if joke_run else soft
-    log(f"tone: {'JOKE' if joke_run else 'soft'} (jokes this week={jokes_wk})")
-
     sent = 0
-    for name in devs:
-        msg = random.choice(pool)
-        log(f"reminding '{name}' ({reason})")
+    for d in devs:
+        name, search = d["name"], d["search"]
+        kind, msg = compose(name)
+        log(f"engaging '{name}' ({search}) ({kind})")
         try:
-            open_chat_with(win, name)
-            if ar.send_reply(win, msg, human=False):   # paste (supports emoji)
+            open_chat_with(win, search)                  # find chat by email
+            if ar.send_reply(win, msg, human=False):     # paste (emoji/Bangla)
                 sent += 1
-                log(f"sent to '{name}'")
+                log(f"sent [{kind}] to '{name}': {msg[:50]}")
             else:
                 log(f"send FAILED to '{name}'")
         except Exception as e:
             log(f"error for '{name}': {e}")
         time.sleep(random.uniform(3.0, 6.0))
     if sent:
-        _bump_state(now, joke_run)
-        st = _load_state()
-        log(f"done: {sent}/{len(devs)} reminded; today count={st.get('count')}; "
-            f"tone={'JOKE' if joke_run else 'soft'}; jokes_this_week={st.get('joke_week_count')}")
-    print(f"reminded {sent}/{len(devs)}")
+        _bump_state(now)
+        log(f"done: engaged {sent}/{len(devs)} devs today")
+    print(f"engaged {sent}/{len(devs)}")
     return 0
 
 

@@ -61,6 +61,8 @@ ALREADY_ANSWERED = [
     "উপরে একটু দেখুন {first} ভাই, উত্তরটা দেওয়া আছে",
 ]
 
+_DIAG = False                           # set from settings.diagnose (get_incoming logging)
+
 # compose-box placeholder strings that must NOT be treated as incoming messages
 PLACEHOLDER_TEXTS = {
     "type a message", "type a new message", "type a reply", "message",
@@ -113,7 +115,11 @@ def load_rules():
     rules = []
     for r in data.get("rules", []):
         contains = [str(c).strip().lower() for c in r.get("contains", []) if str(c).strip()]
-        reply = str(r.get("reply", "")).strip()
+        rr = r.get("reply", "")
+        if isinstance(rr, list):
+            reply = [str(x).strip() for x in rr if str(x).strip()]
+        else:
+            reply = str(rr).strip()
         if contains and reply:
             rules.append({"contains": contains, "reply": reply,
                           "always": bool(r.get("always", False))})
@@ -138,8 +144,19 @@ def match_reply(text, rules):
         for c in r["contains"]:
             # word-boundary so short triggers ("hi") don't match inside words
             if re.search(r"\b" + re.escape(c) + r"\b", low):
-                return r["reply"]
+                rep = r["reply"]
+                return random.choice(rep) if isinstance(rep, list) else rep
     return None
+
+
+def _canned_texts(rules):
+    """All possible canned reply strings (flattening reply pools) - echo guard."""
+    out = set()
+    for r in rules:
+        rep = r["reply"]
+        for x in (rep if isinstance(rep, list) else [rep]):
+            out.add(str(x).strip().lower())
+    return out
 
 
 def is_always(text, rules):
@@ -546,13 +563,20 @@ def get_incoming(win, own_names, self_sent):
     best = None
     best_y = -1                # newest partner message (largest bottom_y)
     our_y = -1                 # newest of OUR own messages/replies
+    own_rows = []              # diag: what got counted as "ours"
     for nm, by in rows:
         low = nm.strip().lower()
         if not low or low in PLACEHOLDER_TEXTS or _NOISE_RE.match(low):
             continue
+        # skip left-rail chat-list entries (they embed "Last message You: ...")
+        if ("last message" in low or "unread message" in low
+                or low.startswith("chat ")):
+            continue
         if any(s and (low == s or low.startswith(s[:20]) or s.startswith(low[:20]))
                for s in self_sent):
             our_y = max(our_y, by)         # our reply position
+            if _DIAG:
+                own_rows.append((nm[:26], by, "self"))
             continue
         got = _parse_msg(nm.strip())
         if not got:
@@ -561,10 +585,16 @@ def get_incoming(win, own_names, self_sent):
         slow = sender.lower()
         if slow in own_names:
             our_y = max(our_y, by)         # our own bubble
+            if _DIAG:
+                own_rows.append((nm[:26], by, "own"))
             continue
         if plow and (slow == plow or slow in plow or plow in slow):
             if by > best_y:
                 best_y, best = by, (content, sender)
+    if _DIAG:
+        near = sorted([r for r in own_rows if r[1] >= best_y - 30], key=lambda x: -x[1])[:4]
+        log(f"DIAG gi best={best} best_y={best_y} our_y={our_y} "
+            f"own_near_best={near}")
     if best is None:
         return "", ""
     if our_y >= best_y:                    # our reply is below it -> already answered
@@ -729,6 +759,7 @@ def main():
     use_claude = bool(settings.get("use_claude", True))
     claude_timeout = int(settings.get("claude_timeout_s", DEFAULT_CLAUDE_TIMEOUT))
     diagnose = bool(settings.get("diagnose", False))
+    globals()["_DIAG"] = diagnose
     human_typing = bool(settings.get("human_typing", True))
     keep_alive = bool(settings.get("keep_alive", True))
     keep_alive_s = int(settings.get("keep_alive_seconds", 50))
@@ -743,7 +774,7 @@ def main():
     log(f"{len(rules)} canned rule(s); use_claude={use_claude}; poll={poll}s; "
         f"model={claude_model or 'default'}; human_typing={human_typing}; "
         f"keep_alive={keep_alive}; cooldown={cooldown}s")
-    canned_texts = {r["reply"].strip().lower() for r in rules}
+    canned_texts = _canned_texts(rules)
     self_sent = deque(maxlen=15)   # our own recent replies (echo guard)
     answered_at = {}                     # "contact|question" -> time answered (30-min window)
     last_reply_at = {}                   # contact -> time of last reply (per-contact gap)
@@ -846,6 +877,7 @@ def main():
                 use_claude = bool(settings.get("use_claude", True))
                 claude_timeout = int(settings.get("claude_timeout_s", DEFAULT_CLAUDE_TIMEOUT))
                 diagnose = bool(settings.get("diagnose", False))
+                globals()["_DIAG"] = diagnose
                 human_typing = bool(settings.get("human_typing", True))
                 keep_alive = bool(settings.get("keep_alive", True))
                 keep_alive_s = int(settings.get("keep_alive_seconds", 50))
@@ -857,7 +889,7 @@ def main():
                 reply_gap = float(settings.get("reply_gap_s", 5))
                 repeat_window = float(settings.get("repeat_window_s", 1800))
                 own_names = {str(n).strip().lower() for n in settings.get("own_names", ["Napco Nucleus"])}
-                canned_texts = {r["reply"].strip().lower() for r in rules}
+                canned_texts = _canned_texts(rules)
                 rules_mtime = mt
                 log(f"rules reloaded: {len(rules)} rule(s); use_claude={use_claude}")
 
