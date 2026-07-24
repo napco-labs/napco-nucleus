@@ -57,8 +57,8 @@ ALREADY_ANSWERED = [
     "Already replied to this one, {first} bhai, please scroll up a little",
     "That one is answered above, {first} bhai",
     "I covered this just now, {first} bhai, take a look above",
-    "এটা তো একটু আগেই বললাম, {first} ভাই :)",
-    "উপরে একটু দেখুন {first} ভাই, উত্তরটা দেওয়া আছে",
+    "এটা তো একটু আগেই বললাম ভাই :)",
+    "উপরে একটু দেখুন ভাই, উত্তরটা উপরেই আছে",
 ]
 
 _DIAG = False                           # set from settings.diagnose (get_incoming logging)
@@ -173,6 +173,35 @@ def is_always(text, rules):
     return False
 
 
+DEV_LIST_FILE = _HERE / "dev_list.json"
+
+
+def load_allowlist():
+    """Names/emails allowed to trigger COMMANDS (run pipeline, health check).
+    Built from dev_list.json so only the known devs can drive backend actions."""
+    try:
+        data = json.loads(DEV_LIST_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        return set()
+    out = set()
+    for d in data.get("devs", []):
+        if isinstance(d, dict):
+            for k in ("name", "search", "chat"):
+                v = str(d.get(k, "")).strip().lower()
+                if v:
+                    out.add(v)
+        elif str(d).strip():
+            out.add(str(d).strip().lower())
+    return out
+
+
+def is_allowed(who, allow):
+    w = (who or "").strip().lower()
+    if not w or not allow:
+        return False
+    return any(a and (a in w or w in a) for a in allow)
+
+
 def match_command(text, commands):
     """Return the command dict whose trigger phrase is in text, else None."""
     low = (text or "").strip().lower()
@@ -220,10 +249,12 @@ def dispatch_task(cmd, requester=""):
 
 
 class WarmSDK:
-    """Keeps ONE Claude Agent SDK client warm in a background asyncio thread so
-    each reply skips the per-message cold-start. Reconnects on error, and every
-    RECONNECT_EVERY asks (to keep conversation context from growing)."""
-    RECONNECT_EVERY = 8
+    """One Claude Agent SDK client kept warm in a background asyncio thread so
+    replies skip the cold-start. Reconnects on error and every RECONNECT_EVERY
+    asks so conversation history stays short (bounds cross-message context).
+    Used in a small POOL (see _warm_ask) so one recycling client never stalls
+    replies, and no single client accumulates many different people's messages."""
+    RECONNECT_EVERY = 4
 
     def __init__(self, system, model):
         self.system = system
@@ -285,16 +316,28 @@ class WarmSDK:
         return out[:MAX_REPLY_CHARS] if out else None
 
 
-_WARM = None
+_WARM_POOL = []
+POOL_SIZE = 2
+
+
+def _ensure_pool(system, model):
+    global _WARM_POOL
+    if not _WARM_POOL:
+        _WARM_POOL = [WarmSDK(system, model) for _ in range(POOL_SIZE)]
+        time.sleep(0.2)
 
 
 def _warm_ask(system, user, model, timeout_s):
-    global _WARM
+    """Ask via the first READY client in the pool (skips any that are
+    reconnecting). Returns None if none ready -> caller falls back to the CLI."""
     try:
-        if _WARM is None:
-            _WARM = WarmSDK(system, model)
-            time.sleep(0.2)               # let it start connecting
-        return _WARM.ask(user, timeout=timeout_s)
+        _ensure_pool(system, model)
+        for w in _WARM_POOL:
+            if w.client is not None:
+                out = w.ask(user, timeout=timeout_s)
+                if out is not None:
+                    return out
+        return None
     except Exception as e:
         log(f"warm ask error: {str(e)[:100]}")
         return None
@@ -361,7 +404,10 @@ def claude_answer(message, timeout_s, model="", sender=""):
         persona = ("You are Napco Nucleus, an AI meeting assistant. Reply "
                    "briefly and politely. Output only the reply text.")
     who = f"You are replying to {sender}. " if sender else ""
-    user = (f"{who}Incoming Teams message:\n{message}\n\n"
+    user = (f"{who}Reply ONLY to this one Teams message below. Ignore any earlier "
+            f"messages in this session - they may be from a DIFFERENT person, so "
+            f"never reference them or say 'as I told you'.\n\n"
+            f"Message: {message}\n\n"
             f"Reply with the reply text ONLY, 1-3 short sentences.")
     out = _warm_ask(persona, user, model, timeout_s)   # warm SDK, no cold-start
     if out:
@@ -524,6 +570,37 @@ def find_unread(win):
     except Exception:
         pass
     return out
+
+
+def find_chat_item(win, match):
+    """Find a left-rail chat-list item whose name contains `match` (a display
+    name substring). Returns the control to click, or None. Reliable for
+    opening an EXISTING contact's chat (no Ctrl+N search needed)."""
+    m = (match or "").strip().lower()
+    if not m:
+        return None
+    found = []
+
+    def walk(c, d):
+        if d > 25 or found:
+            return
+        try:
+            if c.ControlType in (auto.ControlType.ListItemControl,
+                                 auto.ControlType.TreeItemControl):
+                nm = (c.Name or "").lower()
+                if ("chat " in nm or "unread message" in nm) and m in nm:
+                    found.append(c)
+                    return
+            for ch in c.GetChildren():
+                walk(ch, d + 1)
+        except Exception:
+            return
+    try:
+        for ch in win.GetChildren():
+            walk(ch, 0)
+    except Exception:
+        pass
+    return found[0] if found else None
 
 
 def open_chat(item):
@@ -714,6 +791,92 @@ def nudge_input():
         pass
 
 
+def _find_send_button(win):
+    """Find the Teams 'Send' button, so we submit reliably even if the account
+    is set to Ctrl+Enter-to-send or focus drifts after typing."""
+    found = []
+
+    def walk(c, d):
+        if d > 45 or found:
+            return
+        try:
+            if c.ControlType == auto.ControlType.ButtonControl:
+                nm = (c.Name or "").strip().lower()
+                aid = (c.AutomationId or "").lower()
+                if (nm == "send" or nm == "send message" or nm.startswith("send ")
+                        or aid == "send" or aid.startswith("sendmessage")):
+                    found.append(c)
+                    return
+            for ch in c.GetChildren():
+                walk(ch, d + 1)
+        except Exception:
+            return
+    try:
+        for ch in win.GetChildren():
+            walk(ch, 0)
+    except Exception:
+        pass
+    return found[0] if found else None
+
+
+def _compose_value(win):
+    """Best-effort read of the compose box text. '' = empty, None = unreadable."""
+    try:
+        b = find_compose(win)
+        if b is None:
+            return None
+        try:
+            v = b.GetValuePattern().Value
+            if v is not None:
+                return v.strip()
+        except Exception:
+            pass
+        nm = (b.Name or "").strip()
+        return "" if nm.lower() in PLACEHOLDER_TEXTS else nm
+    except Exception:
+        return None
+
+
+def _submit(win, box):
+    """Submit and VERIFY the compose box emptied. Tries Send button, then
+    Ctrl+Enter, then Enter - so it works regardless of the send-key setting and
+    never leaves a 'written but not sent' message."""
+    def _click_send():
+        b = _find_send_button(win)
+        if b is None:
+            return
+        try:
+            b.GetInvokePattern().Invoke()
+        except Exception:
+            try:
+                b.Click(simulateMove=False)
+            except Exception:
+                pass
+
+    def _keys(seq):
+        try:
+            bx = find_compose(win)
+            if bx:
+                bx.SetFocus()
+                time.sleep(0.1)
+                bx.SendKeys(seq, waitTime=0.05)
+        except Exception:
+            pass
+
+    for i, way in enumerate((_click_send,
+                             lambda: _keys("{Ctrl}{Enter}"),
+                             lambda: _keys("{Enter}"))):
+        way()
+        time.sleep(0.4)
+        v = _compose_value(win)
+        if v is None:
+            return True                 # cannot verify -> assume it went (Send btn)
+        if not v or len(v) < 2:
+            return True                 # box emptied -> definitely sent
+    log("submit: compose still has text after all send methods")
+    return False
+
+
 def send_reply(win, text, human=True, think=(0.2, 0.5), type_speed=0.02):
     activate_window(win)                 # 'Seen' + let keystrokes land
     time.sleep(0.3)
@@ -737,16 +900,16 @@ def send_reply(win, text, human=True, think=(0.2, 0.5), type_speed=0.02):
             auto.SetClipboardText(text)
             time.sleep(0.1)
             box.SendKeys("{Ctrl}v", waitTime=0.05)
-        time.sleep(0.25)
-        box.SendKeys("{Enter}", waitTime=0.05)
-        return True
+        time.sleep(0.35)
+        return _submit(win, box)           # click Send button (reliable)
     except Exception as e:
         log(f"send failed: {e}; trying clipboard fallback")
         try:
+            box.SetFocus()
             auto.SetClipboardText(text)
             box.SendKeys("{Ctrl}a{Delete}{Ctrl}v", waitTime=0.05)
-            box.SendKeys("{Enter}", waitTime=0.05)
-            return True
+            time.sleep(0.3)
+            return _submit(win, box)
         except Exception as e2:
             log(f"fallback send failed: {e2}")
             return False
@@ -775,6 +938,7 @@ def main():
         f"model={claude_model or 'default'}; human_typing={human_typing}; "
         f"keep_alive={keep_alive}; cooldown={cooldown}s")
     canned_texts = _canned_texts(rules)
+    cmd_allow = load_allowlist()   # who may trigger commands (from dev_list)
     self_sent = deque(maxlen=15)   # our own recent replies (echo guard)
     answered_at = {}                     # "contact|question" -> time answered (30-min window)
     last_reply_at = {}                   # contact -> time of last reply (per-contact gap)
@@ -783,14 +947,13 @@ def main():
 
     # pre-warm the SDK client at startup so the FIRST reply is already fast
     if use_claude:
-        global _WARM
         try:
             _persona = PERSONA_FILE.read_text(encoding="utf-8")
         except Exception:
             _persona = "You are Napco Nucleus."
         try:
-            _WARM = WarmSDK(_persona, claude_model)
-            log("pre-warming SDK client")
+            _ensure_pool(_persona, claude_model)
+            log(f"pre-warming SDK pool (size {POOL_SIZE})")
         except Exception as e:
             log(f"pre-warm failed: {str(e)[:100]}")
 
@@ -822,6 +985,9 @@ def main():
             log(f"REPEAT notice to '{first}'")
             return
         cmd = match_command(msg, commands)
+        if cmd and not is_allowed(who, cmd_allow):
+            log(f"command from non-allowed '{who}' ignored -> normal reply")
+            cmd = None                       # not a dev -> no backend actions
         if cmd and cmd.get("report_cmd"):
             rep = run_report(cmd["report_cmd"], claude_model)
             send_reply(win, rep, human=human_typing, think=think, type_speed=type_speed)
@@ -866,7 +1032,11 @@ def main():
             cut = time.time() - repeat_window
             answered_at = {k: v for k, v in answered_at.items() if v > cut}
         last_reply_at[clow] = time.time()
-        mark_reached(chat_partner(win))
+        # NOTE: do NOT mark_reached here. Chatting is not the same as adding NN
+        # to a meeting. The reminder must keep nudging until the dev actually
+        # adds the assistant (tracked manually via dev_list "added", or by real
+        # call-capture attribution later). Auto-marking on chat wrongly silenced
+        # reminders after a single "hi".
 
     while True:
         try:
@@ -890,6 +1060,7 @@ def main():
                 repeat_window = float(settings.get("repeat_window_s", 1800))
                 own_names = {str(n).strip().lower() for n in settings.get("own_names", ["Napco Nucleus"])}
                 canned_texts = _canned_texts(rules)
+                cmd_allow = load_allowlist()
                 rules_mtime = mt
                 log(f"rules reloaded: {len(rules)} rule(s); use_claude={use_claude}")
 
@@ -904,6 +1075,8 @@ def main():
                     dump_ui(win)
                 # 1) any UNREAD chats? open each and reply (handles parallel devs)
                 unread = find_unread(win)
+                if diagnose:
+                    log(f"DIAG unread found={[c for _, c in unread]}")
                 if unread:
                     for item, contact in unread:
                         if open_chat(item):

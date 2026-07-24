@@ -112,16 +112,14 @@ def _bump_state(now):
 
 def _claude_gen(kind, name):
     """Fresh joke/quiz/fun line via Claude, in colleague tone. None on failure."""
+    common = (f"Keep it SIMPLE, clear and easy to understand at a glance. Use "
+              f"short, everyday words. No confusing or overly clever wordplay. "
+              f"Address the person as '{name} bhai'. Mostly plain English; a "
+              f"little simple Bangla is fine. Output only the message, 1-2 lines.")
     prompts = {
-        "joke": (f"Write ONE short, clean, friendly joke for a dev teammate named "
-                 f"{name}. Address them as '{name} bhai'. Mix English and a little "
-                 f"Bangla naturally. One or two lines. Output only the joke text."),
-        "quiz": (f"Write ONE short fun riddle or quiz for a dev teammate named "
-                 f"{name}, asking them to solve it. Address as '{name} bhai'. "
-                 f"Playful, one or two lines. Output only the message text."),
-        "fun": (f"Write ONE short fun, friendly one-liner to a dev teammate named "
-                f"{name} (address as '{name} bhai'), light and human, gently "
-                f"hinting to add Napco Nucleus to their meetings. Output only text."),
+        "joke": f"Write ONE short, simple, clearly funny joke for your dev teammate {name}. {common}",
+        "quiz": f"Write ONE short and EASY fun riddle for your dev teammate {name} to solve. Make it simple and clear, not tricky. {common}",
+        "fun": f"Write ONE short, fun, friendly one-liner to your dev teammate {name}, gently hinting to add Napco Nucleus to their meetings. {common}",
     }
     try:
         p = subprocess.run(["claude", "--print", "--model", MODEL],
@@ -145,17 +143,30 @@ def compose(name):
     return kind, random.choice(fb).replace("{name}", name)
 
 
-def open_chat_with(win, name):
+def open_chat_with(win, dev):
+    """Open the dev's chat. Prefer clicking their EXISTING chat in the list
+    (reliable); fall back to Ctrl+N search only if not found."""
     ar.activate_window(win)
-    time.sleep(0.6)
+    time.sleep(0.5)
+    match = str(dev.get("chat") or dev.get("name") or "").strip()
+    item = ar.find_chat_item(win, match) if match else None
+    if item is not None and ar.open_chat(item):
+        time.sleep(1.3)
+        return True
+    # fallback: Ctrl+N search by the search term (email)
+    search = str(dev.get("search") or dev.get("name") or "")
     auto.SendKeys("{Ctrl}n", waitTime=0.1)
-    time.sleep(1.3)
-    auto.SendKeys(ar._sk_escape(name), waitTime=0.05)
-    time.sleep(1.6)
+    time.sleep(1.5)
+    auto.SendKeys("{Ctrl}a", waitTime=0.05)
+    auto.SendKeys("{Delete}", waitTime=0.05)
+    time.sleep(0.4)
+    auto.SendKeys(ar._sk_escape(search), waitTime=0.06)
+    time.sleep(2.2)
     auto.SendKeys("{Enter}", waitTime=0.1)
-    time.sleep(0.9)
+    time.sleep(1.1)
     auto.SendKeys("{Enter}", waitTime=0.1)
-    time.sleep(1.0)
+    time.sleep(1.1)
+    return True
 
 
 def main():
@@ -216,7 +227,7 @@ def main():
         kind, msg = compose(name)
         log(f"engaging '{name}' ({search}) ({kind})")
         try:
-            open_chat_with(win, search)                  # find chat by email
+            open_chat_with(win, d)                        # open the dev's chat
             if ar.send_reply(win, msg, human=False):     # paste (emoji/Bangla)
                 sent += 1
                 log(f"sent [{kind}] to '{name}': {msg[:50]}")

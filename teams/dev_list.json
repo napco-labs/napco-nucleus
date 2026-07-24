@@ -1,13 +1,13 @@
 {
-  "_note": "Each dev: 'search' = the Teams login/email used to open their chat (Ctrl+N), 'name' = how to address them (name + bhai). 'added' = names/emails to STOP reminding once they add the assistant.",
+  "_note": "search = Teams login/email (Ctrl+N fallback). name = how to address (name + bhai). chat = a UNIQUE substring of their display name in the chat list, used to CLICK their existing chat (reliable, preferred). added = names to STOP reminding.",
   "devs": [
-    {"search": "rockycs33@hotmail.com", "name": "Rocky"},
-    {"search": "zaman_ael@hotmail.com", "name": "Zaman"},
-    {"search": "mjferdows@hotmail.com", "name": "Ferdows"},
-    {"search": "ihasan.ael@outlook.com", "name": "Isruk"},
-    {"search": "sheikhamin.ael@outlook.com", "name": "Amin"},
-    {"search": "kaptan.cse@outlook.com", "name": "Atik"},
-    {"search": "titucse@hotmail.com", "name": "Titu"}
+    {"search": "rockycs33@hotmail.com", "name": "Rocky", "chat": "Rocky"},
+    {"search": "zaman_ael@hotmail.com", "name": "Zaman", "chat": "Assad Zaman"},
+    {"search": "mjferdows@hotmail.com", "name": "Ferdows", "chat": "Ferdows"},
+    {"search": "ihasan.ael@outlook.com", "name": "Isruk", "chat": "Isruk"},
+    {"search": "sheikhamin.ael@outlook.com", "name": "Amin", "chat": "Sheikh Amin"},
+    {"search": "kaptan.cse@outlook.com", "name": "Atik", "chat": "Atikur"},
+    {"search": "titucse@hotmail.com", "name": "Titu", "chat": "Kamrul"}
   ],
   "added": []
 }
