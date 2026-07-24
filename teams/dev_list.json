@@ -1,0 +1,9 @@
+{
+  "_note": "Fill 'devs' with each developer's Teams display name (exactly as it shows in Teams search). 'messages' are rotated so the reminder does not look identical every time.",
+  "devs": [],
+  "messages": [
+    "Hi, this is Napco Nucleus. Please add me to your client calls and chats so I can capture the requirements for you automatically. Thanks!",
+    "Reminder from Napco Nucleus: add me to your meetings and I will take care of capturing everything discussed. Thank you.",
+    "Hello from Napco Nucleus. Quick reminder to add me to your client conversations so nothing a client asks for gets missed."
+  ]
+}

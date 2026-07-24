@@ -1,0 +1,63 @@
+{
+  "settings": {
+    "poll_seconds": 1.0,
+    "use_claude": true,
+    "claude_model": "claude-haiku-4-5-20251001",
+    "claude_timeout_s": 45,
+    "diagnose": false,
+    "human_typing": true,
+    "type_speed": 0.012,
+    "think_min": 0.1,
+    "think_max": 0.25,
+    "reply_cooldown_s": 8,
+    "keep_alive": true,
+    "keep_alive_seconds": 50
+  },
+  "commands": [
+    {
+      "contains": ["check pipeline health", "pipeline health", "pipeline status", "is the pipeline ok", "is the pipeline running", "check the pipeline", "health check", "pipeline healthy", "check requirement status", "requirement status", "requirements status", "check requirements", "check the requirement", "check email status", "email status", "check email", "check the email", "system status", "check status", "status check", "is everything ok", "is everything working", "everything running", "all good"],
+      "report_cmd": "ssh -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new ubuntu@172.16.205.123 \"echo '== containers =='; docker ps --format '{{.Names}}: {{.Status}}'; echo '== latest transcripts =='; ls -t /srv/nucleus-central/napco-nucleus/*/calls/*_transcript.md 2>/dev/null | head -3; echo '== latest emails =='; ls -t /srv/nucleus-central/email/ 2>/dev/null | head -3\""
+    },
+    {
+      "contains": ["run the pipeline", "run pipeline", "run the requirement", "send email", "email me the report", "email the report", "email me the requirements", "email the requirements", "send the requirements", "send me the requirements", "send me the report", "email me the notes", "meeting notes", "send report", "email report", "generate the report"],
+      "ack": "Okay {sender} bhai",
+      "task": "run-pipeline-email",
+      "dedup": true
+    }
+  ],
+  "rules": [
+    {
+      "contains": ["who are you", "who r u", "who is this", "your name", "introduce yourself", "what are you"],
+      "reply": "I am Napco Nucleus."
+    },
+    {
+      "contains": [
+        "who created you", "who built you", "who made you", "who developed you",
+        "who designed you", "who coded you", "who programmed you",
+        "who invented you", "who owns you", "who is behind you",
+        "your creator", "your builder", "your maker", "your developer",
+        "your designer", "your owner", "your inventor", "your author",
+        "who is your creator", "who is your builder", "who is your maker",
+        "who is your developer", "who is your designer", "who is your owner",
+        "who's your creator", "who's your developer", "who's your maker",
+        "made you", "built you", "created you"
+      ],
+      "reply": "I was created by Mohammad Kamrul Hasan."
+    },
+    {
+      "contains": ["thank you", "thanks", "thx", "appreciate it", "appreciated"],
+      "reply": "You're welcome! Happy to help with your requirements anytime.",
+      "always": true
+    },
+    {
+      "contains": ["hi", "hello", "hey", "good morning", "good afternoon", "good evening", "assalamu alaikum", "salam"],
+      "reply": "Hello! I am Napco Nucleus. Ask me anything about your requirement management and I will help.",
+      "always": true
+    },
+    {
+      "contains": ["welcome", "sorry", "it's okay", "its okay", "okay", "no problem", "no worries", "alright", "all right", "cool", "great", "nice", "well done", "good job", "got it", "sure thing", "my pleasure"],
+      "reply": "Happy to help, anytime :)",
+      "always": true
+    }
+  ]
+}
