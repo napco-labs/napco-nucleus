@@ -1169,7 +1169,9 @@ def send_reply(win, text, human=True, think=(0.2, 0.5), type_speed=0.02,
             non_ascii = False
         if human and not non_ascii:
             time.sleep(random.uniform(*think))             # brief think pause
-            box.SendKeys(_sk_escape(text), waitTime=type_speed)   # shows 'typing...'
+            box.SendKeys(_sk_escape(text), interval=type_speed, waitTime=0.3)
+            # interval is PER CHARACTER. waitTime is only the pause after,
+            # which is what type_speed used to be wired to by mistake.
         else:
             if human:
                 time.sleep(random.uniform(*think))
