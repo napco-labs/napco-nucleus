@@ -35,6 +35,34 @@ from pathlib import Path
 
 import uiautomation as auto
 
+# ---------------------------------------------------------------------------
+# Force EVERY child process this daemon spawns to be windowless.
+#
+# Setting creationflags on our own subprocess.run calls was not enough: the
+# warm claude_agent_sdk pool spawns the Claude CLI through its own async path,
+# so two console windows appeared on the desktop (pool size 2 = 2 windows).
+#
+# That is not cosmetic. This process drives Teams through UI automation, and a
+# window appearing mid-type STEALS FOCUS from the compose box -- the cause of
+# the recurring "submit: compose still has text after all send methods".
+#
+# Patching Popen itself catches every spawner, including asyncio's, which on
+# Windows goes through subprocess.Popen underneath.
+# ---------------------------------------------------------------------------
+if os.name == "nt":
+    _CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+    _OrigPopen = subprocess.Popen
+
+    class _NoWindowPopen(_OrigPopen):
+        def __init__(self, *a, **kw):
+            try:
+                kw["creationflags"] = (kw.get("creationflags") or 0) | _CREATE_NO_WINDOW
+            except Exception:
+                pass
+            super().__init__(*a, **kw)
+
+    subprocess.Popen = _NoWindowPopen
+
 # followups has no back-reference, so a top-level import is safe. teams.notify
 # does `from teams import auto_reply`, so THAT one must stay lazy (below) or we
 # get a circular import at startup.
@@ -328,11 +356,21 @@ class WarmSDK:
 
 
 _WARM_POOL = []
+# Settable from auto_reply_rules.json -> settings.sdk_pool_size.
+# SET TO 0 ON THE ASSISTANT BOX. The warm claude_agent_sdk pool spawns the
+# Claude CLI through its own async path, which we cannot make windowless -- it
+# put one visible console on the desktop per pool slot (size 2 = 2 windows).
+# Those windows steal focus from the Teams compose box mid-type, which is what
+# caused "submit: compose still has text after all send methods".
+# With 0, _warm_ask short-circuits and claude_answer uses the CLI path, which
+# DOES honour CREATE_NO_WINDOW. Slower first token, but it can actually send.
 POOL_SIZE = 2
 
 
 def _ensure_pool(system, model):
     global _WARM_POOL
+    if POOL_SIZE <= 0:
+        return                      # pool disabled: CLI path only, no windows
     if not _WARM_POOL:
         _WARM_POOL = [WarmSDK(system, model) for _ in range(POOL_SIZE)]
         time.sleep(0.2)
@@ -341,6 +379,8 @@ def _ensure_pool(system, model):
 def _warm_ask(system, user, model, timeout_s):
     """Ask via the first READY client in the pool (skips any that are
     reconnecting). Returns None if none ready -> caller falls back to the CLI."""
+    if POOL_SIZE <= 0:
+        return None                 # straight to the windowless CLI path
     try:
         _ensure_pool(system, model)
         for w in _WARM_POOL:
@@ -1029,7 +1069,8 @@ def main():
     rules_mtime = _mtime(RULES_FILE)
 
     # pre-warm the SDK client at startup so the FIRST reply is already fast
-    if use_claude:
+    globals()["POOL_SIZE"] = int(settings.get("sdk_pool_size", POOL_SIZE))
+    if use_claude and POOL_SIZE > 0:
         try:
             _persona = PERSONA_FILE.read_text(encoding="utf-8")
         except Exception:
