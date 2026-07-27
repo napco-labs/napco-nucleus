@@ -54,3 +54,6 @@ docs/*_old*.pptx
 # Keep the dir via .gitkeep; don't commit individual runs.
 evals/results/*.json
 nucleus_memory.db
+
+# Graph OAuth token cache - contains a live refresh token, never commit
+data/graph_token.json
