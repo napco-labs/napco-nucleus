@@ -34,34 +34,27 @@ LOG = r"E:\napco-nucleus\logs\remind_devs.log"
 
 BST = timezone(timedelta(hours=6))
 WINDOW_START, WINDOW_END = 17, 22
-MAX_PER_DAY = 1
-MODEL = "claude-haiku-4-5-20251001"
+MAX_PER_DAY = 2
+MODEL = "claude-sonnet-5"
 
-# message TYPES for the day; "meeting" weighted higher (that is the real goal)
-ENGAGE_TYPES = ["meeting", "meeting", "meeting", "joke", "quiz", "fun"]
+# Only one kind of nudge now. Titu 2026-07-27: professional and respectful,
+# short, and the point is simply that they do not forget to add the assistant.
+# The joke / quiz / "fun" types were removed -- they read as banter, and a
+# colleague who jokes at people unprompted is not the tone we want.
+ENGAGE_TYPES = ["meeting"]
 
 MEETING_TEMPLATES = [
-    "{name} bhai, do you have any client meeting today? Please add Napco Nucleus so I can capture everything for you :)",
-    "{name} bhai, kono client call ache aj? Amake add korte vulben na jeno, ami sob capture kore nibo :)",
-    "Hi {name} bhai, if you have a client call today, add me in so nothing gets missed.",
-    "{name} ভাই, আজ কোনো ক্লায়েন্ট মিটিং থাকলে আমাকে অ্যাড করে নেবেন :)",
-    "{name} bhai, meeting thakle amake dhukiye diyen, note-taking ta ami samle nibo :)",
+    "{name} bhai, if you have a client call today, please add Napco Nucleus so the requirements are captured.",
+    "{name} bhai, please add me to any client call today and I will take care of the notes.",
+    "Hello {name} bhai, a gentle reminder to add Napco Nucleus to any client call today.",
+    "{name} ভাই, আজ কোনো ক্লায়েন্ট কল থাকলে অনুগ্রহ করে আমাকে অ্যাড করে নিবেন।",
+    "{name} bhai, please keep me in today's client call if there is one, so nothing is missed.",
 ]
-JOKE_FALLBACK = [
-    "{name} bhai, why did the developer go broke? He used up all his cache :)",
-    "{name} bhai, ekta bug ar ekta feature er difference ki? Documentation :)",
-    "{name} bhai, koto jon programmer lage ekta bulb lagate? Zero, that's a hardware problem :)",
-]
-QUIZ_FALLBACK = [
-    "{name} bhai, quick riddle: I speak without a mouth and hear without ears. What am I?",
-    "{name} bhai, puzzle: what has keys but opens no locks, space but no room? :)",
-    "{name} bhai, ekta puzzle: 8 ta 8 diye kivabe 1000 banabe? (Hint: 888+88+8+8+8) :)",
-]
-FUN_FALLBACK = [
-    "{name} bhai, ei to, chup kore boshe apnader requirement gulo capture korchi :)",
-    "{name} bhai, zero salary, no lunch break, never forgets. Just add me to your meetings :)",
-    "{name} bhai, adda dite mon chaiche but kaj age! Add me to a call na :)",
-]
+# Kept as names so any stale reference still resolves, but they now hold the
+# same respectful wording rather than jokes.
+JOKE_FALLBACK = MEETING_TEMPLATES
+QUIZ_FALLBACK = MEETING_TEMPLATES
+FUN_FALLBACK = MEETING_TEMPLATES
 
 
 def log(m):

@@ -318,6 +318,41 @@ def _build_message(day: str, to_addrs: list[str], cc_addrs: list[str],
     return msg
 
 
+def _drop_sent_marker(day: str, to_addrs: list[str], cc_addrs: list[str],
+                      reqs: list, attachments: list) -> None:
+    """Leave a breadcrumb on central saying the requirements email went out.
+
+    The pipeline runs on the Linux central host, which has no Teams. The
+    assistant on the Windows box watches this directory and announces the send
+    to the team (teams/announce_rollup.py). Best-effort by design: failing to
+    write a notification marker must never turn a successful send into a
+    failure.
+    """
+    try:
+        central = (os.environ.get("NUCLEUS_CENTRAL_PATH")
+                   or "/data/nucleus-central").strip()
+        out = Path(central) / ".rollup_sent"
+        out.mkdir(parents=True, exist_ok=True)
+        stamp = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
+        payload = {
+            "day": day,
+            "sent_at": dt.datetime.now().isoformat(timespec="seconds"),
+            "to": to_addrs,
+            "cc": cc_addrs,
+            "requirements": len(reqs),
+            "attachments": [Path(a).name for a in attachments],
+            "announced": False,
+        }
+        tmp = out / f".{stamp}.json.tmp"
+        dst = out / f"{stamp}.json"
+        tmp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        os.replace(str(tmp), str(dst))
+        print(f"[rollup] notification marker written: {dst.name}")
+    except Exception as e:
+        print(f"[rollup] could not write notification marker: {e}",
+              file=sys.stderr)
+
+
 def _send(msg: EmailMessage, all_recipients: list[str]) -> None:
     host = (os.environ.get("SMTP_HOST") or "").strip()
     user = (os.environ.get("SMTP_USER") or "").strip()
@@ -456,6 +491,7 @@ def main() -> int:
             print(f"[rollup] sent to {len(to_addrs)} TO + {len(cc_addrs)} CC "
                   f"recipients.")
             _record_emailed(day, [_req_key(r) for r in reqs])
+            _drop_sent_marker(day, to_addrs, cc_addrs, reqs, attachments)
             return 0
         except Exception as e:
             if _attempt == 0:

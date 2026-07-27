@@ -967,7 +967,7 @@ def send_reply(win, text, human=True, think=(0.2, 0.5), type_speed=0.02):
                 time.sleep(random.uniform(*think))
             auto.SetClipboardText(text)
             time.sleep(0.1)
-            box.SendKeys("{Ctrl}v", waitTime=0.05)
+            box.SendKeys("{Ctrl}{Shift}v", waitTime=0.05)   # PLAIN paste: never a Loop component
         time.sleep(0.35)
         return _submit(win, box)           # click Send button (reliable)
     except Exception as e:
@@ -975,7 +975,7 @@ def send_reply(win, text, human=True, think=(0.2, 0.5), type_speed=0.02):
         try:
             box.SetFocus()
             auto.SetClipboardText(text)
-            box.SendKeys("{Ctrl}a{Delete}{Ctrl}v", waitTime=0.05)
+            box.SendKeys("{Ctrl}a{Delete}{Ctrl}{Shift}v", waitTime=0.05)   # PLAIN paste
             time.sleep(0.3)
             return _submit(win, box)
         except Exception as e2:
