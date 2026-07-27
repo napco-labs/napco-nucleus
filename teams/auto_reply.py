@@ -95,7 +95,7 @@ ASCII_ONLY = True              # overridden by settings.ascii_only
 SINGLE_SENTENCE = True         # overridden by settings.single_sentence
 
 
-def _tidy_reply(text, limit=None):
+def _tidy_reply(text, limit=None, single=None):
     """Make a reply safe to type into Teams, and human to read.
 
     Order matters and was got wrong once: strip non-ASCII FIRST, then fix
@@ -133,7 +133,8 @@ def _tidy_reply(text, limit=None):
         return ""
     t = t[0].upper() + t[1:]
 
-    if SINGLE_SENTENCE:
+    want_single = SINGLE_SENTENCE if single is None else single
+    if want_single:
         # Titu: one sentence, nothing more. Cut at the FIRST sentence end so a
         # rambling model answer still arrives as one clean line.
         m = re.search(r"[.!?](\s|$)", t)
@@ -491,6 +492,26 @@ def _set_pipeline_fp(fp):
         log(f"set fp failed: {str(e)[:80]}")
 
 
+def _claude_ask(system, user, model, timeout_s):
+    """Warm pool if available, otherwise the CLI. run_report used to call
+    _warm_ask directly, so turning the pool off (sdk_pool_size=0, to stop the
+    console windows) made it fall back to dumping raw shell output at people."""
+    out = _warm_ask(system, user, model, timeout_s)
+    if out:
+        return out
+    prompt = (system + chr(10) + chr(10) + user) if system else user
+    cmd = ["claude", "--print"] + (["--model", model] if model else [])
+    try:
+        proc = subprocess.run(cmd, input=prompt, capture_output=True, text=True,
+                              encoding="utf-8", errors="replace",
+                              creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                              cwd=str(_REPO), timeout=timeout_s, shell=True)
+    except Exception as e:
+        log(f"claude cli (ask) failed: {e}")
+        return None
+    return (proc.stdout or "").strip() or None
+
+
 def run_report(report_cmd, model, timeout_s=25):
     """Run a READ-ONLY status command (e.g. ssh into .123 to gather pipeline
     health), then summarize its output with Claude into a short chat report."""
@@ -503,12 +524,27 @@ def run_report(report_cmd, model, timeout_s=25):
         return f"I could not reach the pipeline to check right now ({e})."
     if not raw:
         return "I checked, but the pipeline returned no status data."
-    ask = ("Summarize this requirement management pipeline status into a short, "
-           "friendly report: 1-3 sentences, plain language, no em dashes. Say if "
-           "it looks healthy or if something is down. Reply with the report text "
-           "only.\n\nRAW STATUS:\n" + raw[:4000])
-    out = _warm_ask("", ask, model, 30)
-    return out if out else raw[:400]
+    ask = (
+        "Below is raw technical output from our requirement pipeline. Turn it "
+        "into what a NON-TECHNICAL colleague would want to hear.\n\n"
+        "Rules:\n"
+        "- TWO short sentences maximum, plain English.\n"
+        "- Never mention container names, docker, uptimes, file paths or "
+        "servers. Say 'the pipeline', 'recordings', 'the last email'.\n"
+        "- Lead with whether it is working or not.\n"
+        "- If something is broken, say what that means for them in practice.\n"
+        "- No dashes, no emoji, no markdown, no lists.\n"
+        "- Reply with the sentences only.\n\n"
+        "Right tone: 'Everything is running normally and your call from this "
+        "evening has been processed. The last requirements email went out on "
+        "17 July.'\n\n"
+        "RAW STATUS:\n" + raw[:4000])
+    out = _claude_ask("", ask, model, 30)
+    if out:
+        return out
+    # Never dump raw shell output at a person. If we cannot summarise it, say so.
+    return ("I checked and the pipeline answered, but I could not put the "
+            "result into words just now.")
 
 
 def claude_answer(message, timeout_s, model="", sender=""):
@@ -1106,8 +1142,12 @@ def _submit(win, box):
     return False
 
 
-def send_reply(win, text, human=True, think=(0.2, 0.5), type_speed=0.02):
-    text = _tidy_reply(text)             # single line, capped, sentence-safe
+def send_reply(win, text, human=True, think=(0.2, 0.5), type_speed=0.02,
+               single=None):
+    # single=False lets a follow-up keep its second sentence, which carries the
+    # "shall I send the email?" offer. With the global one-sentence rule that
+    # offer was being cut off before it ever reached anyone.
+    text = _tidy_reply(text, single=single)
     activate_window(win)                 # 'Seen' + let keystrokes land
     time.sleep(0.3)
     box = find_compose(win)
@@ -1432,7 +1472,8 @@ def main():
                                                   or here.startswith(want[:12])
                                                   or want.startswith(here[:12])):
                                 ok = send_reply(win, body, human=human_typing,
-                                                think=think, type_speed=type_speed)
+                                                think=think, type_speed=type_speed,
+                                                single=False)   # keep the offer
                                 log(f"FOLLOWUP delivered in the open chat with '{here}'")
                         except Exception as e:
                             log(f"followup in-place send failed: {str(e)[:100]}")
