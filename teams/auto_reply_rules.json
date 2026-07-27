@@ -11,7 +11,7 @@
     "think_max": 1.0,
     "reply_cooldown_s": 8,
     "reply_gap_s": 5,
-    "repeat_window_s": 1800,
+    "repeat_window_s": 90,
     "keep_alive": true,
     "keep_alive_seconds": 50,
     "own_names": [
@@ -19,7 +19,10 @@
     ],
     "ascii_only": false,
     "max_reply_chars": 400,
-    "single_sentence": false
+    "single_sentence": false,
+    "sdk_pool_size": 0,
+    "keep_alive_hours": "11:00-23:00",
+    "presence_active_minutes": 999999
   },
   "commands": [
     {

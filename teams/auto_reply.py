@@ -154,13 +154,14 @@ def _tidy_reply(text, limit=None, single=None):
 
 
 # varied, human-sounding "you already asked this" lines (a repeat within 30 min)
+# Only used for a genuine double-send within repeat_window_s (90s), e.g. an
+# accidental double Enter. Anything later is answered properly again: people
+# re-ask because they did not SEE the answer, and "I already replied" is a
+# brush-off.
 ALREADY_ANSWERED = [
-    "I answered this just above, {first} bhai.",
-    "I have replied to this one above, {first} bhai.",
-    "That is answered a little above, {first} bhai.",
-    "I covered this a moment ago, {first} bhai.",
-    "I mentioned this just above, {first} bhai.",
-    "That one is already answered above, {first} bhai.",
+    "Just above, {first} bhai :)",
+    "Sent that one a second ago, {first} bhai.",
+    "That is the one right above, {first} bhai.",
 ]
 
 _DIAG = False                           # set from settings.diagnose (get_incoming logging)
