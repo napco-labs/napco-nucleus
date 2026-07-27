@@ -100,12 +100,46 @@ never touches Microsoft's wire and produces no server-side signal. Recording
 your own speaker output is a consent question, not a Microsoft-terms question.
 Handled in `RECORDING-DISCLOSURE.md`.
 
-## What would actually close this
+## What would actually close this — corrected 2026-07-27
 
-One Microsoft 365 Business Basic licence (~USD 6/user/month) on a company
-address. That single change converts A from forensic extraction to Graph API
-calls, B from UI automation to a registered bot, and D from a personal account
-to a work account. Nothing else closes any of them.
+An earlier draft of this file said one Business Basic licence "converts A, B
+and D". That was too glib in two ways, corrected here.
+
+**A licence alone fixes exactly one item: D.** A work/school account on a
+company address is company-owned, recoverable, and signs into Teams normally.
+That is a purchase, and it is done.
+
+**A and B need a code rewrite; the licence only makes the rewrite possible.**
+Buying it changes nothing on its own.
+
+| Item | What the licence gives you | What you still have to build |
+|---|---|---|
+| A. IndexedDB extraction | Microsoft Graph: `Chat.Read` / `ChatMessage.Read` for chats, `CallRecords.Read.All` for call metadata | Replace `teams/reader.py`, `teams/calls.py`, `teams/list_chats.py` with Graph calls. Register an Entra app (free). Real work, not a config change. |
+| B. UI automation sending | Graph `Chat.ReadWrite` to send as the user, or a registered Teams bot | Rewrite `auto_reply.py` / `notify.py` / `remind_devs.py` off `uiautomation`+`SendKeys`. The persona/canned/Claude logic survives; only the transport changes. |
+| D. Personal account | Done on purchase | Nothing. |
+
+**Business Basic does NOT give you sanctioned call recording.** Verified
+against Microsoft's own docs: compliance recording requires **Business
+Standard, Business Premium, E3, E5, A3/A5 or G3/G5** — Business Basic is
+explicitly not eligible, and there is no standalone add-on that makes it
+eligible. It also only works through a **Microsoft-certified third-party
+recording partner** (NICE, Verint, Dubber, ASC and similar) running a
+recording bot in the tenant. That is enterprise-priced software, not something
+to build.
+
+So the sanctioned recording path is far beyond USD 6/month and is not
+realistically on the table.
+
+**Why that may not matter to you.** Recording is item E, and item E is not a
+Microsoft matter at all — loopback capture never touches Microsoft's wire and
+produces no server-side signal. If the concern is strictly Microsoft risk,
+the recording can stay exactly as it is and you lose nothing by never having
+compliance recording.
+
+Absent any of this, everything above is a knowingly accepted risk, not a
+compliant configuration. The 2026-07-27 presence work reduced the probability
+of being *noticed*. It did not make anything compliant, and it should not be
+recorded as having done so.
 
 Absent that, everything above is a knowingly accepted risk, not a compliant
 configuration. The 2026-07-27 presence work reduced the probability of being
