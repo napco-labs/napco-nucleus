@@ -33,8 +33,14 @@ REACHED_FILE = _REPO / "data" / "reached_devs.json"
 LOG = r"E:\napco-nucleus\logs\remind_devs.log"
 
 BST = timezone(timedelta(hours=6))
-WINDOW_START, WINDOW_END = 17, 22
-MAX_PER_DAY = 2
+# Titu 2026-07-27: remind EVERY colleague between 17:00 and 17:30 BD, with at
+# least 5 minutes between two people, Monday to Friday. The scheduled task
+# fires every 5 min inside that window and each run reminds exactly ONE person,
+# which is what produces the spacing -- no sleeping inside the process.
+WINDOW_START_MIN = 17 * 60          # 17:00 BD
+WINDOW_END_MIN = 17 * 60 + 30       # 17:30 BD
+MIN_GAP_SECONDS = 300               # >= 5 minutes between two colleagues
+MAX_PER_DAY = 99                    # the window is the real limit now
 MODEL = "claude-sonnet-5"
 
 # Only one kind of nudge now. Titu 2026-07-27: professional and respectful,
@@ -81,25 +87,39 @@ def _save_state(s):
 
 
 def _gate(now, force):
+    """Is this run allowed to remind someone right now?"""
     if force:
         return True, "forced"
-    if now.weekday() >= 5:
-        return False, "weekend (skip Sat/Sun)"
-    if not (WINDOW_START <= now.hour < WINDOW_END):
-        return False, f"outside 17:00-22:00 BST (now {now:%H:%M})"
+    if now.weekday() > 4:                       # Mon=0 .. Fri=4
+        return False, "not a weekday (Mon-Fri only)"
+    mins = now.hour * 60 + now.minute
+    if not (WINDOW_START_MIN <= mins < WINDOW_END_MIN):
+        return False, "outside 17:00-17:30 BD (now %s)" % now.strftime("%H:%M")
     st = _load_state()
-    if st.get("date") == now.strftime("%Y-%m-%d") and st.get("count", 0) >= MAX_PER_DAY:
-        return False, "already reached out today"
+    if st.get("date") == now.strftime("%Y-%m-%d"):
+        since = time.time() - float(st.get("last_at", 0) or 0)
+        if since < MIN_GAP_SECONDS:
+            return False, "only %.0fs since the last colleague (need %ds)" % (
+                since, MIN_GAP_SECONDS)
     return True, "ok"
 
 
-def _bump_state(now):
+def _sent_today(now):
+    st = _load_state()
+    if st.get("date") != now.strftime("%Y-%m-%d"):
+        return set()
+    return {str(x).lower() for x in st.get("sent", [])}
+
+
+def _bump_state(now, who=""):
     st = _load_state()
     today = now.strftime("%Y-%m-%d")
     if st.get("date") != today:
-        st["date"] = today
-        st["count"] = 0
+        st = {"date": today, "sent": [], "count": 0}
     st["count"] = st.get("count", 0) + 1
+    st["last_at"] = time.time()
+    if who:
+        st.setdefault("sent", []).append(who)
     _save_state(st)
 
 
@@ -214,25 +234,42 @@ def main():
         print("Teams not found")
         return 1
 
+    # ONE colleague per run. The 5-minute spacing comes from the schedule,
+    # not from sleeping in-process -- a long sleep would hold the Teams window
+    # hostage and block auto_reply from answering anyone meanwhile.
+    already = _sent_today(now)
+    pending = [d for d in devs if d["name"].lower() not in already]
+    if not pending:
+        log("every colleague already reminded today (%d)" % len(already))
+        print("all reminded today")
+        return 0
+
+    d = pending[0]
+    name, search = d["name"], d["search"]
+    kind, msg = compose(name)
+    log("reminding '%s' (%s) [%s]; %d left after this"
+        % (name, search, kind, len(pending) - 1))
+
     sent = 0
-    for d in devs:
-        name, search = d["name"], d["search"]
-        kind, msg = compose(name)
-        log(f"engaging '{name}' ({search}) ({kind})")
-        try:
-            open_chat_with(win, d)                        # open the dev's chat
-            if ar.send_reply(win, msg, human=False):     # paste (emoji/Bangla)
-                sent += 1
-                log(f"sent [{kind}] to '{name}': {msg[:50]}")
-            else:
-                log(f"send FAILED to '{name}'")
-        except Exception as e:
-            log(f"error for '{name}': {e}")
-        time.sleep(random.uniform(3.0, 6.0))
-    if sent:
-        _bump_state(now)
-        log(f"done: engaged {sent}/{len(devs)} devs today")
-    print(f"engaged {sent}/{len(devs)}")
+    try:
+        open_chat_with(win, d)
+        if ar.send_reply(win, msg, human=False):
+            sent = 1
+            _bump_state(now, who=name)
+            log("sent to '%s': %s" % (name, msg[:60]))
+        else:
+            log("send FAILED to '%s' - will retry next run" % name)
+    except Exception as e:
+        log("error for '%s': %s" % (name, str(e)[:120]))
+
+    if len(pending) - sent > 0:
+        mins_left = WINDOW_END_MIN - (now.hour * 60 + now.minute)
+        if (len(pending) - sent) * (MIN_GAP_SECONDS / 60.0) > mins_left:
+            log("WARNING: %d colleague(s) still to remind but only %d min left "
+                "in the window - widen WINDOW_END_MIN or shorten MIN_GAP_SECONDS"
+                % (len(pending) - sent, mins_left))
+
+    print("reminded %d this run, %d pending" % (sent, len(pending) - sent))
     return 0
 
 
