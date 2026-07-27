@@ -137,7 +137,7 @@ def _claude_gen(kind, name):
     try:
         p = subprocess.run(["claude", "--print", "--model", MODEL],
                            input=prompts[kind], capture_output=True, text=True,
-                           cwd=str(_REPO), timeout=45, shell=True)
+                           cwd=str(_REPO), timeout=45, shell=True, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         out = (p.stdout or "").strip()
         return out or None
     except Exception as e:

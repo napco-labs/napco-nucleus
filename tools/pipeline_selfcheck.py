@@ -90,7 +90,7 @@ def log(msg: str) -> None:
 def _ssh(cmd: str, timeout: int = 90):
     try:
         p = subprocess.run(SSH + [cmd], capture_output=True, text=True,
-                           encoding="utf-8", errors="replace", timeout=timeout)
+                           encoding="utf-8", errors="replace", timeout=timeout, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         return p.returncode, (p.stdout or "") + (p.stderr or "")
     except Exception as e:
         return 1, "ssh failed: %s" % e
@@ -100,7 +100,7 @@ def _ps(cmd: str, timeout: int = 60):
     try:
         p = subprocess.run(["powershell", "-NoProfile", "-Command", cmd],
                            capture_output=True, text=True, encoding="utf-8",
-                           errors="replace", timeout=timeout)
+                           errors="replace", timeout=timeout, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         return p.returncode, (p.stdout or "").strip()
     except Exception as e:
         return 1, "powershell failed: %s" % e
