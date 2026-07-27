@@ -275,6 +275,7 @@ class WarmSDK:
 
     async def _main(self):
         from claude_agent_sdk import ClaudeSDKClient, ClaudeAgentOptions
+        _hide_child_consoles()
         opts = ClaudeAgentOptions(system_prompt=self.system, model=self.model)
         while True:
             try:
@@ -325,6 +326,32 @@ def _ensure_pool(system, model):
     if not _WARM_POOL:
         _WARM_POOL = [WarmSDK(system, model) for _ in range(POOL_SIZE)]
         time.sleep(0.2)
+
+
+def _hide_child_consoles():
+    # The warm SDK pool spawns one claude.exe per client. claude_agent_sdk calls
+    # anyio.open_process without creationflags, so on Windows every client pops a
+    # blank console window - visible clutter on a box that must stay unlocked, and
+    # a focus thief that can swallow keystrokes mid-reply into Teams. anyio DOES
+    # accept creationflags, the SDK just never passes it, so wrap open_process and
+    # default CREATE_NO_WINDOW in. Idempotent: re-wrapping is a no-op.
+    if os.name != "nt":
+        return
+    try:
+        import anyio
+    except Exception:
+        return
+    if getattr(anyio.open_process, "_nn_no_window", False):
+        return
+    _orig = anyio.open_process
+    CREATE_NO_WINDOW = 0x08000000
+
+    async def _wrapped(*args, **kwargs):
+        kwargs.setdefault("creationflags", CREATE_NO_WINDOW)
+        return await _orig(*args, **kwargs)
+
+    _wrapped._nn_no_window = True
+    anyio.open_process = _wrapped
 
 
 def _warm_ask(system, user, model, timeout_s):
