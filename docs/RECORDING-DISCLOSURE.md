@@ -26,11 +26,27 @@ Current wording:
 > only to prepare these requirement documents. If you would prefer any call not
 > to be recorded, just say so and we will switch it off for that call.
 
-## 2. One-time announcement (TODO — Titu to send once)
+## 2. Salman (the client) — TOLD DIRECTLY
+
+**Confirmed by Titu, 2026-07-27: Salman has already been told directly that
+calls are recorded.**
+
+This matters because the rollup footer does not reach him. Salman is in the
+recording boundary but is not on `NUCLEUS_ROLLUP_TO` or `NUCLEUS_ROLLUP_CC`, so
+the automated disclosure covers the AEL team and `ayusuf@dcl-online.com` but
+never reached the one recorded party outside AEL. The direct conversation is
+what covers that, not the code.
+
+If Salman is ever added to the rollup Cc, the footer covers him from then on
+too. Not done — that changes who receives client requirement documents and is
+Titu's call.
+
+## 3. One-time announcement (TODO — Titu to send once)
 
 The rollup footer covers people from here on. Send this once so the change is
-explicit rather than something noticed in small print. Recipients: the seven
-named people in the recording scope, plus the client rep.
+explicit rather than something noticed in small print. Recipients: the AEL
+people in the recording scope, plus the client rep. Salman is already covered
+by the direct conversation above.
 
 > Subject: How we capture requirements from our calls
 >
@@ -56,13 +72,13 @@ named people in the recording scope, plus the client rep.
 >
 > Titu
 
-## 3. Per-call practice
+## 4. Per-call practice
 
 Say it out loud at the start of a call with anyone outside the seven-person
 scope, especially the client. One sentence is enough: "Just so you know, we
 record these calls so the requirements get written up accurately."
 
-## 4. Account ownership
+## 5. Account ownership
 
 Teams currently runs as the personal Microsoft account
 `titucse1982@gmail.com`. `ael-bd.com` has no Microsoft tenant (realm lookup
