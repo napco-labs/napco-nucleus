@@ -964,6 +964,13 @@ def _within_window(spec) -> bool:
     return cur >= start or cur < end
 
 
+# Compose-toolbar buttons that must NEVER be mistaken for Send. Clicking the
+# Loop one is what created the Loop Paragraphs that blocked sending all evening.
+_NOT_SEND = ("loop", "format", "emoji", "giphy", "sticker", "attach", "file",
+             "praise", "schedule", "record", "video", "audio", "meet",
+             "priority", "important", "poll", "approval", "more")
+
+
 def _find_send_button(win):
     """Find the Teams 'Send' button, so we submit reliably even if the account
     is set to Ctrl+Enter-to-send or focus drifts after typing."""
@@ -976,8 +983,19 @@ def _find_send_button(win):
             if c.ControlType == auto.ControlType.ButtonControl:
                 nm = (c.Name or "").strip().lower()
                 aid = (c.AutomationId or "").lower()
-                if (nm == "send" or nm == "send message" or nm.startswith("send ")
-                        or aid == "send" or aid.startswith("sendmessage")):
+                # PROVEN 2026-07-27: the AutomationId alone is NOT specific
+                # enough. Teams compose-toolbar buttons share that id prefix,
+                # so 'Loop components (Ctrl+Alt+L)' matched and got CLICKED --
+                # which is what kept inserting a Loop Paragraph into the box
+                # and made every message unsendable. Match on the NAME, and
+                # refuse anything that is obviously a different tool.
+                if any(bad in nm for bad in _NOT_SEND):
+                    for ch in c.GetChildren():
+                        walk(ch, d + 1)
+                    return
+                if (nm == "send" or nm == "send message"
+                        or nm.startswith("send (")      # 'Send (Ctrl+Enter)'
+                        or nm.startswith("send message")):
                     found.append(c)
                     return
             for ch in c.GetChildren():
@@ -1001,7 +1019,12 @@ def _compose_value(win):
         try:
             v = b.GetValuePattern().Value
             if v is not None:
-                return v.strip()
+                v = v.strip()
+                # PROVEN 2026-07-27: after a SUCCESSFUL send the box reads back
+                # as its placeholder, 'Type a message'. That is 14 chars, so the
+                # old len(v) < 2 check called a successful send a failure, then
+                # wiped the box and logged an error. The placeholder IS empty.
+                return "" if v.lower() in PLACEHOLDER_TEXTS else v
         except Exception:
             pass
         nm = (b.Name or "").strip()
@@ -1036,15 +1059,36 @@ def _submit(win, box):
         except Exception:
             pass
 
+    # Instrumentation: when a send fails we need to know WHICH thing failed.
+    # A greyed/absent Send button means Teams is refusing the content; a present
+    # and enabled button that changes nothing means our click never landed.
+    try:
+        _b = _find_send_button(win)
+        if _b is None:
+            log("submit: NO Send button found in the window")
+        else:
+            try:
+                log("submit: Send button found, enabled=%s offscreen=%s name=%r"
+                    % (_b.IsEnabled, _b.IsOffscreen, (_b.Name or "")[:40]))
+            except Exception as _e:
+                log("submit: Send button found but unreadable: %s" % _e)
+    except Exception as _e:
+        log("submit: send-button probe failed: %s" % _e)
+
+    names = ("SendButton", "Ctrl+Enter", "Enter")
     for i, way in enumerate((_click_send,
                              lambda: _keys("{Ctrl}{Enter}"),
                              lambda: _keys("{Enter}"))):
+        before = _compose_value(win)
         way()
         time.sleep(0.4)
         v = _compose_value(win)
+        log("submit: %-10s before=%r after=%r"
+            % (names[i], (before or "")[:35], (v or "")[:35]))
         if v is None:
             return True                 # cannot verify -> assume it went (Send btn)
         if not v or len(v) < 2:
+            log("submit: sent via %s" % names[i])
             return True                 # box emptied -> definitely sent
     # Clear the box. A stuck draft is worse than a lost reply: it sits below
     # the partner's last message, so get_incoming reads it as "already
