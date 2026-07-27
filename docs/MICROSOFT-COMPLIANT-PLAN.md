@@ -61,19 +61,46 @@ This is strictly better than what we have. No VB-CABLE, no muted-speaker
 failure mode, no unlocked desktop session, no Speaker Guard, and Teams shows
 its own recording banner so consent stops being a thing we have to bolt on.
 
-### 3. "Record when NN is added to a meeting" — one workflow change
-This is the only real constraint. In Teams, an **external participant cannot
-start a recording**. If a colleague on a personal account organises the
-meeting and merely adds NN, NN cannot record it.
+### 3. "Record when NN is added to a meeting" — CORRECTED 2026-07-27
 
-**So NN must be the organiser.** Practically: NN's account creates the meeting
-(easy to automate — `POST /me/onlineMeetings` returns a join link) and
-everyone joins that link as guests. Nobody needs a licence to join.
+An earlier draft said "NN must be the organiser". Titu killed that: **NN never
+initiates. Colleagues and clients start the calls and add NN.** The organiser
+change is not available, so that plan was wrong.
 
-If you would rather not change who schedules, the alternative is a real-time
-media bot with `Calls.AccessMedia.All`, which needs Azure hosting, a public
-HTTPS endpoint and a .NET media stack. Not worth it for one user. Recommend
-the organiser change.
+**The structural truth: no amount of money makes this sanctioned.** For a
+meeting organised by a *personal* Microsoft account, there is no Microsoft
+path for a third party to record it:
+
+- Teams recording rights belong to the organiser's organisation. A consumer
+  organiser has no organisation, and NN is an external guest in their meeting.
+- Compliance recording only covers calls of users **inside your own tenant**.
+  Your colleagues will never be in your tenant.
+- A `Calls.AccessMedia.All` media bot can only join meetings in its own
+  tenant, and needs Azure hosting besides.
+
+So the recording **stays as loopback capture**, and that is the correct answer
+rather than a compromise — because recording was never the Microsoft problem.
+It is audit item E: local audio off our own sound device, never touching
+Microsoft's wire, no server-side signal. The exposure it carries is consent,
+which is handled (see `RECORDING-DISCLOSURE.md`, Salman told directly).
+
+**The licence is still worth buying.** It clears A, B, C and D — the four items
+that genuinely are Microsoft breaches. It just does not, and cannot, clear E.
+
+### 3b. The residual: how NN joins the meeting
+
+With chat on Graph, the last piece of UI automation left is *joining* a
+meeting NN is added to. Two routes:
+
+- **Keep the UIA auto-answer.** Honest residual breach, much smaller surface
+  than today (one click path, no message sending, no store scraping).
+- **Microsoft Teams Rooms Basic (free, up to 25 rooms).** Teams Rooms
+  endpoints auto-answer incoming meeting invites natively via
+  `Set-CsTeamsCallingPolicy -AutoAnswerEnabledType Enabled`. If NN runs as a
+  Rooms endpoint this becomes a supported feature instead of a UIA hack.
+  **NOT yet verified** that this works for our shape — the docs describe it
+  for Teams Phones and Rooms devices, not desktop clients. Worth one
+  afternoon's test before relying on it.
 
 ### 4. Live heartbeat — untouched
 It writes a JSON beacon to the SMB share during a capture. It never touches
@@ -86,12 +113,14 @@ capture flow, but the mechanism stays.)
 |---|---|
 | A. IndexedDB forensic reads | Gone — Graph chat APIs |
 | B. UIA automation sending | Gone — Graph message send |
-| C. Synthetic input for presence | Gone — a Graph service needs no desktop session at all |
+| C. Synthetic input for presence | Gone — chat no longer needs a desktop session |
 | D. Personal account, commercial use | Gone — work account |
-| E. Loopback recording | Gone — Teams' own recording |
+| E. Loopback recording | **Stays.** Cannot be bought into compliance while the organisers are consumer accounts. Not a Microsoft-terms matter anyway. |
 
-`.72` stops needing an unlocked interactive session with Teams running. That
-removes the entire class of failure that has been costing recordings.
+Four of five. `.72` still needs an interactive session for the call capture
+and the join, so Speaker Guard and the unlocked-screen requirement stay. The
+chat half stops needing the desktop entirely and can move off `.72` to a
+service — including onto `.123`.
 
 ## Check these BEFORE you pay
 
