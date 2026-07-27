@@ -39,6 +39,9 @@ _HERE = Path(__file__).parent
 _REPO = _HERE.parent
 RULES_FILE = _HERE / "auto_reply_rules.json"
 PERSONA_FILE = _HERE / "nucleus_persona.md"
+# Written by record_call while a Teams call is being captured. Same marker
+# teams/live_heartbeat.py watches. Being in a call counts as being present.
+RECORDING_MARKER = _REPO / "data" / "teams" / ".recording_active"
 LOG = r"E:\napco-nucleus\logs\auto_reply.log"
 
 COMPOSE_HINTS = ("type a message", "type a new message", "type a reply",
@@ -955,6 +958,9 @@ def main():
     keep_alive_hours = str(settings.get("keep_alive_hours", "")).strip()
     keep_alive_jitter = max(0.0, min(0.9, float(
         settings.get("keep_alive_jitter", 0.4))))
+    presence_active_s = max(0.0, float(
+        settings.get("presence_active_minutes", 10))) * 60.0
+    wake_pause = max(0.0, float(settings.get("wake_pause_s", 1.0)))
     claude_model = str(settings.get("claude_model", "")).strip()
     think = (float(settings.get("think_min", 0.2)),
              float(settings.get("think_max", 0.5)))
@@ -965,7 +971,9 @@ def main():
     own_names = {str(n).strip().lower() for n in settings.get("own_names", ["Napco Nucleus"])}
     log(f"{len(rules)} canned rule(s); use_claude={use_claude}; poll={poll}s; "
         f"model={claude_model or 'default'}; human_typing={human_typing}; "
-        f"keep_alive={keep_alive}; cooldown={cooldown}s")
+        f"keep_alive={keep_alive}; cooldown={cooldown}s; "
+        f"presence_active={presence_active_s/60:.0f}min; "
+        f"wake_pause={wake_pause}s")
     canned_texts = _canned_texts(rules)
     cmd_allow = load_allowlist()   # who may trigger commands (from dev_list)
     self_sent = deque(maxlen=15)   # our own recent replies (echo guard)
@@ -973,6 +981,9 @@ def main():
     last_reply_at = {}                   # contact -> time of last reply (per-contact gap)
     last_nudge = 0.0
     next_nudge_gap = float(keep_alive_s)
+    # 0.0 = "no activity yet", so NN starts Away and only becomes Available
+    # when someone actually messages or a call starts.
+    last_activity = 0.0
     rules_mtime = _mtime(RULES_FILE)
 
     # pre-warm the SDK client at startup so the FIRST reply is already fast
@@ -989,7 +1000,7 @@ def main():
 
     def handle_open_chat(win):
         """Read the currently-open chat and reply once (if a new partner msg)."""
-        nonlocal answered_at
+        nonlocal answered_at, last_activity
         msg, sender = get_incoming(win, own_names, self_sent)
         low = msg.strip().lower()
         if not low or low in canned_texts or low in self_sent or low in PLACEHOLDER_TEXTS:
@@ -1006,6 +1017,14 @@ def main():
                    and (time.time() - answered_at[key]) < repeat_window)
         if already and is_always(msg, rules):
             already = False
+        # Presence: a real message just arrived. "Come back to the keyboard"
+        # BEFORE answering — reset OS idle so Teams flips to Available, then
+        # hold Available for presence_active_s after this message. Between
+        # conversations nothing nudges, so Teams drifts to Away by itself.
+        last_activity = time.time()
+        nudge_input()
+        if wake_pause > 0:
+            time.sleep(wake_pause)
         activate_window(win)                         # mark 'Seen'
         if already:
             rep = random.choice(ALREADY_ANSWERED).replace("{first}", first).replace("  ", " ").strip()
@@ -1085,6 +1104,10 @@ def main():
                     settings.get("keep_alive_hours", "")).strip()
                 keep_alive_jitter = max(0.0, min(0.9, float(
                     settings.get("keep_alive_jitter", 0.4))))
+                presence_active_s = max(0.0, float(
+                    settings.get("presence_active_minutes", 10))) * 60.0
+                wake_pause = max(0.0, float(
+                    settings.get("wake_pause_s", 1.0)))
                 claude_model = str(settings.get("claude_model", "")).strip()
                 think = (float(settings.get("think_min", 0.2)),
                          float(settings.get("think_max", 0.5)))
@@ -1098,12 +1121,23 @@ def main():
                 rules_mtime = mt
                 log(f"rules reloaded: {len(rules)} rule(s); use_claude={use_claude}")
 
-            # keep-alive: reset OS idle so Teams presence never shows 'Away'.
+            # In a call = present. record_call drops .recording_active for the
+            # duration, so a meeting holds Available exactly as a live chat
+            # does, and it keeps holding for presence_active_s afterwards.
+            try:
+                if RECORDING_MARKER.exists():
+                    last_activity = time.time()
+            except Exception:
+                pass
+
+            # Presence follows real conversation, not the clock. We only hold
+            # Available for presence_active_s after the last message; outside
+            # that we stop nudging entirely and Teams goes Away on its own.
             # Jittered, because a synthetic input event landing on an exact
-            # 50s grid is itself a bot tell. keep_alive_hours is normally
-            # empty (= always); the PC being off overnight already provides
-            # the natural presence gap.
+            # 50s grid is itself a bot tell. keep_alive_hours stays empty
+            # (= always) since .72 is only powered on 11:00-22:00 anyway.
             if (keep_alive and _within_window(keep_alive_hours)
+                    and (time.time() - last_activity) < presence_active_s
                     and (time.time() - last_nudge) > next_nudge_gap):
                 nudge_input()
                 last_nudge = time.time()
