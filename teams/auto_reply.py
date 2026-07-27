@@ -351,7 +351,7 @@ def _central_fingerprint():
            "/srv/nucleus-central/napco-nucleus/*/calls/*_transcript.md 2>/dev/null "
            "| awk '{print $5, $6, $7}' | sort\"")
     try:
-        p = subprocess.run(cmd, capture_output=True, text=True, shell=True, timeout=20)
+        p = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", shell=True, timeout=20)
         return (p.stdout or "").strip()
     except Exception as e:
         log(f"fingerprint failed: {str(e)[:80]}")
@@ -381,7 +381,7 @@ def run_report(report_cmd, model, timeout_s=25):
     """Run a READ-ONLY status command (e.g. ssh into .123 to gather pipeline
     health), then summarize its output with Claude into a short chat report."""
     try:
-        proc = subprocess.run(report_cmd, capture_output=True, text=True,
+        proc = subprocess.run(report_cmd, capture_output=True, text=True, encoding="utf-8", errors="replace",
                               cwd=str(_REPO), shell=True, timeout=timeout_s)
         raw = ((proc.stdout or "") + "\n" + (proc.stderr or "")).strip()
     except Exception as e:
@@ -416,7 +416,7 @@ def claude_answer(message, timeout_s, model="", sender=""):
     prompt = f"{persona}\n\n{user}\n"
     cmd = ["claude", "--print"] + (["--model", model] if model else [])
     try:
-        proc = subprocess.run(cmd, input=prompt, capture_output=True, text=True,
+        proc = subprocess.run(cmd, input=prompt, capture_output=True, text=True, encoding="utf-8", errors="replace",
                               cwd=str(_REPO), timeout=timeout_s, shell=True)
     except Exception as e:
         log(f"claude cli failed: {e}")
