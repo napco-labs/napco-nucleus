@@ -1275,6 +1275,18 @@ def main():
                     log(f"CONFIRM refused (not allowlisted): '{who}'")
                     last_reply_at[clow] = time.time()
                     return
+            elif followups.is_ambiguous(msg):
+                # "ok" / "achha" might mean yes, might just be an
+                # acknowledgement. Sending a client email on a guess is not a
+                # risk worth taking, so ask once, plainly. The offer stays open.
+                rep = (f"Just to be sure {first} bhai, shall I send the "
+                       f"requirements email now? Reply yes and I will.")
+                send_reply(win, rep, human=human_typing, think=think,
+                           type_speed=type_speed)
+                self_sent.append(rep.strip().lower())
+                log(f"CONFIRM ambiguous ('{msg[:20]}') from '{who}' - asked again")
+                last_reply_at[clow] = time.time()
+                return
             elif followups.is_no(msg):
                 followups.clear_offer(who)
                 rep = f"No problem {first} bhai, leaving it for now."
@@ -1284,6 +1296,16 @@ def main():
                 log(f"CONFIRM declined by '{who}'")
                 last_reply_at[clow] = time.time()
                 return
+
+        # A bare acknowledgement with nothing outstanding is the end of the
+        # conversation, not a new question. A colleague reads "ok" and says
+        # nothing back; answering it starts a politeness loop that never ends.
+        # Only applies when there is NO pending offer -- if we asked something,
+        # the ambiguous branch above has already handled it.
+        if followups.is_ambiguous(msg):
+            log(f"ACK '{msg[:20]}' from '{first}' - letting the chat rest")
+            last_reply_at[clow] = time.time()
+            return
 
         cmd = match_command(msg, commands)
         if cmd and not is_allowed(who, cmd_allow):

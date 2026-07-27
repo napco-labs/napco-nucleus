@@ -158,11 +158,23 @@ def pending_count() -> int:
 CONFIRM_FILE = _REPO / "data" / "pending_confirms.json"
 CONFIRM_TTL = 1800.0        # 30 minutes, then the offer goes stale
 
+# Deliberately STRICT. This confirms sending a requirements email to the team
+# AND to an external client contact, which cannot be taken back. Bare "ok",
+# "okay", "sure" and "go" are NOT here on purpose: people type those to
+# acknowledge, not to authorise. An ambiguous word must never mail a client.
 _YES = (
-    "yes", "yes please", "yeah", "yep", "ya", "sure", "ok", "okay", "please",
-    "please do", "do it", "send it", "send", "go ahead", "go", "please send",
-    "yes send", "ok send", "korun", "koro", "kore din", "pathan", "pathao",
-    "হ্যাঁ", "হ্যা", "হা", "করুন", "করো", "পাঠান", "পাঠাও", "দিন",
+    "yes", "yes please", "yes send", "yeah", "yep",
+    "please do", "please send", "do it", "send it", "send the email",
+    "go ahead", "ok send", "okay send",
+    "korun", "koro", "kore din", "pathan", "pathao", "pathiye din",
+    "হ্যাঁ", "হ্যা", "করুন", "করো", "পাঠান", "পাঠাও", "পাঠিয়ে দিন",
+)
+
+# Said in reply to an offer, these are too vague to act on. We ask once more
+# rather than guessing, because guessing wrong sends mail to a client.
+_AMBIGUOUS = (
+    "ok", "okay", "k", "sure", "go", "fine", "alright", "right", "hmm",
+    "achha", "acha", "thik", "thik ache", "আচ্ছা", "ঠিক আছে",
 )
 _NO = (
     "no", "nope", "not now", "later", "dont", "don't", "no need", "cancel",
@@ -180,6 +192,14 @@ def is_yes(text: str) -> bool:
         return False
     return any(t == y or t.startswith(y + " ") or t.endswith(" " + y)
                for y in _YES)
+
+
+def is_ambiguous(text: str) -> bool:
+    """True for a reply that MIGHT mean yes but is not clear enough to act on."""
+    t = _norm(text)
+    if not t or len(t.split()) > 3:
+        return False
+    return any(t == a for a in _AMBIGUOUS)
 
 
 def is_no(text: str) -> bool:
