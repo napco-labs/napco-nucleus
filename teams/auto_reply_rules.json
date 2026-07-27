@@ -101,7 +101,11 @@
         "your name",
         "introduce yourself",
         "what are you",
-        "who u"
+        "who u",
+        "tumi ke",
+        "apni ke",
+        "আপনি কে",
+        "তুমি কে"
       ],
       "reply": [
         "I am Napco Nucleus.",
@@ -162,7 +166,9 @@
         "good evening",
         "assalamu alaikum",
         "salam",
-        "yo"
+        "yo",
+        "হাই",
+        "স্যালাম"
       ],
       "reply": [
         "Hello bhai, how can I help?",
@@ -189,7 +195,10 @@
         "whats up",
         "sup",
         "ki khobor",
-        "ki obostha"
+        "ki obostha",
+        "কেমন আছ",
+        "কি খবর",
+        "কি অবস্থা"
       ],
       "reply": [
         "I am well, thank you bhai. How may I help?",
@@ -207,7 +216,8 @@
         "tnx",
         "appreciate it",
         "appreciated",
-        "dhonnobad"
+        "dhonnobad",
+        "ধন্যবাদ"
       ],
       "reply": [
         "You are welcome bhai.",
@@ -262,7 +272,8 @@
         "shubho ratri",
         "allah hafez",
         "khoda hafez",
-        "gtg"
+        "gtg",
+        "আল্লাহ হাফেজ"
       ],
       "reply": [
         "Goodbye bhai, take care.",

@@ -239,16 +239,41 @@ def load_rules():
     return rules, data.get("settings", {}), cmds
 
 
+def _is_bangla(text):
+    """True if the text contains Bangla script (U+0980 to U+09FF)."""
+    return any("\u0980" <= c <= "\u09ff" for c in (text or ""))
+
+
+def _banglish(text):
+    """Bangla written in English letters, e.g. 'ki obostha', 'kemon acho'.
+    Cheap token check: these are the words the team actually types."""
+    low = (text or "").lower()
+    hits = ("ki obostha", "kemon ach", "kemon acho", "ki khobor", "bhalo ach",
+            "kotha bol", "banglay", "bangla ", "koro ", "korun", "amar ",
+            "ami ", "apni ", "tumi ", "kichu ", "lagbe", "hoyeche", "hobe",
+            "korchi", "dekhchi", "bolun", "bolo ")
+    return any(h in low for h in hits)
+
+
 def match_reply(text, rules):
     low = (text or "").strip().lower()
     if not low:
         return None
+    # Banglish ('ki obostha') is ASCII, so a script check alone misses it
+    # and answers a Bangla question in English. That was Titu's complaint.
+    want_bangla = _is_bangla(text) or _banglish(text)
     for r in rules:
         for c in r["contains"]:
             # word-boundary so short triggers ("hi") don't match inside words
             if re.search(r"\b" + re.escape(c) + r"\b", low):
                 rep = r["reply"]
-                return random.choice(rep) if isinstance(rep, list) else rep
+                if not isinstance(rep, list):
+                    return rep
+                # Answer in the language they used. The pools carry both, and
+                # picking at random meant a Bangla question got an English
+                # answer, which reads as not listening.
+                same = [x for x in rep if _is_bangla(x) == want_bangla]
+                return random.choice(same or rep)
     return None
 
 
