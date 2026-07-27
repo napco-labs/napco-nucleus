@@ -1393,10 +1393,32 @@ def main():
                     log(f"FOLLOWUP running '{item['action']}' for '{who_f}'")
                     body = _followup_body(item["action"], commands, claude_model)
                     if body:
-                        from teams import notify   # lazy: avoids circular import
                         last_activity = time.time()   # we are about to speak
                         nudge_input()
-                        if notify.send(who_f, body):
+                        # PREFER the chat that is already open. notify.send
+                        # presses Ctrl+N and takes the first search suggestion,
+                        # which "succeeds" even when it lands on the wrong
+                        # contact or an empty draft chat -- observed 2026-07-27,
+                        # the status message was delivered and Titu never saw
+                        # it. If we are already looking at this person, just
+                        # reply here.
+                        ok = False
+                        try:
+                            here = (chat_partner(win) or "").strip().lower()
+                            want = (who_f or "").strip().lower()
+                            if here and want and (here == want
+                                                  or here.startswith(want[:12])
+                                                  or want.startswith(here[:12])):
+                                ok = send_reply(win, body, human=human_typing,
+                                                think=think, type_speed=type_speed)
+                                log(f"FOLLOWUP delivered in the open chat with '{here}'")
+                        except Exception as e:
+                            log(f"followup in-place send failed: {str(e)[:100]}")
+                        if not ok:
+                            from teams import notify   # lazy: circular import
+                            ok = notify.send(who_f, body)
+                            log(f"FOLLOWUP fell back to opening a new chat: {ok}")
+                        if ok:
                             followups.done(item)
                             # we just asked "shall I send the email?" - remember
                             # it, so their "yes" is actually actionable
