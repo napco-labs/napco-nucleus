@@ -35,6 +35,14 @@ from pathlib import Path
 
 import uiautomation as auto
 
+# followups has no back-reference, so a top-level import is safe. teams.notify
+# does `from teams import auto_reply`, so THAT one must stay lazy (below) or we
+# get a circular import at startup.
+try:
+    from teams import followups
+except ImportError:                     # running as a loose script
+    import followups
+
 _HERE = Path(__file__).parent
 _REPO = _HERE.parent
 RULES_FILE = _HERE / "auto_reply_rules.json"
@@ -56,12 +64,12 @@ MAX_REPLY_CHARS = 800
 
 # varied, human-sounding "you already asked this" lines (a repeat within 30 min)
 ALREADY_ANSWERED = [
-    "I just answered that above, {first} bhai :)",
-    "Already replied to this one, {first} bhai, please scroll up a little",
-    "That one is answered above, {first} bhai",
-    "I covered this just now, {first} bhai, take a look above",
-    "এটা তো একটু আগেই বললাম ভাই :)",
-    "উপরে একটু দেখুন ভাই, উত্তরটা উপরেই আছে",
+    "I answered this just above, {first} bhai.",
+    "I have replied to this one above, {first} bhai.",
+    "That is answered a little above, {first} bhai.",
+    "I covered this a moment ago, {first} bhai.",
+    "এটি একটু উপরেই উত্তর দিয়েছি ভাই।",
+    "উপরে একটু দেখে নিন ভাই, উত্তরটি সেখানেই আছে।",
 ]
 
 _DIAG = False                           # set from settings.diagnose (get_incoming logging)
@@ -794,6 +802,37 @@ def nudge_input():
         pass
 
 
+def _followup_body(action, commands, claude_model):
+    """Run a promised check and return the message to send back.
+
+    Reuses the existing status command rather than inventing a second way to
+    ask the same question, so the follow-up reports exactly what "check the
+    pipeline" would have reported.
+    """
+    if action != "status":
+        return ""
+    cmd = None
+    for c in commands:
+        if c.get("report_cmd"):
+            cmd = c
+            break
+    if not cmd:
+        return ""
+    try:
+        out = run_report(cmd["report_cmd"], claude_model)
+    except Exception as e:
+        log(f"followup report failed: {str(e)[:120]}")
+        return ""
+    out = (out or "").strip()
+    if not out:
+        return ""
+    if len(out) < 400:
+        out = "Checked it just now - " + out
+    # Offer to act, rather than leaving them to work out the next step. The
+    # caller records the offer so a bare "yes" is actually actionable.
+    return out.rstrip() + "\n\nShall I run the pipeline and send the email now?"
+
+
 def _parse_window(spec):
     """'09:00-21:00' -> (start_minute, end_minute), or None if unset/invalid."""
     try:
@@ -1033,6 +1072,45 @@ def main():
             last_reply_at[clow] = time.time()
             log(f"REPEAT notice to '{first}'")
             return
+        # Did we just offer this person something and they answered? "yes" on
+        # its own matches no trigger, so without this NN would have asked a
+        # question it could not act on.
+        offered = followups.pending_offer(who)
+        if offered:
+            if followups.is_yes(msg):
+                followups.clear_offer(who)
+                if is_allowed(who, cmd_allow):
+                    run_cmd = next((c for c in commands
+                                    if c.get("task") == "run-pipeline-email"), None)
+                    if run_cmd:
+                        ack = f"Right away {first} bhai, running it and sending the email now."
+                        send_reply(win, ack, human=human_typing, think=think,
+                                   type_speed=type_speed)
+                        self_sent.append(ack.strip().lower())
+                        dispatch_task(run_cmd, who)
+                        log(f"CONFIRMED '{offered}' by '{who}' -> pipeline+email dispatched")
+                        last_reply_at[clow] = time.time()
+                        return
+                else:
+                    # not a dev: never let an outsider trigger a client email
+                    rep = (f"Sorry {first} bhai, I can only run that for the dev "
+                           f"team. Let Titu bhai know and he will trigger it.")
+                    send_reply(win, rep, human=human_typing, think=think,
+                               type_speed=type_speed)
+                    self_sent.append(rep.strip().lower())
+                    log(f"CONFIRM refused (not allowlisted): '{who}'")
+                    last_reply_at[clow] = time.time()
+                    return
+            elif followups.is_no(msg):
+                followups.clear_offer(who)
+                rep = f"No problem {first} bhai, leaving it for now."
+                send_reply(win, rep, human=human_typing, think=think,
+                           type_speed=type_speed)
+                self_sent.append(rep.strip().lower())
+                log(f"CONFIRM declined by '{who}'")
+                last_reply_at[clow] = time.time()
+                return
+
         cmd = match_command(msg, commands)
         if cmd and not is_allowed(who, cmd_allow):
             log(f"command from non-allowed '{who}' ignored -> normal reply")
@@ -1072,10 +1150,19 @@ def main():
             if reply is None and use_claude:
                 reply = claude_answer(msg, claude_timeout, claude_model, sender=first)
                 src = "claude"
+            # If the persona committed to checking something, strip the marker
+            # (the colleague must never see it) and record the promise so the
+            # loop actually honours it. Saying "let me check" and then going
+            # silent is the failure this exists to prevent.
+            promised = None
+            if reply:
+                reply, promised = followups.extract(reply)
             if reply and send_reply(win, reply, human=human_typing,
                                     think=think, type_speed=type_speed):
                 self_sent.append(reply.strip().lower())
                 log(f"REPLIED[{src}] to '{msg[:40]}' -> '{reply[:60]}'")
+                if promised and followups.enqueue(who, promised):
+                    log(f"FOLLOWUP queued: {promised} for '{who}'")
         answered_at[key] = time.time()
         if len(answered_at) > 400:
             cut = time.time() - repeat_window
@@ -1120,6 +1207,35 @@ def main():
                 cmd_allow = load_allowlist()
                 rules_mtime = mt
                 log(f"rules reloaded: {len(rules)} rule(s); use_claude={use_claude}")
+
+            # Honour any promise made earlier. This is the ONLY place NN speaks
+            # without being spoken to first, and it exists because a colleague
+            # who says "let me check" and then goes quiet is worse than one who
+            # says nothing. Runs the real check, then opens the chat and reports.
+            try:
+                item = followups.due()
+                if item is not None and win is not None:
+                    who_f = item["contact"]
+                    log(f"FOLLOWUP running '{item['action']}' for '{who_f}'")
+                    body = _followup_body(item["action"], commands, claude_model)
+                    if body:
+                        from teams import notify   # lazy: avoids circular import
+                        last_activity = time.time()   # we are about to speak
+                        nudge_input()
+                        if notify.send(who_f, body):
+                            followups.done(item)
+                            # we just asked "shall I send the email?" - remember
+                            # it, so their "yes" is actually actionable
+                            followups.offer(who_f, "run-pipeline-email")
+                            log(f"FOLLOWUP delivered to '{who_f}' (offer recorded)")
+                        else:
+                            followups.bump(item)
+                            log(f"FOLLOWUP send failed for '{who_f}'")
+                    else:
+                        followups.bump(item)
+                        log(f"FOLLOWUP produced no body for '{who_f}'")
+            except Exception as e:
+                log(f"followup loop error: {str(e)[:120]}")
 
             # In a call = present. record_call drops .recording_active for the
             # duration, so a meeting holds Available exactly as a live chat
