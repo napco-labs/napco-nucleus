@@ -21,6 +21,8 @@ set -uo pipefail
 LOOKBACK_MINUTES="${DAILY_DRAFT_LOOKBACK_MINUTES:-360}"
 POLL_SECONDS="${PIPELINE_POLL_SECONDS:-120}"
 TRIGGER_FILE="/data/nucleus-central/.pipeline_trigger"
+# Watermark for the transcript watchdog (see the bottom of the loop).
+WATERMARK="/data/nucleus-central/.pipeline_watermark"
 CENTRAL="/data/nucleus-central"
 EVENT_EMAIL="${DAILY_DRAFT_EVENT_EMAIL:-1}"   # 0 disables per-call emails
 # The nightly batch is OFF unless explicitly enabled — independent of any
@@ -94,6 +96,27 @@ while true; do
         else
             rm -f "$TRIGGER_FILE"
             echo "[draft-loop] transcription complete — per-call email disabled"
+        fi
+        continue
+    fi
+
+    # ── Transcript watchdog — the safety net ──────────────────────
+    # The trigger file is only written by transcribe-loop when ITS OWN run
+    # reports ok=N. A transcript produced any other way (an out-of-band or
+    # manual transcribe run, or one already in flight when the loop ticked)
+    # left the pipeline asleep: on 2026-07-24 a finished call sat
+    # transcribed-but-never-processed for days and no requirement email went
+    # out. So also fire when any transcript on central is newer than the
+    # watermark, no matter which process wrote it.
+    if [ "$EVENT_EMAIL" != 0 ]; then
+        [ -f "$WATERMARK" ] || touch "$WATERMARK"
+        newer=$(find "$CENTRAL" -name .deleted -prune -o \
+                     -name '*_transcript.md' -newer "$WATERMARK" -print -quit 2>/dev/null)
+        if [ -n "$newer" ]; then
+            echo "[draft-loop] watchdog: untriggered transcript $newer"
+            touch "$WATERMARK"
+            run_pipeline "watchdog:new-transcript" "--require-new" \
+                "--calls-within-minutes ${DAILY_DRAFT_EVENT_CALLS_WITHIN:-45}"
         fi
     fi
 done
