@@ -115,6 +115,21 @@ def _split_addresses(raw: str) -> list[str]:
     return [a.strip() for a in (raw or "").split(",") if a.strip()]
 
 
+# Standing recording disclosure appended to every rollup. Plain operational
+# language, no jargon — this is read by the AEL team and by the client rep on
+# Cc, not by developers. Kept as a module constant so there is exactly one
+# wording to review and change.
+_DISCLOSURE = (
+    "How this was prepared: NAPCO Nucleus records and transcribes the AEL "
+    "project team's MS Teams calls, and reads the project chats, email, and "
+    "Google Drive files, so that what you ask for is captured accurately and "
+    "nothing is missed. Recordings and transcripts are stored on AEL's "
+    "internal server and are used only to prepare these requirement "
+    "documents. If you would prefer any call not to be recorded, just say so "
+    "and we will switch it off for that call."
+)
+
+
 # Matches the verification-doc requirement line. Primary format (Titu's spec):
 #   "Requirement#1: Title - summary"
 # Also tolerates the older "1. [P1/S2 ~4h] Title - summary" so prior docs still
@@ -278,6 +293,15 @@ def _build_message(day: str, to_addrs: list[str], cc_addrs: list[str],
     if flair:
         lines.append(flair)
         lines.append("")
+
+    # Standing recording disclosure. Goes out on EVERY rollup, including the
+    # "nothing found" and coverage-note branches, so that everyone on this
+    # thread — the AEL team and the client rep on Cc — has a continuing,
+    # dated written record that calls are recorded. Deliberately not
+    # env-gated: an opt-out switch would defeat the purpose of a disclosure.
+    lines.append(_DISCLOSURE)
+    lines.append("")
+
     lines.append("— NAPCO Nucleus")
     msg.set_content("\n".join(lines))
 
