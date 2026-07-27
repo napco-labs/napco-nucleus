@@ -791,6 +791,32 @@ def nudge_input():
         pass
 
 
+def _parse_window(spec):
+    """'09:00-21:00' -> (start_minute, end_minute), or None if unset/invalid."""
+    try:
+        a, b = str(spec).split("-", 1)
+        ah, am = (int(x) for x in a.strip().split(":"))
+        bh, bm = (int(x) for x in b.strip().split(":"))
+        return ah * 60 + am, bh * 60 + bm
+    except Exception:
+        return None
+
+
+def _within_window(spec) -> bool:
+    """True when local time is inside `spec`. An empty or unparseable spec
+    means 'always', so a bad edit to the rules file can never silently mute
+    the assistant. Windows that wrap past midnight ('22:00-06:00') work."""
+    w = _parse_window(spec)
+    if w is None:
+        return True
+    start, end = w
+    now = datetime.datetime.now()
+    cur = now.hour * 60 + now.minute
+    if start <= end:
+        return start <= cur < end
+    return cur >= start or cur < end
+
+
 def _find_send_button(win):
     """Find the Teams 'Send' button, so we submit reliably even if the account
     is set to Ctrl+Enter-to-send or focus drifts after typing."""
@@ -926,6 +952,9 @@ def main():
     human_typing = bool(settings.get("human_typing", True))
     keep_alive = bool(settings.get("keep_alive", True))
     keep_alive_s = int(settings.get("keep_alive_seconds", 50))
+    keep_alive_hours = str(settings.get("keep_alive_hours", "")).strip()
+    keep_alive_jitter = max(0.0, min(0.9, float(
+        settings.get("keep_alive_jitter", 0.4))))
     claude_model = str(settings.get("claude_model", "")).strip()
     think = (float(settings.get("think_min", 0.2)),
              float(settings.get("think_max", 0.5)))
@@ -943,6 +972,7 @@ def main():
     answered_at = {}                     # "contact|question" -> time answered (30-min window)
     last_reply_at = {}                   # contact -> time of last reply (per-contact gap)
     last_nudge = 0.0
+    next_nudge_gap = float(keep_alive_s)
     rules_mtime = _mtime(RULES_FILE)
 
     # pre-warm the SDK client at startup so the FIRST reply is already fast
@@ -1051,6 +1081,10 @@ def main():
                 human_typing = bool(settings.get("human_typing", True))
                 keep_alive = bool(settings.get("keep_alive", True))
                 keep_alive_s = int(settings.get("keep_alive_seconds", 50))
+                keep_alive_hours = str(
+                    settings.get("keep_alive_hours", "")).strip()
+                keep_alive_jitter = max(0.0, min(0.9, float(
+                    settings.get("keep_alive_jitter", 0.4))))
                 claude_model = str(settings.get("claude_model", "")).strip()
                 think = (float(settings.get("think_min", 0.2)),
                          float(settings.get("think_max", 0.5)))
@@ -1064,10 +1098,17 @@ def main():
                 rules_mtime = mt
                 log(f"rules reloaded: {len(rules)} rule(s); use_claude={use_claude}")
 
-            # keep-alive: reset OS idle so Teams presence never shows 'Away'
-            if keep_alive and (time.time() - last_nudge) > keep_alive_s:
+            # keep-alive: reset OS idle so Teams presence never shows 'Away'.
+            # Jittered, because a synthetic input event landing on an exact
+            # 50s grid is itself a bot tell. keep_alive_hours is normally
+            # empty (= always); the PC being off overnight already provides
+            # the natural presence gap.
+            if (keep_alive and _within_window(keep_alive_hours)
+                    and (time.time() - last_nudge) > next_nudge_gap):
                 nudge_input()
                 last_nudge = time.time()
+                next_nudge_gap = keep_alive_s * (
+                    1.0 + random.uniform(-keep_alive_jitter, keep_alive_jitter))
 
             win = _teams_window()
             if win is not None:
