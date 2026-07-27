@@ -88,7 +88,61 @@ MESSAGE_CTRL_TYPES = (auto.ControlType.ListItemControl,
 
 DEFAULT_POLL_S = 3.0
 DEFAULT_CLAUDE_TIMEOUT = 45
-MAX_REPLY_CHARS = 800
+MAX_REPLY_CHARS = 800          # overridden by settings.max_reply_chars
+
+
+ASCII_ONLY = True              # overridden by settings.ascii_only
+
+
+def _tidy_reply(text, limit=None):
+    """Make a reply safe to type into Teams, and human to read.
+
+    Order matters and was got wrong once: strip non-ASCII FIRST, then fix
+    punctuation, otherwise removing Bangla leaves a stray comma at the front.
+
+    Why each step exists:
+      * one line     - in the char-by-char path a newline is sent as Enter,
+                       which submits the message half-typed
+      * ASCII only   - Bangla and emoji cannot be typed by SendKeys, so they
+                       force a clipboard PASTE, and paste is what Teams turns
+                       into a Loop component that then cannot be sent
+      * no dashes    - Titu's standing rule; a dash is the clearest tell that
+                       software wrote the sentence
+      * short        - less time holding the compose box, less to go wrong
+    """
+    if not text:
+        return text
+
+    t = " ".join(str(text).split())
+
+    if ASCII_ONLY:
+        t = "".join(c if ord(c) < 128 else " " for c in t)
+        t = " ".join(t.split())
+
+    for dash in ("—", "–", " -- ", "--", " - "):
+        t = t.replace(dash, ", ")
+
+    t = t.replace(" ,", ",")
+    while ",," in t:
+        t = t.replace(",,", ",")
+    t = " ".join(t.split())
+
+    t = t.lstrip(" ,;:.-").rstrip(" ,;:-")      # keep a closing . ! ?
+    if not t:
+        return ""
+    t = t[0].upper() + t[1:]
+
+    cap = int(limit or MAX_REPLY_CHARS)
+    if len(t) <= cap:
+        return t
+    cut = t[:cap]
+    for end_mark in (". ", "! ", "? "):
+        i = cut.rfind(end_mark)
+        if i > cap * 0.5:
+            return cut[:i + 1].strip()
+    i = cut.rfind(" ")
+    return (cut[:i] if i > 0 else cut).strip()
+
 
 # varied, human-sounding "you already asked this" lines (a repeat within 30 min)
 ALREADY_ANSWERED = [
@@ -96,8 +150,8 @@ ALREADY_ANSWERED = [
     "I have replied to this one above, {first} bhai.",
     "That is answered a little above, {first} bhai.",
     "I covered this a moment ago, {first} bhai.",
-    "এটি একটু উপরেই উত্তর দিয়েছি ভাই।",
-    "উপরে একটু দেখে নিন ভাই, উত্তরটি সেখানেই আছে।",
+    "I mentioned this just above, {first} bhai.",
+    "That one is already answered above, {first} bhai.",
 ]
 
 _DIAG = False                           # set from settings.diagnose (get_incoming logging)
@@ -989,6 +1043,7 @@ def _submit(win, box):
 
 
 def send_reply(win, text, human=True, think=(0.2, 0.5), type_speed=0.02):
+    text = _tidy_reply(text)             # single line, capped, sentence-safe
     activate_window(win)                 # 'Seen' + let keystrokes land
     time.sleep(0.3)
     box = find_compose(win)
@@ -1070,6 +1125,9 @@ def main():
 
     # pre-warm the SDK client at startup so the FIRST reply is already fast
     globals()["POOL_SIZE"] = int(settings.get("sdk_pool_size", POOL_SIZE))
+    globals()["MAX_REPLY_CHARS"] = int(
+        settings.get("max_reply_chars", MAX_REPLY_CHARS))
+    globals()["ASCII_ONLY"] = bool(settings.get("ascii_only", ASCII_ONLY))
     if use_claude and POOL_SIZE > 0:
         try:
             _persona = PERSONA_FILE.read_text(encoding="utf-8")

@@ -6,9 +6,9 @@
     "claude_timeout_s": 45,
     "diagnose": false,
     "human_typing": true,
-    "type_speed": 0.012,
-    "think_min": 0.1,
-    "think_max": 0.25,
+    "type_speed": 0.09,
+    "think_min": 0.8,
+    "think_max": 2.0,
     "reply_cooldown_s": 8,
     "reply_gap_s": 5,
     "repeat_window_s": 1800,
@@ -16,7 +16,9 @@
     "keep_alive_seconds": 50,
     "own_names": [
       "Napco Nucleus"
-    ]
+    ],
+    "ascii_only": true,
+    "max_reply_chars": 220
   },
   "commands": [
     {
@@ -100,8 +102,7 @@
       "reply": [
         "I am Napco Nucleus.",
         "I am Napco Nucleus, I look after requirement capture for the team.",
-        "Napco Nucleus here.",
-        "আমি Napco Nucleus।"
+        "Napco Nucleus here."
       ]
     },
     {
@@ -140,8 +141,7 @@
       "reply": [
         "I was created by Mohammad Kamrul Hasan.",
         "My creator is Mohammad Kamrul Hasan.",
-        "I was built by Mohammad Kamrul Hasan.",
-        "আমাকে তৈরি করেছেন Mohammad Kamrul Hasan।"
+        "I was built by Mohammad Kamrul Hasan."
       ]
     },
     {
@@ -162,8 +162,7 @@
         "Hello bhai, how can I help?",
         "Hello, how may I help you?",
         "Assalamu alaikum bhai, how can I help?",
-        "Hello bhai.",
-        "আসসালামু আলাইকুম ভাই, কিভাবে সাহায্য করতে পারি?"
+        "Hello bhai."
       ],
       "always": true
     },
@@ -188,8 +187,7 @@
       "reply": [
         "I am well, thank you bhai. How may I help?",
         "Doing well, thank you. How can I help you?",
-        "All good here, thank you bhai.",
-        "ভালো আছি ভাই, ধন্যবাদ।"
+        "All good here, thank you bhai."
       ],
       "always": true
     },
@@ -206,8 +204,7 @@
       "reply": [
         "You are welcome bhai.",
         "Happy to help.",
-        "My pleasure bhai.",
-        "আপনাকে স্বাগতম ভাই।"
+        "My pleasure bhai."
       ],
       "always": true
     },
@@ -237,8 +234,7 @@
       "reply": [
         "Understood bhai.",
         "Noted, thank you.",
-        "That is quite alright bhai.",
-        "আচ্ছা ভাই।"
+        "That is quite alright bhai."
       ],
       "always": true
     },
@@ -261,8 +257,7 @@
       "reply": [
         "Goodbye bhai, take care.",
         "Thank you bhai, speak soon.",
-        "Take care bhai.",
-        "আল্লাহ হাফেজ ভাই।"
+        "Take care bhai."
       ],
       "always": true
     }
