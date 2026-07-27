@@ -92,6 +92,7 @@ MAX_REPLY_CHARS = 800          # overridden by settings.max_reply_chars
 
 
 ASCII_ONLY = True              # overridden by settings.ascii_only
+SINGLE_SENTENCE = True         # overridden by settings.single_sentence
 
 
 def _tidy_reply(text, limit=None):
@@ -131,6 +132,13 @@ def _tidy_reply(text, limit=None):
     if not t:
         return ""
     t = t[0].upper() + t[1:]
+
+    if SINGLE_SENTENCE:
+        # Titu: one sentence, nothing more. Cut at the FIRST sentence end so a
+        # rambling model answer still arrives as one clean line.
+        m = re.search(r"[.!?](\s|$)", t)
+        if m:
+            t = t[:m.start() + 1].strip()
 
     cap = int(limit or MAX_REPLY_CHARS)
     if len(t) <= cap:
@@ -1038,6 +1046,18 @@ def _submit(win, box):
             return True                 # cannot verify -> assume it went (Send btn)
         if not v or len(v) < 2:
             return True                 # box emptied -> definitely sent
+    # Clear the box. A stuck draft is worse than a lost reply: it sits below
+    # the partner's last message, so get_incoming reads it as "already
+    # answered" and that chat goes permanently silent.
+    try:
+        bx = find_compose(win)
+        if bx:
+            bx.SetFocus()
+            time.sleep(0.1)
+            bx.SendKeys("{Ctrl}a{Delete}", waitTime=0.05)
+            log("submit failed: cleared the stuck draft so the chat is not blocked")
+    except Exception as e:
+        log(f"submit failed AND could not clear the draft: {e}")
     log("submit: compose still has text after all send methods")
     return False
 
@@ -1057,6 +1077,12 @@ def send_reply(win, text, human=True, think=(0.2, 0.5), type_speed=0.02):
         # char-by-char typing only for plain English (SendKeys cannot produce
         # Bangla or emoji) -> those are pasted from clipboard instead
         non_ascii = any(ord(c) > 127 for c in text)
+        # With ASCII_ONLY the text is guaranteed typeable, so NEVER paste.
+        # Pasting is what Teams converts into a Loop Paragraph, and a Loop
+        # Paragraph cannot be sent at all -- the text just sits in the box and
+        # every submit method fails.
+        if ASCII_ONLY:
+            non_ascii = False
         if human and not non_ascii:
             time.sleep(random.uniform(*think))             # brief think pause
             box.SendKeys(_sk_escape(text), waitTime=type_speed)   # shows 'typing...'
@@ -1128,6 +1154,8 @@ def main():
     globals()["MAX_REPLY_CHARS"] = int(
         settings.get("max_reply_chars", MAX_REPLY_CHARS))
     globals()["ASCII_ONLY"] = bool(settings.get("ascii_only", ASCII_ONLY))
+    globals()["SINGLE_SENTENCE"] = bool(
+        settings.get("single_sentence", SINGLE_SENTENCE))
     if use_claude and POOL_SIZE > 0:
         try:
             _persona = PERSONA_FILE.read_text(encoding="utf-8")
