@@ -165,6 +165,7 @@ def _claude_gen(kind, name):
     try:
         p = subprocess.run(["claude", "--print", "--model", MODEL],
                            input=prompts[kind], capture_output=True, text=True,
+                           encoding="utf-8", errors="replace",
                            cwd=str(_REPO), timeout=45, shell=True, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         out = (p.stdout or "").strip()
         return out or None
@@ -209,8 +210,16 @@ def _claude_meeting(name, already_sent):
         f"- output ONLY the message text, nothing else"
         f"{avoid}")
     try:
+        # encoding MUST be utf-8. Without it Python uses the console codepage
+        # (cp1252 on this box) and the call dies with "'charmap' codec can't
+        # encode characters" the moment the prompt contains Bangla, which it
+        # always does because the rules mention আপনি and তুমি. The failure is
+        # caught below and silently falls back to a template, so the symptom
+        # was "the messages are all identical" rather than an error anyone saw
+        # (2026-07-28).
         p = subprocess.run(["claude", "--print", "--model", MODEL],
                            input=prompt, capture_output=True, text=True,
+                           encoding="utf-8", errors="replace",
                            cwd=str(_REPO), timeout=45, shell=True,
                            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         out = (p.stdout or "").strip()
