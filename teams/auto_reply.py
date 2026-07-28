@@ -1493,7 +1493,8 @@ def main():
         # "Please knock Zaman bhai" -> go and knock him, then report back here.
         knock_raw = parse_knock(msg)
         if knock_raw:
-            target = dev_names.find(knock_raw)
+            # Partial and misspelled names are fine: "knock Zmn" is Zaman.
+            target, near = dev_names.find_loose(knock_raw)
             if not is_allowed(who, cmd_allow):
                 rep = (f"Sorry {first} bhai, I can only pass a knock along for "
                        f"someone on the dev team.")
@@ -1504,9 +1505,16 @@ def main():
                 last_reply_at[clow] = time.time()
                 return
             if target is None:
-                names = ", ".join(d["name"] for d in dev_names.roster())
-                rep = (f"Sorry {first} bhai, I do not have {knock_raw} on my "
-                       f"list. I can knock {names}.")
+                if len(near) > 1:
+                    # two devs equally close: ask rather than knock the wrong
+                    # one, since a knock is visible to that person
+                    opts = " or ".join(d["name"] for d in near)
+                    rep = (f"{first} bhai, did you mean {opts}? Tell me which "
+                           f"one and I will knock them.")
+                else:
+                    names = ", ".join(d["name"] for d in dev_names.roster())
+                    rep = (f"Sorry {first} bhai, I do not have {knock_raw} on my "
+                           f"list. I can knock {names}.")
                 send_reply(win, rep, human=human_typing, think=think,
                            type_speed=type_speed)
                 self_sent.append(rep.strip().lower())

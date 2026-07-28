@@ -112,10 +112,14 @@ def find(raw) -> dict | None:
             return d
         if d["search"] and _norm(d["search"]) == n:
             return d
-    # 4. the chat-list label, either direction ("kamrul" vs "kamrul hasan")
+    # 4. the chat-list label, either direction ("kamrul" vs "kamrul hasan").
+    #    The "query inside label" direction needs a real query: a 1-2 letter
+    #    fragment sits inside almost every label, so "a" would match Zaman.
     for d in devs:
         c = _norm(d["chat"])
-        if c and (c in n or n in c):
+        if not c:
+            continue
+        if c in n or (len(n) >= 3 and n in c):
             return d
     # 5. canonical name appearing anywhere in the display name.
     #    This is what rescues "Md. Ahsan Habib Rocky" -> Rocky without
@@ -130,6 +134,94 @@ def find(raw) -> dict | None:
             if at and at & toks and len(at & toks) >= min(2, len(at)):
                 return d
     return None
+
+
+def _skeleton(s) -> str:
+    """Consonants only. 'zaman' -> 'zmn', which is how people abbreviate."""
+    return re.sub(r"[aeiou]", "", _norm(s).replace(" ", ""))
+
+
+def _is_subseq(q: str, s: str) -> bool:
+    """True when every letter of q appears in s, in order. 'zma' fits 'zaman'."""
+    it = iter(s)
+    return all(ch in it for ch in q)
+
+
+def _lev(a: str, b: str) -> int:
+    """Edit distance, small strings only."""
+    if a == b:
+        return 0
+    if not a or not b:
+        return len(a) or len(b)
+    prev = list(range(len(b) + 1))
+    for i, ca in enumerate(a, 1):
+        cur = [i]
+        for j, cb in enumerate(b, 1):
+            cur.append(min(prev[j] + 1, cur[j - 1] + 1,
+                           prev[j - 1] + (ca != cb)))
+        prev = cur
+    return prev[-1]
+
+
+def find_loose(raw):
+    """Best roster match for a shortened or misspelled name.
+
+    Titu, 2026-07-28: "You will understand the name if I ask you an incomplete
+    name. For example: knock Zmn/Zama (Zaman) you will knock Zaman bhai."
+
+    Returns (entry, candidates). `entry` is None when nothing is close enough
+    OR when two devs are equally close -- guessing between Amin and Atik on
+    "A" and knocking the wrong person is worse than asking which one.
+    """
+    exact = find(raw)
+    if exact is not None:
+        return exact, [exact]
+    n = _norm(raw).replace(" ", "")
+    if len(n) < 2:
+        return None, []
+    nskel = _skeleton(n)
+
+    scored = []
+    for d in _load():
+        # Fuzzy scoring runs against SHORT keys only. A full display name like
+        # "mostafajannatulferdows" contains almost any three letters as a
+        # subsequence, which made "Sal" (Salman, not on the roster) match
+        # Ferdows. Long aliases still work through find()'s exact rules above.
+        keys = [_norm(d["name"]).replace(" ", "")]
+        if d["chat"]:
+            keys.append(_norm(d["chat"]).replace(" ", ""))
+        keys += [k for k in (_norm(a).replace(" ", "") for a in d["aliases"])
+                 if len(k) <= 14]
+        best = 0
+        for k in [k for k in keys if k]:
+            if k.startswith(n) or n.startswith(k):
+                best = max(best, 95)
+            if nskel and nskel == _skeleton(k):
+                best = max(best, 90)
+            if len(n) >= 3 and n in k:
+                best = max(best, 85)
+            # One typo is a typo. Two edits on a short name is a different
+            # person: "Salman" is two edits from "Zaman", and Salman is a real
+            # colleague who is not on this roster. Only allow a second edit
+            # once the name is long enough for it to still be unambiguous.
+            dist = _lev(n, k)
+            if len(k) > 3 and dist <= (2 if len(n) >= 8 else 1):
+                best = max(best, 82 - dist * 10)
+            # a subsequence only means anything against a comparably short
+            # key, otherwise every scattered letter counts as a hit
+            if len(n) >= 3 and len(k) <= len(n) + 4 and _is_subseq(n, k):
+                best = max(best, 70)
+        if best:
+            scored.append((best, d))
+
+    if not scored:
+        return None, []
+    scored.sort(key=lambda x: (-x[0], x[1]["name"]))
+    top = scored[0][0]
+    winners = [d for s, d in scored if s == top]
+    if len(winners) == 1:
+        return winners[0], [d for _, d in scored]
+    return None, winners
 
 
 def resolve(raw, default: str = "") -> str:
