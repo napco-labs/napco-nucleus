@@ -1086,6 +1086,69 @@ _KNOCK_NOT_A_NAME = {"me", "you", "him", "her", "them", "us", "someone",
                      "team", "it", "that", "this", "off", "out"}
 
 
+# ---------------------------------------------------------------------------
+# Relay (Titu, 2026-07-28): after a knock, "Zaman bhai asked to tell me
+# something, he did not do anything. I was expecting a mediator." So the
+# assistant carries messages both ways: "tell Titu bhai that the build is
+# ready", and after a knock a bare "tell him ..." goes back to whoever knocked.
+# ---------------------------------------------------------------------------
+_RELAY_TO_NAMED = re.compile(
+    r"(?:^|\b)(?:please\s+|plz\s+|pls\s+|kindly\s+|can\s+you\s+|could\s+you\s+|"
+    r"would\s+you\s+)*"
+    r"(?:tell|inform|let|ask|say\s+to)\s+"
+    # The name is one or two words, and neither may be a connector: without
+    # the lookaheads "tell Zaman the report is done" captured "Zaman the" and
+    # ate the first word of the message.
+    r"(?P<who>(?!bhai\b)[A-Za-z][A-Za-z.]{0,20}"
+    r"(?:\s+(?!bhai\b|that\b|the\b|to\b|know\b|about\b)[A-Za-z][A-Za-z.]{0,20})?)"
+    r"(?:\s+bhai)?\s+"
+    r"(?:that\s+|to\s+know\s+that\s+|know\s+that\s+|know\s+|to\s+|:\s*)?"
+    r"(?P<what>\S.*)$",
+    re.I | re.S)
+
+_RELAY_TO_PRONOUN = re.compile(
+    r"(?:^|\b)(?:please\s+|plz\s+|pls\s+|kindly\s+|can\s+you\s+|could\s+you\s+|"
+    r"would\s+you\s+)*"
+    r"(?:tell|inform|let|say\s+to)\s+"
+    r"(?P<who>him|her|them|he|she|back|him\s+back|her\s+back)"
+    r"(?:\s+bhai)?\s+"
+    r"(?:that\s+|know\s+that\s+|know\s+|to\s+|:\s*)?"
+    r"(?P<what>\S.*)$",
+    re.I | re.S)
+
+_PRONOUNS = {"him", "her", "them", "he", "she", "back",
+             "him back", "her back"}
+
+# How long a "tell him ..." still knows who "him" is after we carried a
+# message. Long enough for a real reply, short enough that tomorrow's stray
+# "tell him ok" does not go to yesterday's requester.
+RELAY_LINK_TTL_S = 4 * 3600.0
+
+
+def parse_relay(msg):
+    """('<who or pronoun>', '<message>') for a relay request, else ('', '').
+
+    The pronoun form is checked first: "tell him the build is ready" must not
+    be read as a message for somebody called "him".
+    """
+    t = (msg or "").strip()
+    if not t:
+        return "", ""
+    for rx in (_RELAY_TO_PRONOUN, _RELAY_TO_NAMED):
+        m = rx.search(t)
+        if not m:
+            continue
+        who = (m.group("who") or "").strip(" .:\t")
+        what = (m.group("what") or "").strip(" .:\t")
+        if not who or not what or len(what) < 2:
+            continue
+        # "tell me", "tell us" is not a relay, it is a question to us
+        if who.lower() in {"me", "us", "myself"}:
+            return "", ""
+        return who, what
+    return "", ""
+
+
 def parse_knock(msg):
     """The raw name in a knock request, or '' when this is not one."""
     m = _KNOCK_RE.search((msg or "").strip())
@@ -1337,6 +1400,10 @@ def main():
     # when someone actually messages or a call starts.
     last_activity = 0.0
     away_logged_at = 0.0                 # rate-limit the "staying silent" log
+    # who we last carried a message TO, and on whose behalf:
+    #   knocked/told person -> (their display name, requester name, when)
+    # so their "tell him ..." goes back to the right person without naming.
+    relay_link = {}
     rules_mtime = _mtime(RULES_FILE)
 
     # pre-warm the SDK client at startup so the FIRST reply is already fast
@@ -1356,6 +1423,46 @@ def main():
             log(f"pre-warming SDK pool (size {POOL_SIZE})")
         except Exception as e:
             log(f"pre-warm failed: {str(e)[:100]}")
+
+    def _say_to(win, entry, body):
+        """Open `entry`'s chat and say `body`. True when it was delivered.
+
+        Prefers clicking their existing chat; falls back to Ctrl+N only if
+        that fails, because the Ctrl+N flow can "succeed" onto the wrong
+        contact (seen 2026-07-27).
+        """
+        ok = False
+        try:
+            item = find_chat_item(win, entry.get("chat") or entry["name"])
+            if item is not None and open_chat(item):
+                time.sleep(1.0)
+                ok = send_reply(win, body, human=human_typing, think=think,
+                                type_speed=type_speed, single=False)
+                if ok:
+                    self_sent.append(body.strip().lower())
+        except Exception as e:
+            log(f"say_to '{entry['name']}' in-place failed: {str(e)[:100]}")
+        if not ok:
+            try:
+                from teams import notify        # lazy: circular import
+                ok = notify.send(entry["search"], body)
+                log(f"say_to fell back to a new chat for '{entry['name']}': {ok}")
+            except Exception as e:
+                log(f"say_to fallback failed: {str(e)[:100]}")
+        return ok
+
+    def _back_to(win, display, expect_first):
+        """Return to `display`'s chat. True ONLY when we can see we are there,
+        so a confirmation never lands on the person we just went to."""
+        try:
+            item = find_chat_item(win, display)
+            if item is not None and open_chat(item):
+                time.sleep(0.8)
+                here = (chat_partner(win) or "").strip().lower()
+                return bool(here) and dev_names.resolve(here) == expect_first
+        except Exception as e:
+            log(f"return to '{display}' failed: {str(e)[:100]}")
+        return False
 
     def handle_open_chat(win):
         """Read the currently-open chat and reply once (if a new partner msg)."""
@@ -1490,6 +1597,70 @@ def main():
             last_reply_at[clow] = time.time()
             return
 
+        # "Tell Titu bhai that the build is ready" -> carry it to Titu and
+        # confirm here. After a knock, a bare "tell him ..." goes back to
+        # whoever asked for the knock.
+        relay_who, relay_what = parse_relay(msg)
+        if relay_what and is_allowed(who, cmd_allow):
+            link = relay_link.get(first)
+            if relay_who.lower() in _PRONOUNS:
+                # a pronoun only resolves if we recently brought this person a
+                # message; otherwise we ask rather than guess
+                rnear = []
+                rtarget = (dev_names.find(link[1])
+                           if link and (time.time() - link[2]) < RELAY_LINK_TTL_S
+                           else None)
+            else:
+                rtarget, rnear = dev_names.find_loose(relay_who)
+
+            if rtarget is None:
+                if relay_who.lower() in _PRONOUNS:
+                    rep = (f"{first} bhai, who should I pass that to? Give me "
+                           f"the name and I will take it to them.")
+                elif len(rnear) > 1:
+                    opts = " or ".join(d["name"] for d in rnear)
+                    rep = (f"{first} bhai, did you mean {opts}?")
+                else:
+                    names = ", ".join(d["name"] for d in dev_names.roster())
+                    rep = (f"Sorry {first} bhai, I do not have {relay_who} on "
+                           f"my list. I can pass it to {names}.")
+                send_reply(win, rep, human=human_typing, think=think,
+                           type_speed=type_speed)
+                self_sent.append(rep.strip().lower())
+                log(f"RELAY unresolved target '{relay_who}' from '{first}'")
+                last_reply_at[clow] = time.time()
+                return
+            if rtarget["name"] == first:
+                rep = f"That is you {first} bhai, you can tell me directly."
+                send_reply(win, rep, human=human_typing, think=think,
+                           type_speed=type_speed)
+                self_sent.append(rep.strip().lower())
+                last_reply_at[clow] = time.time()
+                return
+
+            body = (f"{rtarget['name']} bhai, {first} bhai asked me to tell "
+                    f"you: {relay_what}")
+            log(f"RELAY '{first}' -> '{rtarget['name']}': {relay_what[:60]}")
+            last_activity = time.time()
+            nudge_input()
+            ok = _say_to(win, rtarget, body)
+            if ok:
+                # let the receiver answer back through us as well
+                relay_link[rtarget["name"]] = (who, first, time.time())
+            back_ok = _back_to(win, who, first)
+            if back_ok:
+                rep = (f"Passed it on to {rtarget['name']} bhai."
+                       if ok else
+                       f"Sorry {first} bhai, I could not reach "
+                       f"{rtarget['name']} bhai just now.")
+                send_reply(win, rep, human=human_typing, think=think,
+                           type_speed=type_speed)
+                self_sent.append(rep.strip().lower())
+            else:
+                log(f"RELAY delivered but could not get back to '{first}'")
+            last_reply_at[clow] = time.time()
+            return
+
         # "Please knock Zaman bhai" -> go and knock him, then report back here.
         knock_raw = parse_knock(msg)
         if knock_raw:
@@ -1530,43 +1701,25 @@ def main():
                 return
 
             body = (f"Hello {target['name']} bhai, {first} bhai asked me to "
-                    f"knock you. How can I help you?")
+                    f"knock you. How can I help you? If you want to send "
+                    f"anything back to {first} bhai, tell me and I will pass "
+                    f"it on.")
             log(f"KNOCK '{target['name']}' requested by '{first}'")
             last_activity = time.time()
             nudge_input()
-            ok = False
-            try:
-                item = find_chat_item(win, target.get("chat") or target["name"])
-                if item is not None and open_chat(item):
-                    time.sleep(1.0)
-                    ok = send_reply(win, body, human=human_typing, think=think,
-                                    type_speed=type_speed, single=False)
-                    if ok:
-                        self_sent.append(body.strip().lower())
-                        log(f"KNOCK delivered to '{target['name']}' in their chat")
-            except Exception as e:
-                log(f"knock in-place send failed: {str(e)[:100]}")
-            if not ok:
-                try:
-                    from teams import notify   # lazy: circular import
-                    ok = notify.send(target["search"], body)
-                    log(f"KNOCK fell back to a new chat for "
-                        f"'{target['name']}': {ok}")
-                except Exception as e:
-                    log(f"knock fallback failed: {str(e)[:100]}")
+            ok = _say_to(win, target, body)
+            if ok:
+                log(f"KNOCK delivered to '{target['name']}'")
+                # Remember who this knock came from, so "tell him the build is
+                # ready" from the knocked person finds its way back without
+                # them having to name anybody (Titu, 2026-07-28: "I was
+                # expecting a mediator").
+                relay_link[target["name"]] = (who, first, time.time())
 
-            # Come back to whoever asked and confirm. Only speak here once we
-            # can SEE we are back in their chat -- posting "done" into the
-            # chat we just knocked would tell the wrong person.
-            back_ok = False
-            try:
-                back = find_chat_item(win, who)
-                if back is not None and open_chat(back):
-                    time.sleep(0.8)
-                    here = (chat_partner(win) or "").strip().lower()
-                    back_ok = bool(here) and dev_names.resolve(here) == first
-            except Exception as e:
-                log(f"knock return-to-requester failed: {str(e)[:100]}")
+            # Come back to whoever asked and confirm. Only speak once we can
+            # SEE we are back -- posting "done" into the chat we just knocked
+            # would tell the wrong person.
+            back_ok = _back_to(win, who, first)
             if back_ok:
                 rep = (f"Done {first} bhai, I have knocked {target['name']} bhai."
                        if ok else
