@@ -859,6 +859,30 @@ def _item_contact(name):
     return m.group(1).strip() if m else nm
 
 
+def _item_preview(name):
+    """The 'Last message ...' part of a chat-list entry, or ''."""
+    m = re.search(r"last message\s+(.*)$", (name or ""), re.I)
+    if not m:
+        return ""
+    # trim the trailing timestamp Teams appends ("... 2:42 PM")
+    return re.sub(r"\s+\d{1,2}:\d{2}\s*(?:am|pm)?\s*$", "", m.group(1),
+                  flags=re.I).strip()
+
+
+def _we_spoke_last(name):
+    """True when the chat-list preview shows OUR message as the latest.
+
+    Teams prefixes the preview with "You:" when the last message is ours.
+    Reading this off the list is what lets the sweep decide whether a chat
+    needs opening at all, instead of clicking through every conversation
+    every couple of minutes -- which looks, from the desktop, like the
+    assistant frantically flicking between people and typing nothing
+    (Titu, 2026-07-28).
+    """
+    p = _item_preview(name)
+    return p.lower().startswith("you:")
+
+
 def find_chat_items(win, match):
     """Every left-rail chat item whose CONTACT NAME matches `match`.
 
@@ -1491,8 +1515,11 @@ def main():
     last_activity = 0.0
     away_logged_at = 0.0                 # rate-limit the "staying silent" log
     repeat_noticed = set()               # questions we have already pointed at
-    # how often to walk every dev chat looking for something read-but-unanswered
-    sweep_gap_s = max(30.0, float(settings.get("sweep_seconds", 120)))
+    # how often to re-read the chat list looking for something read-but
+    # unanswered. Cheap now: it only opens a chat when the list says a
+    # colleague spoke last and the preview has changed.
+    sweep_gap_s = max(20.0, float(settings.get("sweep_seconds", 60)))
+    last_preview = {}                    # dev name -> last chat-list preview
     # who we last carried a message TO, and on whose behalf:
     #   knocked/told person -> (their display name, requester name, when)
     # so their "tell him ..." goes back to the right person without naming.
@@ -1961,27 +1988,50 @@ def main():
         # reminders after a single "hi".
 
     def sweep_dev_chats(win, record_only=False):
-        """Open each dev's chat and process whatever is sitting at the bottom.
+        """Catch up on chats where a colleague has the last word.
 
-        The unread badge is not a reliable signal that a message still needs
-        answering. Opening a chat for any reason clears it, so a message can
-        be sitting there, read, unanswered, and invisible to the loop forever.
-        Titu hit exactly this: a one-off send opened Zaman's chat at 14:41 and
-        cleared the badge on a request nobody had handled.
+        The unread badge alone is not enough: opening a chat for any reason
+        clears it, so a message can sit there read, unanswered, and invisible
+        forever. A one-off send opened Zaman's chat at 14:41 and cleared the
+        badge on a request nobody had handled.
 
-        answered_at (now persisted) is what keeps this from re-answering old
-        messages, so the sweep is cheap to run often.
+        But the first version of this OPENED all seven chats every couple of
+        minutes to look, which from the desktop reads as the assistant
+        flicking between people and typing nothing. So it now decides from the
+        chat LIST, which already carries "Last message <preview>" and a "You:"
+        prefix when we spoke last. Reading the list costs one tree walk and no
+        navigation at all; a chat is only opened when the preview says a
+        colleague spoke last AND that preview has changed since we looked.
         """
         n = 0
         for d in dev_names.roster():
+            want = d["name"]
             try:
-                item = find_chat_item(win, d.get("chat") or d["name"])
-                if item is not None and open_chat(item):
-                    time.sleep(1.1)
-                    handle_open_chat(win, record_only=record_only)
-                    n += 1
+                for item in find_chat_items(win, d.get("chat") or want):
+                    try:
+                        nm = item.Name or ""
+                    except Exception:
+                        continue
+                    contact = _item_contact(nm)
+                    if dev_names.resolve(contact) != want:
+                        continue                    # not actually their chat
+                    preview = _item_preview(nm)
+                    if _we_spoke_last(nm):
+                        last_preview[want] = preview
+                        break                       # nothing owed here
+                    if last_preview.get(want) == preview:
+                        break                       # already looked at this one
+                    # something new from them: worth opening
+                    if open_chat(item):
+                        time.sleep(1.3)
+                        here = (chat_partner(win) or "").strip()
+                        if here and dev_names.resolve(here) == want:
+                            handle_open_chat(win, record_only=record_only)
+                            n += 1
+                        last_preview[want] = preview
+                    break
             except Exception as e:
-                log(f"sweep '{d['name']}' failed: {str(e)[:80]}")
+                log(f"sweep '{want}' failed: {str(e)[:80]}")
         return n
 
     # First run after the upgrade: record where every conversation currently
