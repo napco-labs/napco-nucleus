@@ -158,6 +158,27 @@
     },
     {
       "contains": [
+        "assalamu alaikum",
+        "assalamualaikum",
+        "asalamualaikum",
+        "salamualaikum",
+        "as salamu alaikum",
+        "salam alaikum",
+        "slm",
+        "salam",
+        "আসসালামু আলাইকুম",
+        "সালাম"
+      ],
+      "reply": [
+        "Walaikum assalam {first} bhai, how can I help?",
+        "Walaikum assalam {first} bhai.",
+        "Walaikum assalam {first} bhai, how may I help you?",
+        "ওয়ালাইকুম আসসালাম {first} ভাই, আপনাকে কিভাবে সাহায্য করতে পারি?"
+      ],
+      "always": true
+    },
+    {
+      "contains": [
         "hi",
         "hello",
         "hey",
@@ -166,11 +187,8 @@
         "good morning",
         "good afternoon",
         "good evening",
-        "assalamu alaikum",
-        "salam",
         "yo",
-        "হাই",
-        "স্যালাম"
+        "হাই"
       ],
       "reply": [
         "Hello {first} bhai, how can I help?",
@@ -202,10 +220,10 @@
         "কি অবস্থা"
       ],
       "reply": [
-        "I am well, thank you {first} bhai. How may I help?",
-        "Doing well, thank you {first} bhai. How can I help you?",
-        "All good here {first} bhai, thank you.",
-        "ভালো আছি {first} ভাই, ধন্যবাদ। আপনি কেমন আছেন?"
+        "Alhamdulillah, I am well {first} bhai. How may I help?",
+        "Alhamdulillah {first} bhai, all good here. How can I help you?",
+        "Alhamdulillah, doing well {first} bhai. Thank you for asking.",
+        "আলহামদুলিল্লাহ, ভালো আছি {first} ভাই। আপনি কেমন আছেন?"
       ],
       "always": true
     },
@@ -277,9 +295,9 @@
         "আল্লাহ হাফেজ"
       ],
       "reply": [
-        "Goodbye {first} bhai, take care.",
-        "Thank you {first} bhai, speak soon.",
-        "Take care {first} bhai.",
+        "Allah hafez {first} bhai, take care.",
+        "Allah hafez {first} bhai.",
+        "Thank you {first} bhai, Allah hafez.",
         "আল্লাহ হাফেজ {first} ভাই, ভালো থাকবেন।"
       ],
       "always": true
