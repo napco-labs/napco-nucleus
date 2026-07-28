@@ -279,6 +279,40 @@ def match_reply(text, rules):
     return None
 
 
+ANSWERED_FILE = _REPO / "data" / "answered.json"
+
+
+def _load_answered():
+    """Questions already answered, and whether we have primed before.
+
+    Kept on disk because the loop only ever reacts to an UNREAD badge. Every
+    restart used to start with an empty memory, and anything that clears a
+    badge without us processing it -- opening the chat by hand, a one-off
+    send, Teams syncing a read receipt from the phone -- made that message
+    invisible forever. Persisting this is what makes the catch-up sweep safe
+    to run: it can look at every dev chat without re-answering old messages.
+    """
+    try:
+        d = json.loads(ANSWERED_FILE.read_text(encoding="utf-8"))
+        seen = {str(k): float(v) for k, v in (d.get("answered") or {}).items()}
+        return seen, bool(d.get("primed"))
+    except Exception:
+        return {}, False
+
+
+def _save_answered(answered, primed=True):
+    try:
+        ANSWERED_FILE.parent.mkdir(parents=True, exist_ok=True)
+        cut = time.time() - 7 * 24 * 3600
+        keep = {k: v for k, v in answered.items() if v > cut}
+        tmp = ANSWERED_FILE.with_name(ANSWERED_FILE.name + ".tmp")
+        tmp.write_text(json.dumps({"primed": primed, "answered": keep}),
+                       encoding="utf-8")
+        os.replace(str(tmp), str(ANSWERED_FILE))
+    except Exception as e:
+        log(f"could not save answered state: {str(e)[:100]}")
+
+
 def _addr(text, first):
     """Put the person's name into a canned reply.
 
@@ -1409,7 +1443,10 @@ def main():
     canned_texts = _canned_texts(rules)
     cmd_allow = load_allowlist()   # who may trigger commands (from dev_list)
     self_sent = deque(maxlen=15)   # our own recent replies (echo guard)
-    answered_at = {}                     # "contact|question" -> time answered (30-min window)
+    # "contact|question" -> time answered. Loaded from disk so a restart does
+    # not forget what it has already dealt with, which is what makes the
+    # catch-up sweep safe to run.
+    answered_at, answered_primed = _load_answered()
     last_reply_at = {}                   # contact -> time of last reply (per-contact gap)
     last_nudge = 0.0
     next_nudge_gap = float(keep_alive_s)
@@ -1418,6 +1455,8 @@ def main():
     last_activity = 0.0
     away_logged_at = 0.0                 # rate-limit the "staying silent" log
     repeat_noticed = set()               # questions we have already pointed at
+    # how often to walk every dev chat looking for something read-but-unanswered
+    sweep_gap_s = max(30.0, float(settings.get("sweep_seconds", 120)))
     # who we last carried a message TO, and on whose behalf:
     #   knocked/told person -> (their display name, requester name, when)
     # so their "tell him ..." goes back to the right person without naming.
@@ -1482,8 +1521,13 @@ def main():
             log(f"return to '{display}' failed: {str(e)[:100]}")
         return False
 
-    def handle_open_chat(win):
-        """Read the currently-open chat and reply once (if a new partner msg)."""
+    def handle_open_chat(win, record_only=False):
+        """Read the currently-open chat and reply once (if a new partner msg).
+
+        record_only marks whatever is sitting there as already handled without
+        answering it. That is how the first sweep after an upgrade avoids
+        replying to the tail of seven conversations at once.
+        """
         nonlocal answered_at, last_activity, away_logged_at
         msg, sender = get_incoming(win, own_names, self_sent)
         low = msg.strip().lower()
@@ -1509,6 +1553,9 @@ def main():
         clow = who.strip().lower()
         norm = re.sub(r"\s+\S.*?today at .+$", "", low, flags=re.I).strip() or low
         key = f"{clow}|{norm}"                       # repeat key is PER CONTACT
+        if record_only:
+            answered_at[key] = time.time()
+            return
         # per-contact gap: replying to one dev never blocks replying to another
         if (time.time() - last_reply_at.get(clow, 0)) < reply_gap:
             return
@@ -1847,6 +1894,47 @@ def main():
         # call-capture attribution later). Auto-marking on chat wrongly silenced
         # reminders after a single "hi".
 
+    def sweep_dev_chats(win, record_only=False):
+        """Open each dev's chat and process whatever is sitting at the bottom.
+
+        The unread badge is not a reliable signal that a message still needs
+        answering. Opening a chat for any reason clears it, so a message can
+        be sitting there, read, unanswered, and invisible to the loop forever.
+        Titu hit exactly this: a one-off send opened Zaman's chat at 14:41 and
+        cleared the badge on a request nobody had handled.
+
+        answered_at (now persisted) is what keeps this from re-answering old
+        messages, so the sweep is cheap to run often.
+        """
+        n = 0
+        for d in dev_names.roster():
+            try:
+                item = find_chat_item(win, d.get("chat") or d["name"])
+                if item is not None and open_chat(item):
+                    time.sleep(1.1)
+                    handle_open_chat(win, record_only=record_only)
+                    n += 1
+            except Exception as e:
+                log(f"sweep '{d['name']}' failed: {str(e)[:80]}")
+        return n
+
+    # First run after the upgrade: record where every conversation currently
+    # stands WITHOUT answering, so nobody gets a reply to something they said
+    # hours ago. After that the sweep answers what it finds.
+    try:
+        w0 = _teams_window()
+        if w0 is not None and not answered_primed:
+            n = sweep_dev_chats(w0, record_only=True)
+            _save_answered(answered_at, primed=True)
+            log(f"primed on {n} dev chat(s) - recorded current state, replied to none")
+        elif w0 is not None:
+            n = sweep_dev_chats(w0, record_only=False)
+            log(f"startup sweep over {n} dev chat(s) - answered anything missed")
+    except Exception as e:
+        log(f"startup sweep failed: {str(e)[:100]}")
+    last_sweep = time.time()
+    last_saved = time.time()
+
     while True:
         try:
             mt = _mtime(RULES_FILE)
@@ -1973,6 +2061,16 @@ def main():
                 else:
                     # 2) nothing unread -> handle whatever chat is currently open
                     handle_open_chat(win)
+                    # 3) periodically walk every dev chat, because "no unread"
+                    #    does not mean "nothing waiting for an answer"
+                    if (time.time() - last_sweep) > sweep_gap_s:
+                        got = sweep_dev_chats(win)
+                        last_sweep = time.time()
+                        if diagnose:
+                            log(f"sweep checked {got} dev chat(s)")
+            if (time.time() - last_saved) > 20:
+                _save_answered(answered_at, primed=True)
+                last_saved = time.time()
             time.sleep(poll)
         except Exception as e:
             log(f"loop error: {e}")
