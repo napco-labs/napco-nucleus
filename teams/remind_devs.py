@@ -40,7 +40,12 @@ BST = timezone(timedelta(hours=6))
 # which is what produces the spacing -- no sleeping inside the process.
 WINDOW_START_MIN = 17 * 60          # 17:00 BD
 WINDOW_END_MIN = 17 * 60 + 30       # 17:30 BD
-MIN_GAP_SECONDS = 300               # >= 5 minutes between two colleagues
+# 4 minutes, not 5. Seven colleagues at 5-minute spacing needs 30 minutes of
+# slots but 17:00-17:30 only offers six of them, so somebody was dropped every
+# day (the run on 2026-07-28 warned about exactly this after reminding Rocky).
+# At 4 minutes the window holds eight slots, which covers all seven with room
+# for one retry. The scheduled task repeats on the same 4-minute beat.
+MIN_GAP_SECONDS = 240
 MAX_PER_DAY = 99                    # the window is the real limit now
 MODEL = "claude-sonnet-5"
 
