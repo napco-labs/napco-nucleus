@@ -38,8 +38,8 @@ BST = timezone(timedelta(hours=6))
 # least 5 minutes between two people, Monday to Friday. The scheduled task
 # fires every 5 min inside that window and each run reminds exactly ONE person,
 # which is what produces the spacing -- no sleeping inside the process.
-WINDOW_START_MIN = 17 * 60          # 17:00 BD
-WINDOW_END_MIN = 18 * 60            # 18:00 BD (Titu widened it 2026-07-28)
+WINDOW_START_MIN = 16 * 60          # 16:00 BD
+WINDOW_END_MIN = 17 * 60            # 17:00 BD (Titu moved it 2026-07-28)
 # A full hour holds twelve 5-minute slots for seven colleagues, so the spacing
 # can stay gentle. It was briefly cut to 4 minutes to squeeze everyone into a
 # 30-minute window; widening to 17:00-18:00 removed that pressure, and wider
@@ -116,15 +116,21 @@ def _sent_today(now):
     return {str(x).lower() for x in st.get("sent", [])}
 
 
-def _bump_state(now, who=""):
+def _bump_state(now, who="", message=""):
     st = _load_state()
     today = now.strftime("%Y-%m-%d")
     if st.get("date") != today:
-        st = {"date": today, "sent": [], "count": 0}
+        st = {"date": today, "sent": [], "messages": [], "count": 0}
     st["count"] = st.get("count", 0) + 1
     st["last_at"] = time.time()
     if who:
         st.setdefault("sent", []).append(who)
+    # Keep the actual wording, so tomorrow's first message and today's later
+    # ones can be checked against what has already gone out. Without this each
+    # colleague is written for in isolation and they drift back towards the
+    # same sentence.
+    if message:
+        st.setdefault("messages", []).append(message)
     _save_state(st)
 
 
@@ -150,15 +156,69 @@ def _claude_gen(kind, name):
         return None
 
 
-def compose(name):
-    kind = random.choice(ENGAGE_TYPES)
-    if kind == "meeting":
-        return "meeting", random.choice(MEETING_TEMPLATES).replace("{name}", name)
-    gen = _claude_gen(kind, name)
+def _claude_meeting(name, already_sent):
+    """A fresh, individually written reminder for `name`. None on failure.
+
+    Titu, 2026-07-28: "you will not send the same message to everybody. Use
+    human tone, politeness." Seven colleagues drawing from five fixed
+    templates guarantees repeats, and a person who sends the identical
+    sentence to the whole team reads as a mailshot, which is exactly what this
+    is trying not to be.
+
+    Previously sent messages are passed in so today's are visibly different
+    from each other, not just different by luck.
+    """
+    avoid = ""
+    if already_sent:
+        lines = "\n".join("- " + m for m in already_sent[-6:])
+        avoid = ("\n\nYou have already sent these to OTHER colleagues today. "
+                 "Yours must be clearly different in wording and structure, "
+                 "not a reshuffle of the same sentence:\n" + lines)
+    prompt = (
+        f"You are Napco Nucleus, a courteous colleague on a Bangladeshi dev "
+        f"team. Write ONE short message to your teammate {name}, politely "
+        f"asking them to add you to any client call today so you can capture "
+        f"the requirements and take care of the meeting notes.\n\n"
+        f"Rules:\n"
+        f"- address them as '{name} bhai'\n"
+        f"- warm, respectful, and genuinely polite: use please\n"
+        f"- ONE or two short sentences, no more\n"
+        f"- plain everyday words, no corporate phrasing, no assistant phrasing\n"
+        f"- NO dashes as punctuation, use a comma or a full stop\n"
+        f"- no markdown, no bullet points, no headings, no emoji\n"
+        f"- English, or simple Bangla; if Bangla, use the respectful আপনি "
+        f"form and never তুমি\n"
+        f"- do not introduce yourself, they know who you are\n"
+        f"- output ONLY the message text, nothing else"
+        f"{avoid}")
+    try:
+        p = subprocess.run(["claude", "--print", "--model", MODEL],
+                           input=prompt, capture_output=True, text=True,
+                           cwd=str(_REPO), timeout=45, shell=True,
+                           creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        out = (p.stdout or "").strip()
+        # a stray dash would break Titu's standing rule, so repair rather than
+        # discard an otherwise good message
+        out = out.replace(" -- ", ", ").replace(" — ", ", ").replace(" – ", ", ")
+        return out or None
+    except Exception as e:
+        log(f"claude gen failed (meeting): {str(e)[:80]}")
+        return None
+
+
+def compose(name, already_sent=None):
+    already_sent = already_sent or []
+    gen = _claude_meeting(name, already_sent)
+    if gen and len(gen) <= 320:
+        return "meeting", gen
     if gen:
-        return kind, gen
-    fb = {"joke": JOKE_FALLBACK, "quiz": QUIZ_FALLBACK, "fun": FUN_FALLBACK}[kind]
-    return kind, random.choice(fb).replace("{name}", name)
+        log("claude message too long (%d chars), using a template" % len(gen))
+    # Fall back to a template we have NOT already used today, so even the
+    # fallback path does not send the same line twice.
+    used = {m.strip().lower() for m in already_sent}
+    pool = [t for t in MEETING_TEMPLATES
+            if t.replace("{name}", name).strip().lower() not in used]
+    return "meeting", random.choice(pool or MEETING_TEMPLATES).replace("{name}", name)
 
 
 def open_chat_with(win, dev):
@@ -277,7 +337,7 @@ def main():
 
     d = pending[0]
     name, search = d["name"], d["search"]
-    kind, msg = compose(name)
+    kind, msg = compose(name, _load_state().get("messages", []))
     log("reminding '%s' (%s) [%s]; %d left after this"
         % (name, search, kind, len(pending) - 1))
 
@@ -305,7 +365,7 @@ def main():
         if ar.send_reply(win, msg, human=True, think=(0.4, 1.0),
                          type_speed=0.02, single=False):
             sent = 1
-            _bump_state(now, who=name)
+            _bump_state(now, who=name, message=msg)
             log("sent to '%s': %s" % (name, msg[:60]))
         else:
             log("send FAILED to '%s' - will retry next run" % name)
