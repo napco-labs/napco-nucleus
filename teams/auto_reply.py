@@ -837,25 +837,54 @@ def find_unread(win):
     return out
 
 
-def find_chat_item(win, match):
-    """Find a left-rail chat-list item whose name contains `match` (a display
-    name substring). Returns the control to click, or None. Reliable for
-    opening an EXISTING contact's chat (no Ctrl+N search needed)."""
+def _item_contact(name):
+    """The contact name out of a chat-list entry.
+
+    A Teams chat-list item reads:
+        "Chat <contact> <presence> Last message <preview> <time>"
+    so the preview text is part of the item name. Matching against the whole
+    string meant a message that merely MENTIONED somebody hijacked the click:
+    "Chat Assad Zaman Available Last message Then say to Rocky bahi 2:42 PM"
+    matched a search for Rocky and opened Zaman's chat instead (seen live
+    2026-07-28). Only the contact part may be matched on.
+    """
+    nm = (name or "").strip()
+    m = re.search(r"(?:unread message\s*)?chat\s+(.+?)\s+(?:available|away|busy|"
+                  r"offline|do not disturb|be right back|presenting|"
+                  r"last message)", nm, re.I)
+    if m:
+        return m.group(1).strip()
+    # no presence/preview marker: take what follows "chat "
+    m = re.search(r"(?:unread message\s*)?chat\s+(.+)$", nm, re.I)
+    return m.group(1).strip() if m else nm
+
+
+def find_chat_items(win, match):
+    """Every left-rail chat item whose CONTACT NAME matches `match`.
+
+    Returns a list, best first, because a single "first match" is exactly what
+    let the wrong chat get opened. Callers should click and then VERIFY with
+    chat_partner before typing anything.
+    """
     m = (match or "").strip().lower()
     if not m:
-        return None
-    found = []
+        return []
+    exact, partial = [], []
 
     def walk(c, d):
-        if d > 25 or found:
+        if d > 25:
             return
         try:
             if c.ControlType in (auto.ControlType.ListItemControl,
                                  auto.ControlType.TreeItemControl):
-                nm = (c.Name or "").lower()
-                if ("chat " in nm or "unread message" in nm) and m in nm:
-                    found.append(c)
-                    return
+                nm = (c.Name or "")
+                low = nm.lower()
+                if "chat " in low or "unread message" in low:
+                    contact = _item_contact(nm).lower()
+                    if contact == m:
+                        exact.append(c)
+                    elif m in contact:
+                        partial.append(c)
             for ch in c.GetChildren():
                 walk(ch, d + 1)
         except Exception:
@@ -865,7 +894,14 @@ def find_chat_item(win, match):
             walk(ch, 0)
     except Exception:
         pass
-    return found[0] if found else None
+    return exact + partial
+
+
+def find_chat_item(win, match):
+    """First chat-list item whose CONTACT NAME matches. Kept for callers that
+    only want one; prefer find_chat_items plus a chat_partner check."""
+    items = find_chat_items(win, match)
+    return items[0] if items else None
 
 
 def open_chat(item):
@@ -1488,35 +1524,65 @@ def main():
         that fails, because the Ctrl+N flow can "succeed" onto the wrong
         contact (seen 2026-07-27).
         """
-        ok = False
+        want = entry["name"]
+        opened = False
+        # Try every candidate, not just the first, and VERIFY where we landed
+        # before typing. A single unverified click sent a knock meant for
+        # Rocky into Zaman's chat (2026-07-28).
         try:
-            item = find_chat_item(win, entry.get("chat") or entry["name"])
-            if item is not None and open_chat(item):
-                time.sleep(1.0)
-                ok = send_reply(win, body, human=human_typing, think=think,
-                                type_speed=type_speed, single=False)
-                if ok:
-                    self_sent.append(body.strip().lower())
+            for item in find_chat_items(win, entry.get("chat") or want):
+                if not open_chat(item):
+                    continue
+                time.sleep(1.6)
+                here = (chat_partner(win) or "").strip()
+                if here and dev_names.resolve(here) == want:
+                    opened = True
+                    break
+                log(f"say_to: click landed on '{here}', not {want} - trying next")
         except Exception as e:
-            log(f"say_to '{entry['name']}' in-place failed: {str(e)[:100]}")
-        if not ok:
+            log(f"say_to '{want}' chat-list click failed: {str(e)[:100]}")
+
+        if not opened:
+            # search box fallback, still verified before we type
             try:
-                from teams import notify        # lazy: circular import
-                ok = notify.send(entry["search"], body)
-                log(f"say_to fell back to a new chat for '{entry['name']}': {ok}")
+                activate_window(win)
+                time.sleep(0.5)
+                auto.SendKeys("{Ctrl}n", waitTime=0.1)
+                time.sleep(1.5)
+                auto.SendKeys(_sk_escape(entry["search"]), waitTime=0.05)
+                time.sleep(2.0)
+                auto.SendKeys("{Enter}", waitTime=0.1)
+                time.sleep(1.0)
+                auto.SendKeys("{Enter}", waitTime=0.1)
+                time.sleep(1.4)
+                here = (chat_partner(win) or "").strip()
+                opened = bool(here) and dev_names.resolve(here) == want
+                log(f"say_to search fallback for {want} landed on "
+                    f"'{here}': {'ok' if opened else 'wrong'}")
             except Exception as e:
-                log(f"say_to fallback failed: {str(e)[:100]}")
+                log(f"say_to search fallback failed: {str(e)[:100]}")
+
+        if not opened:
+            log(f"say_to ABORTED: could not reach {want}'s chat safely")
+            return False
+
+        ok = send_reply(win, body, human=human_typing, think=think,
+                        type_speed=type_speed, single=False)
+        if ok:
+            self_sent.append(body.strip().lower())
         return ok
 
     def _back_to(win, display, expect_first):
         """Return to `display`'s chat. True ONLY when we can see we are there,
         so a confirmation never lands on the person we just went to."""
         try:
-            item = find_chat_item(win, display)
-            if item is not None and open_chat(item):
-                time.sleep(0.8)
-                here = (chat_partner(win) or "").strip().lower()
-                return bool(here) and dev_names.resolve(here) == expect_first
+            for item in find_chat_items(win, display):
+                if not open_chat(item):
+                    continue
+                time.sleep(1.4)
+                here = (chat_partner(win) or "").strip()
+                if here and dev_names.resolve(here) == expect_first:
+                    return True
         except Exception as e:
             log(f"return to '{display}' failed: {str(e)[:100]}")
         return False
