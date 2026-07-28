@@ -57,3 +57,8 @@ nucleus_memory.db
 
 # Graph OAuth token cache - contains a live refresh token, never commit
 data/graph_token.json
+
+# Assistant runtime state — regenerated on the box, never source.
+data/selfcheck_state.json
+data/requirements/eval-quarantine
+data/answered.json
