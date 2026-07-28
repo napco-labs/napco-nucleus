@@ -62,3 +62,10 @@ data/graph_token.json
 data/selfcheck_state.json
 data/requirements/eval-quarantine
 data/answered.json
+
+# Assistant runtime state written on the box (reminder/followup/confirm queues).
+data/reminder_state.json
+data/reached_devs.json
+data/followups.json
+data/pending_confirms.json
+data/intro_sent.json
