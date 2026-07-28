@@ -1515,11 +1515,10 @@ def main():
     last_activity = 0.0
     away_logged_at = 0.0                 # rate-limit the "staying silent" log
     repeat_noticed = set()               # questions we have already pointed at
-    # how often to re-read the chat list looking for something read-but
-    # unanswered. Cheap now: it only opens a chat when the list says a
-    # colleague spoke last and the preview has changed.
-    sweep_gap_s = max(20.0, float(settings.get("sweep_seconds", 60)))
-    last_preview = {}                    # dev name -> last chat-list preview
+    # how often to take a second look at the CURRENTLY OPEN window. Other
+    # people's chats are reached only via an unread badge; nothing here walks
+    # the chat list.
+    sweep_gap_s = max(60.0, float(settings.get("sweep_seconds", 600)))
     # who we last carried a message TO, and on whose behalf:
     #   knocked/told person -> (their display name, requester name, when)
     # so their "tell him ..." goes back to the right person without naming.
@@ -1987,69 +1986,15 @@ def main():
         # call-capture attribution later). Auto-marking on chat wrongly silenced
         # reminders after a single "hi".
 
-    def sweep_dev_chats(win, record_only=False):
-        """Catch up on chats where a colleague has the last word.
-
-        The unread badge alone is not enough: opening a chat for any reason
-        clears it, so a message can sit there read, unanswered, and invisible
-        forever. A one-off send opened Zaman's chat at 14:41 and cleared the
-        badge on a request nobody had handled.
-
-        But the first version of this OPENED all seven chats every couple of
-        minutes to look, which from the desktop reads as the assistant
-        flicking between people and typing nothing. So it now decides from the
-        chat LIST, which already carries "Last message <preview>" and a "You:"
-        prefix when we spoke last. Reading the list costs one tree walk and no
-        navigation at all; a chat is only opened when the preview says a
-        colleague spoke last AND that preview has changed since we looked.
-        """
-        n = 0
-        for d in dev_names.roster():
-            want = d["name"]
-            try:
-                for item in find_chat_items(win, d.get("chat") or want):
-                    try:
-                        nm = item.Name or ""
-                    except Exception:
-                        continue
-                    contact = _item_contact(nm)
-                    if dev_names.resolve(contact) != want:
-                        continue                    # not actually their chat
-                    preview = _item_preview(nm)
-                    if _we_spoke_last(nm):
-                        last_preview[want] = preview
-                        break                       # nothing owed here
-                    if last_preview.get(want) == preview:
-                        break                       # already looked at this one
-                    # something new from them: worth opening
-                    if open_chat(item):
-                        time.sleep(1.3)
-                        here = (chat_partner(win) or "").strip()
-                        if here and dev_names.resolve(here) == want:
-                            handle_open_chat(win, record_only=record_only)
-                            n += 1
-                        last_preview[want] = preview
-                    break
-            except Exception as e:
-                log(f"sweep '{want}' failed: {str(e)[:80]}")
-        return n
-
-    # First run after the upgrade: record where every conversation currently
-    # stands WITHOUT answering, so nobody gets a reply to something they said
-    # hours ago. After that the sweep answers what it finds.
-    try:
-        w0 = _teams_window()
-        if w0 is not None and not answered_primed:
-            n = sweep_dev_chats(w0, record_only=True)
-            _save_answered(answered_at, primed=True)
-            log(f"primed on {n} dev chat(s) - recorded current state, replied to none")
-        elif w0 is not None:
-            n = sweep_dev_chats(w0, record_only=False)
-            log(f"startup sweep over {n} dev chat(s) - answered anything missed")
-    except Exception as e:
-        log(f"startup sweep failed: {str(e)[:100]}")
+    # No roster-wide sweep (Titu, 2026-07-28: "Stop sweep. You will sweep only
+    # on your current open window... For other, you will understand if there
+    # any unread, then switch there and read"). Nothing walks other people's
+    # chats any more. Reaching another conversation now requires an unread
+    # badge, which is the loop's step 1, or somebody messaging the open chat.
     last_sweep = time.time()
     last_saved = time.time()
+    if not answered_primed:
+        _save_answered(answered_at, primed=True)
 
     while True:
         try:
@@ -2175,15 +2120,17 @@ def main():
                             time.sleep(1.3)          # let the chat switch + render
                             handle_open_chat(win)
                 else:
-                    # 2) nothing unread -> handle whatever chat is currently open
+                    # 2) nothing unread -> handle whatever chat is currently
+                    #    open. This runs every poll on purpose: a chat that is
+                    #    open and focused never RAISES an unread badge, Teams
+                    #    marks those messages read on arrival, so this is the
+                    #    only thing that answers the person we are talking to.
                     handle_open_chat(win)
-                    # 3) periodically walk every dev chat, because "no unread"
-                    #    does not mean "nothing waiting for an answer"
+                    # 3) and a slow re-look at that same window, in case
+                    #    something landed while we were busy elsewhere
                     if (time.time() - last_sweep) > sweep_gap_s:
-                        got = sweep_dev_chats(win)
                         last_sweep = time.time()
-                        if diagnose:
-                            log(f"sweep checked {got} dev chat(s)")
+                        handle_open_chat(win)
             if (time.time() - last_saved) > 20:
                 _save_answered(answered_at, primed=True)
                 last_saved = time.time()
