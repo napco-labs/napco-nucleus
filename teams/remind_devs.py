@@ -39,13 +39,12 @@ BST = timezone(timedelta(hours=6))
 # fires every 5 min inside that window and each run reminds exactly ONE person,
 # which is what produces the spacing -- no sleeping inside the process.
 WINDOW_START_MIN = 17 * 60          # 17:00 BD
-WINDOW_END_MIN = 17 * 60 + 30       # 17:30 BD
-# 4 minutes, not 5. Seven colleagues at 5-minute spacing needs 30 minutes of
-# slots but 17:00-17:30 only offers six of them, so somebody was dropped every
-# day (the run on 2026-07-28 warned about exactly this after reminding Rocky).
-# At 4 minutes the window holds eight slots, which covers all seven with room
-# for one retry. The scheduled task repeats on the same 4-minute beat.
-MIN_GAP_SECONDS = 240
+WINDOW_END_MIN = 18 * 60            # 18:00 BD (Titu widened it 2026-07-28)
+# A full hour holds twelve 5-minute slots for seven colleagues, so the spacing
+# can stay gentle. It was briefly cut to 4 minutes to squeeze everyone into a
+# 30-minute window; widening to 17:00-18:00 removed that pressure, and wider
+# spacing is also less like a machine working through a list.
+MIN_GAP_SECONDS = 300
 MAX_PER_DAY = 99                    # the window is the real limit now
 MODEL = "claude-sonnet-5"
 
@@ -291,7 +290,20 @@ def main():
             log("could not reach %s's chat - not sending, will retry next run" % name)
             print("could not reach %s" % name)
             return 0
-        if ar.send_reply(win, msg, human=False):
+        # TYPE it, slowly, like every other sender in the system.
+        #
+        # human=False takes the clipboard-paste branch, and pasting is what
+        # Teams turns into a Loop component that then cannot be submitted: the
+        # text appears in the box and is wiped when the send fails. Titu
+        # watched exactly that happen in Rocky's chat on 2026-07-28, and the
+        # log still said "sent". Typing is the path that has worked all day
+        # for replies, knocks and relays.
+        #
+        # single=False because this module never loads auto_reply_rules.json,
+        # so SINGLE_SENTENCE is still the module default True and would cut the
+        # reminder down to its first sentence.
+        if ar.send_reply(win, msg, human=True, think=(0.4, 1.0),
+                         type_speed=0.02, single=False):
             sent = 1
             _bump_state(now, who=name)
             log("sent to '%s': %s" % (name, msg[:60]))
