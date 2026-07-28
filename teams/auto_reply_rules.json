@@ -15,7 +15,8 @@
     "keep_alive": true,
     "keep_alive_seconds": 50,
     "own_names": [
-      "Napco Nucleus"
+      "Napco Nucleus",
+      "Nucleus"
     ],
     "ascii_only": false,
     "max_reply_chars": 400,
@@ -109,10 +110,10 @@
         "তুমি কে"
       ],
       "reply": [
-        "I am Napco Nucleus.",
-        "I am Napco Nucleus, I look after requirement capture for the team.",
-        "Napco Nucleus here.",
-        "আমি Napco Nucleus।"
+        "I am Napco Nucleus, Nucleus for short.",
+        "I am Napco Nucleus, you can call me Nucleus.",
+        "Napco Nucleus here, Nucleus is fine too.",
+        "আমি Napco Nucleus, সংক্ষেপে Nucleus বলতে পারেন।"
       ]
     },
     {
