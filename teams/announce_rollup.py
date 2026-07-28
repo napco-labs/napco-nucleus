@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import json
 import os
+import random
 import sys
 import time
 from pathlib import Path
@@ -35,7 +36,21 @@ LOG = _REPO / "logs" / "announce_rollup.log"
 DEV_LIST_FILE = _HERE / "dev_list.json"
 
 STALE_HOURS = 12.0
-SEND_GAP_SECONDS = 4.0      # small gap so it does not look like a burst
+
+# Gap between the seven announcements, jittered.
+#
+# This was 4 seconds. Seven near-identical messages from one account inside a
+# minute is the exact shape consumer anti-abuse systems are built to catch, and
+# this account is a personal one whose termination would be unrecoverable
+# (docs/MICROSOFT-POLICY-AUDIT.md, item B). Titu has already lost a LinkedIn
+# account to automated-activity enforcement, so this is a real cost, not a
+# theoretical one.
+#
+# 40-100s spreads the same seven messages over roughly 5-10 minutes, which
+# reads like somebody working down their chat list. Nobody is waiting on these:
+# the email has already been sent, this is only the nudge to go and read it.
+SEND_GAP_MIN_S = 40.0
+SEND_GAP_MAX_S = 100.0
 
 
 def log(msg: str) -> None:
@@ -132,6 +147,23 @@ def main() -> int:
                 % (mpath.name, age_h))
             continue
 
+        # CLAIM the marker before sending anything, not after.
+        #
+        # The task repeats every 5 minutes and a paced run now takes 5-10, so
+        # the next run can start while this one is still working down the
+        # list. Stamping only at the end would let two runs announce the same
+        # email and message all seven people twice, which is both embarrassing
+        # and precisely the burst pattern the pacing exists to avoid.
+        #
+        # Claiming first means a crash mid-run leaves some people un-nudged.
+        # That is the better failure: the email itself has already been sent,
+        # so the worst case is somebody reads it a bit later.
+        if not dry:
+            marker["announced"] = True
+            marker["announced_at"] = time.strftime("%Y-%m-%dT%H:%M:%S")
+            marker["claimed"] = True
+            mpath.write_text(json.dumps(marker, indent=2), encoding="utf-8")
+
         sent, failed = [], []
         for d in devs:
             first = dev_names.resolve(d["name"], default="bhai") or "bhai"
@@ -146,13 +178,14 @@ def main() -> int:
                 ok = False
                 log("send to %s raised: %s" % (d["search"], str(e)[:120]))
             (sent if ok else failed).append(d["search"])
-            time.sleep(SEND_GAP_SECONDS)
+            # jittered, because a constant gap is itself a machine signature
+            time.sleep(random.uniform(SEND_GAP_MIN_S, SEND_GAP_MAX_S))
 
         if not dry:
-            marker["announced"] = True
-            marker["announced_at"] = time.strftime("%Y-%m-%dT%H:%M:%S")
+            # already claimed above; record the outcome
             marker["announced_to"] = sent
             marker["failed"] = failed
+            marker.pop("claimed", None)
             mpath.write_text(json.dumps(marker, indent=2), encoding="utf-8")
 
         log("announced %s: %d sent, %d failed%s"
