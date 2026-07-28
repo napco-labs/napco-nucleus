@@ -54,6 +54,23 @@ MODEL = "claude-sonnet-5"
 # colleague who jokes at people unprompted is not the tone we want.
 ENGAGE_TYPES = ["meeting"]
 
+# Colleagues never to interrupt while they are on a call, by name.
+# Salman works from the USA and relays client requirements back; a nudge in the
+# middle of his call is the last thing he needs (Titu, 2026-07-28).
+NEVER_INTERRUPT = {"salman"}
+
+# Marker record_call drops while the assistant is itself capturing a call.
+RECORDING_MARKER = _REPO / "data" / "teams" / ".recording_active"
+
+# Sent when Teams shows a colleague is on a call RIGHT NOW. Short, because
+# they are mid-conversation and will read it at a glance or not at all.
+IN_CALL_TEMPLATES = [
+    "{name} bhai, I can see you are on a call. If it is a client call, please add me and I will take the notes.",
+    "{name} bhai, sorry to interrupt. If this is a client call, please add Napco Nucleus so nothing is missed.",
+    "{name} bhai, if you are with a client now, please add me to the call and I will capture the requirements.",
+    "{name} ভাই, আপনি কলে আছেন দেখছি। ক্লায়েন্ট কল হলে অনুগ্রহ করে আমাকে অ্যাড করে নিবেন।",
+]
+
 MEETING_TEMPLATES = [
     "{name} bhai, if you have a client call today, please add Napco Nucleus so the requirements are captured.",
     "{name} bhai, please add me to any client call today and I will take care of the notes.",
@@ -206,6 +223,16 @@ def _claude_meeting(name, already_sent):
         return None
 
 
+def compose_in_call(name):
+    """Message for a colleague Teams shows as being on a call right now.
+
+    Deliberately a template rather than a Claude generation: they are mid
+    conversation, and waiting up to 45 seconds for a model to write something
+    clever means the call may be over before the message lands.
+    """
+    return random.choice(IN_CALL_TEMPLATES).replace("{name}", name)
+
+
 def compose(name, already_sent=None):
     already_sent = already_sent or []
     gen = _claude_meeting(name, already_sent)
@@ -219,6 +246,29 @@ def compose(name, already_sent=None):
     pool = [t for t in MEETING_TEMPLATES
             if t.replace("{name}", name).strip().lower() not in used]
     return "meeting", random.choice(pool or MEETING_TEMPLATES).replace("{name}", name)
+
+
+def dev_is_busy(win, dev):
+    """True when Teams shows this colleague on a call / in a meeting /
+    presenting / do-not-disturb.
+
+    Read straight off the chat-list entry, which carries presence between the
+    name and the message preview, so it needs no API, no tenant and no extra
+    round trip. A reminder that lands in the middle of a client call is worse
+    than no reminder, and it is the exact call we are asking to be added to.
+    """
+    match = str(dev.get("chat") or dev.get("name") or "").strip()
+    if not match:
+        return False
+    try:
+        for item in ar.find_chat_items(win, match):
+            nm = item.Name or ""
+            if ar.dev_names.resolve(ar._item_contact(nm)) != dev.get("name"):
+                continue
+            return ar.is_busy_presence(nm)
+    except Exception as e:
+        log("presence check failed for %s: %s" % (dev.get("name"), str(e)[:60]))
+    return False
 
 
 def open_chat_with(win, dev):
@@ -335,9 +385,41 @@ def main():
         print("all reminded today")
         return 0
 
-    d = pending[0]
+    # Somebody being ON a call is the BEST moment to ask, not a reason to wait
+    # (Titu, 2026-07-28). That call is exactly the one we want to be added to,
+    # so they get a different, immediate message instead of the generic nudge.
+    #
+    # Two conditions on that. We only ask if WE are free: the assistant holds a
+    # single Teams account and can only be in one call at a time, so inviting
+    # ourselves into a second one while recording the first would be a promise
+    # we cannot keep. And never Salman, by name, whatever list he appears on.
+    d, in_call = None, False
+    we_are_busy = RECORDING_MARKER.exists()
+    for cand in pending:
+        busy = dev_is_busy(win, cand)
+        if not busy:
+            d = cand
+            break
+        if cand["name"].strip().lower() in NEVER_INTERRUPT:
+            log("%s is busy, and is on the never-interrupt list - skipping" % cand["name"])
+            continue
+        if we_are_busy:
+            log("%s is on a call but so are we - not asking to join a second one"
+                % cand["name"])
+            continue
+        d, in_call = cand, True
+        log("%s is on a call right now - asking them to add me to it" % cand["name"])
+        break
+    if d is None:
+        log("nobody available to remind this run")
+        print("nobody available")
+        return 0
+
     name, search = d["name"], d["search"]
-    kind, msg = compose(name, _load_state().get("messages", []))
+    if in_call:
+        kind, msg = "in-call", compose_in_call(name)
+    else:
+        kind, msg = compose(name, _load_state().get("messages", []))
     log("reminding '%s' (%s) [%s]; %d left after this"
         % (name, search, kind, len(pending) - 1))
 

@@ -859,6 +859,34 @@ def _item_contact(name):
     return m.group(1).strip() if m else nm
 
 
+# Teams writes the person's presence into the chat-list entry, between their
+# name and the message preview:
+#   "Chat Assad Zaman Available Last message ..."
+#   "Chat Md. Ahsan Habib Rocky In a call Last message ..."
+# So we can tell who is busy without any API, any tenant, or any extra call.
+_PRESENCE_WORDS = ("in a call", "in a meeting", "presenting", "do not disturb",
+                   "be right back", "out of office", "available", "busy",
+                   "away", "offline")
+
+# The ones that mean "do not interrupt this person right now".
+_BUSY_PRESENCE = ("in a call", "in a meeting", "presenting", "do not disturb")
+
+
+def item_presence(name):
+    """Presence out of a chat-list entry, lowercased, or '' if not shown."""
+    low = (name or "").lower()
+    m = re.search(r"(?:unread message\s*)?chat\s+.+?\s+("
+                  + "|".join(re.escape(w) for w in _PRESENCE_WORDS)
+                  + r")(?:\s+last message|\s*$)", low)
+    return m.group(1) if m else ""
+
+
+def is_busy_presence(name):
+    """True when the chat-list entry says this person is on a call, in a
+    meeting, presenting, or on do-not-disturb."""
+    return item_presence(name) in _BUSY_PRESENCE
+
+
 def _item_preview(name):
     """The 'Last message ...' part of a chat-list entry, or ''."""
     m = re.search(r"last message\s+(.*)$", (name or ""), re.I)
