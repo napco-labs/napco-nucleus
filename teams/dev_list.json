@@ -1,12 +1,12 @@
 {
-  "_note": "ORDER MATTERS. remind_devs takes pending[0] each run, so this list is the reminder order Titu set on 2026-07-28: Zaman, Ferdows, Rocky, Atik, Isruk, Titu, Amin. search = Teams login/email (Ctrl+N fallback). name = how to address them (name + bhai) and the ONLY name the assistant says out loud. chat = a UNIQUE substring of their display name in the chat list, used to CLICK their existing chat (reliable, preferred). aliases = real Teams display names, so 'Md. Ahsan Habib Rocky' resolves to Rocky and 'Kamrul Hasan' resolves to Titu. added = names to STOP reminding.",
+  "_note": "ORDER MATTERS. remind_devs takes pending[0] each run, so this list is the reminder order: Titu, Zaman, Ferdows, Rocky, Atik, Isruk, Amin. Titu is deliberately FIRST so he sees each day's message before any colleague does and can stop it if something is wrong. search = Teams login/email (Ctrl+N fallback). name = how to address them (name + bhai) and the ONLY name the assistant says out loud. chat = a UNIQUE substring of their display name in the chat list, used to CLICK their existing chat (reliable, preferred). aliases = real Teams display names, so 'Md. Ahsan Habib Rocky' resolves to Rocky and 'Kamrul Hasan' resolves to Titu. added = names to STOP reminding.",
   "devs": [
+    {"search": "titucse@hotmail.com", "name": "Titu", "chat": "Kamrul", "aliases": ["Kamrul Hasan", "Mohammad Kamrul Hasan", "Md Kamrul Hasan"]},
     {"search": "zaman_ael@hotmail.com", "name": "Zaman", "chat": "Assad Zaman", "aliases": ["Assad Zaman", "Assad"]},
     {"search": "mjferdows@hotmail.com", "name": "Ferdows", "chat": "Ferdows", "aliases": ["Mostafa Jannatul Ferdows", "Jannatul Ferdows", "Mostafa Ferdows"]},
     {"search": "rockycs33@hotmail.com", "name": "Rocky", "chat": "Rocky", "aliases": ["Md. Ahsan Habib Rocky", "Ahsan Habib Rocky", "Md Ahsan Habib"]},
     {"search": "kaptan.cse@outlook.com", "name": "Atik", "chat": "Atikur", "aliases": ["Atikur Zaman", "Atikur Rahman", "Kaptan"]},
     {"search": "ihasan.ael@outlook.com", "name": "Isruk", "chat": "Isruk", "aliases": ["Isruk H", "Isruk Hasan"]},
-    {"search": "titucse@hotmail.com", "name": "Titu", "chat": "Kamrul", "aliases": ["Kamrul Hasan", "Mohammad Kamrul Hasan", "Md Kamrul Hasan"]},
     {"search": "sheikhamin.ael@outlook.com", "name": "Amin", "chat": "Sheikh Amin", "aliases": ["Sheikh Amin", "Md Amin"]}
   ],
   "added": []
