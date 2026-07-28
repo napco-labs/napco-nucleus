@@ -18,15 +18,24 @@ each other in the same tree, and a mis-click while a call is live would end the
 call we are recording. A second call ringing out is recoverable; losing the
 meeting we are capturing is not.
 """
+import sys
 import time
 import datetime
 from pathlib import Path
 
 import uiautomation as auto
 
-from teams import dev_names
-
 _REPO = Path(__file__).parent.parent
+
+# The scheduled task launches this BY PATH ("pythonw.exe ...\teams\
+# auto_answer.py"), which puts teams\ on sys.path but not the repo root, so
+# "from teams import ..." raises ModuleNotFoundError and the watcher dies at
+# startup. Put the repo root on the path before importing anything of ours,
+# so the task keeps working without being re-registered.
+if str(_REPO) not in sys.path:
+    sys.path.insert(0, str(_REPO))
+
+from teams import dev_names  # noqa: E402
 LOG = str(_REPO / "logs" / "auto_answer.log")
 
 # Written by record_call while a call is being captured; its presence is the
