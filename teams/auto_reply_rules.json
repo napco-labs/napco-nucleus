@@ -173,11 +173,10 @@
         "স্যালাম"
       ],
       "reply": [
-        "Hello bhai, how can I help?",
-        "Hello, how may I help you?",
-        "Assalamu alaikum bhai, how can I help?",
-        "Hello bhai.",
-        "আসসালামু আলাইকুম ভাই, কিভাবে সাহায্য করতে পারি?"
+        "Hello {first} bhai, how can I help?",
+        "{first} bhai, how may I help you?",
+        "Assalamu alaikum {first} bhai, how can I help?",
+        "আসসালামু আলাইকুম {first} ভাই, আপনাকে কিভাবে সাহায্য করতে পারি?"
       ],
       "always": true
     },
@@ -203,10 +202,10 @@
         "কি অবস্থা"
       ],
       "reply": [
-        "I am well, thank you bhai. How may I help?",
-        "Doing well, thank you. How can I help you?",
-        "All good here, thank you bhai.",
-        "ভালো আছি ভাই, ধন্যবাদ।"
+        "I am well, thank you {first} bhai. How may I help?",
+        "Doing well, thank you {first} bhai. How can I help you?",
+        "All good here {first} bhai, thank you.",
+        "ভালো আছি {first} ভাই, ধন্যবাদ। আপনি কেমন আছেন?"
       ],
       "always": true
     },
@@ -222,10 +221,10 @@
         "ধন্যবাদ"
       ],
       "reply": [
-        "You are welcome bhai.",
-        "Happy to help.",
-        "My pleasure bhai.",
-        "আপনাকে স্বাগতম ভাই।"
+        "You are welcome {first} bhai.",
+        "Happy to help {first} bhai.",
+        "My pleasure {first} bhai.",
+        "আপনাকে স্বাগতম {first} ভাই।"
       ],
       "always": true
     },
@@ -253,10 +252,10 @@
         "ok bhai"
       ],
       "reply": [
-        "Understood bhai.",
-        "Noted, thank you.",
-        "That is quite alright bhai.",
-        "আচ্ছা ভাই।"
+        "Understood {first} bhai.",
+        "Noted {first} bhai, thank you.",
+        "That is quite alright {first} bhai.",
+        "আচ্ছা {first} ভাই, বুঝেছি।"
       ],
       "always": true
     },
@@ -278,10 +277,10 @@
         "আল্লাহ হাফেজ"
       ],
       "reply": [
-        "Goodbye bhai, take care.",
-        "Thank you bhai, speak soon.",
-        "Take care bhai.",
-        "আল্লাহ হাফেজ ভাই।"
+        "Goodbye {first} bhai, take care.",
+        "Thank you {first} bhai, speak soon.",
+        "Take care {first} bhai.",
+        "আল্লাহ হাফেজ {first} ভাই, ভালো থাকবেন।"
       ],
       "always": true
     }

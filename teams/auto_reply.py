@@ -279,6 +279,23 @@ def match_reply(text, rules):
     return None
 
 
+def _addr(text, first):
+    """Put the person's name into a canned reply.
+
+    Titu, 2026-07-28: address people as "<Name> bhai", not a bare "bhai". The
+    canned pools carry a {first} placeholder; when we do not know who we are
+    talking to it collapses cleanly back to the un-named wording rather than
+    leaving a gap or a stray double space.
+    """
+    if text is None:
+        return None
+    if not first:
+        out = text.replace("{first} ", "").replace("{first}", "")
+    else:
+        out = text.replace("{first}", first)
+    return re.sub(r"\s{2,}", " ", out).strip()
+
+
 def _canned_texts(rules):
     """All possible canned reply strings (flattening reply pools) - echo guard."""
     out = set()
@@ -1400,6 +1417,7 @@ def main():
     # when someone actually messages or a call starts.
     last_activity = 0.0
     away_logged_at = 0.0                 # rate-limit the "staying silent" log
+    repeat_noticed = set()               # questions we have already pointed at
     # who we last carried a message TO, and on whose behalf:
     #   knocked/told person -> (their display name, requester name, when)
     # so their "tell him ..." goes back to the right person without naming.
@@ -1508,9 +1526,19 @@ def main():
             time.sleep(wake_pause)
         activate_window(win)                         # mark 'Seen'
         if already:
-            rep = random.choice(ALREADY_ANSWERED).replace("{first}", first).replace("  ", " ").strip()
+            # One answer per question (Titu, 2026-07-28). The first repeat gets
+            # a short pointer to the answer just above, because people re-ask
+            # when they did not SEE it. A second repeat of the same question
+            # gets nothing: saying "it is above" twice is itself answering
+            # multiple times.
+            if key in repeat_noticed:
+                log(f"REPEAT again from '{first}' - already pointed at it, staying quiet")
+                last_reply_at[clow] = time.time()
+                return
+            rep = _addr(random.choice(ALREADY_ANSWERED), first)
             send_reply(win, rep, human=human_typing, think=think, type_speed=type_speed)
             self_sent.append(rep.strip().lower())
+            repeat_noticed.add(key)
             last_reply_at[clow] = time.time()
             log(f"REPEAT notice to '{first}'")
             return
@@ -1767,7 +1795,7 @@ def main():
             self_sent.append(ack.strip().lower())
             log(f"COMMAND '{cmd.get('task')}' by '{first}'")
         else:
-            reply = match_reply(msg, rules)
+            reply = _addr(match_reply(msg, rules), first)
             src = "canned"
             if reply is None and use_claude:
                 reply = claude_answer(msg, claude_timeout, claude_model, sender=first)
@@ -1789,6 +1817,9 @@ def main():
         if len(answered_at) > 400:
             cut = time.time() - repeat_window
             answered_at = {k: v for k, v in answered_at.items() if v > cut}
+            # keep the "already pointed at it" set from growing forever, and
+            # let a question asked again much later be answered properly
+            repeat_noticed.intersection_update(answered_at)
         last_reply_at[clow] = time.time()
         # NOTE: do NOT mark_reached here. Chatting is not the same as adding NN
         # to a meeting. The reminder must keep nudging until the dev actually
