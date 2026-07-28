@@ -92,15 +92,31 @@ def _devs() -> list[dict]:
 
 
 def _message(marker: dict, first: str) -> str:
-    """Short, respectful, factual. No emoji -- this is a work notification."""
+    """Short, respectful, factual. No emoji -- this is a work notification.
+
+    Titu, 2026-07-28: tell them the requirements have been sent by email and
+    ask them to check their inbox. Varied wording so seven people do not all
+    receive a byte-identical sentence within a few minutes of each other,
+    which reads as a mailshot and is also the shape anti-abuse systems look
+    for on a personal account.
+    """
     n = marker.get("requirements", 0)
     day = marker.get("day", "")
     what = "requirement" if n == 1 else "requirements"
-    return (
-        "%s bhai, the %s email for %s has been sent with %d %s. "
-        "Please have a look when you get a moment."
-        % (first, "requirements", day, n, what)
-    )
+    forms = [
+        "{name} bhai, the requirements email for {day} has just gone out with "
+        "{n} {what}. Please check your inbox when you get a moment.",
+        "{name} bhai, I have sent the requirements for {day} by email, {n} "
+        "{what} in total. Please have a look in your inbox.",
+        "{name} bhai, {n} {what} for {day} {verb} been emailed to you just "
+        "now. Please check your inbox, thank you.",
+    ]
+    # Named fields, so reordering a sentence cannot silently swap the day and
+    # the count around. `verb` exists because "1 requirement have been
+    # emailed" is what the plural-agnostic version produced.
+    form = random.choice(forms)
+    return form.format(name=first, day=day, n=n, what=what,
+                       verb=("has" if n == 1 else "have"))
 
 
 def _pending(dirp: Path) -> list[Path]:
