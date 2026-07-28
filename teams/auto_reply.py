@@ -868,8 +868,20 @@ _PRESENCE_WORDS = ("in a call", "in a meeting", "presenting", "do not disturb",
                    "be right back", "out of office", "available", "busy",
                    "away", "offline")
 
-# The ones that mean "do not interrupt this person right now".
-_BUSY_PRESENCE = ("in a call", "in a meeting", "presenting", "do not disturb")
+# The ones that mean "this person is not free right now" -- everything Teams
+# shows with a RED icon.
+#
+# Plain "busy" belongs here. Teams reports a person on a call as "In a call"
+# sometimes and simply "Busy" other times, and the red dot looks identical
+# either way (Titu spotted the red icons, 2026-07-28). Leaving "busy" out meant
+# somebody visibly on a call could still be treated as free and sent the
+# ordinary nudge.
+#
+# The messages that go to a busy colleague are phrased conditionally ("if it is
+# a client call, please add me"), so they read correctly whether the person is
+# genuinely mid-call or has just set themselves Busy to concentrate.
+_BUSY_PRESENCE = ("in a call", "in a meeting", "presenting", "do not disturb",
+                  "busy")
 
 
 def item_presence(name):
