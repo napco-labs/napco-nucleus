@@ -68,16 +68,19 @@ IN_CALL_TEMPLATES = [
     "{name} bhai, I can see you are on a call. If it is a client call, please add me and I will take the notes.",
     "{name} bhai, sorry to interrupt. If this is a client call, please add Napco Nucleus so nothing is missed.",
     "{name} bhai, if you are with a client now, please add me to the call and I will capture the requirements.",
-    "{name} ভাই, আপনি কলে আছেন দেখছি। ক্লায়েন্ট কল হলে অনুগ্রহ করে আমাকে অ্যাড করে নিবেন।",
 ]
 
 MEETING_TEMPLATES = [
     "{name} bhai, if you have a client call today, please add Napco Nucleus so the requirements are captured.",
     "{name} bhai, please add me to any client call today and I will take care of the notes.",
     "Hello {name} bhai, a gentle reminder to add Napco Nucleus to any client call today.",
-    "{name} ভাই, আজ কোনো ক্লায়েন্ট কল থাকলে অনুগ্রহ করে আমাকে অ্যাড করে নিবেন।",
     "{name} bhai, please keep me in today's client call if there is one, so nothing is missed.",
+    "{name} bhai, aj kono client call thakle amake add kore niben, ami notes niye nibo.",
 ]
+# Every template here is deliberately ASCII. send_reply types character by
+# character, SendKeys cannot produce Bangla script, and the sanitiser turns
+# any non-ASCII character into a SPACE, so a Bangla-script template arrives
+# as a sentence full of holes. Banglish in English letters instead.
 # Kept as names so any stale reference still resolves, but they now hold the
 # same respectful wording rather than jokes.
 JOKE_FALLBACK = MEETING_TEMPLATES
@@ -204,8 +207,9 @@ def _claude_meeting(name, already_sent):
         f"- plain everyday words, no corporate phrasing, no assistant phrasing\n"
         f"- NO dashes as punctuation, use a comma or a full stop\n"
         f"- no markdown, no bullet points, no headings, no emoji\n"
-        f"- English, or simple Bangla; if Bangla, use the respectful আপনি "
-        f"form and never তুমি\n"
+        f"- Write in ENGLISH, or Banglish using English letters "
+        f"(\"apnar\", \"ekta\", \"rakhben\"). Do NOT use Bangla script at all. "
+        f"Keep the tone respectful, the apni form rather than tumi.\n"
         f"- do not introduce yourself, they know who you are\n"
         f"- output ONLY the message text, nothing else"
         f"{avoid}")
@@ -245,6 +249,16 @@ def compose_in_call(name):
 def compose(name, already_sent=None):
     already_sent = already_sent or []
     gen = _claude_meeting(name, already_sent)
+    # Reject anything with non-ASCII in it. send_reply types character by
+    # character, SendKeys cannot produce Bangla, and the sanitiser replaces
+    # every non-ASCII character with a SPACE. Amin was sent "Ei call ta te ek
+    # help korte partam jodi rakhen" on 2026-07-28 because the model slipped a
+    # Bangla "টু" into an otherwise Banglish line. The log records the text
+    # BEFORE sanitising, so the damage is invisible there.
+    if gen and not gen.isascii():
+        log("claude message contained Bangla script, which would be blanked "
+            "when typed - using a template instead")
+        gen = None
     if gen and len(gen) <= 320:
         return "meeting", gen
     if gen:
