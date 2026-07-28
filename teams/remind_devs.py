@@ -24,6 +24,7 @@ from pathlib import Path
 
 import uiautomation as auto
 from teams import auto_reply as ar
+from teams import dev_names
 
 _HERE = Path(__file__).parent
 _REPO = _HERE.parent
@@ -157,17 +158,35 @@ def compose(name):
 
 
 def open_chat_with(win, dev):
-    """Open the dev's chat. Prefer clicking their EXISTING chat in the list
-    (reliable); fall back to Ctrl+N search only if not found."""
+    """Open the dev's chat and PROVE we are in it before anyone types.
+
+    The old version clicked the first chat-list entry that matched and
+    returned True regardless, and the Ctrl+N fallback returned True without
+    ever looking at where it landed. Two ways to message the wrong colleague,
+    and no way to tell that it happened.
+
+    Chat-list entries include the last-message preview, so a search for
+    "Rocky" also matched Zaman's chat when Zaman had just written the word
+    (seen live 2026-07-28). find_chat_items matches the contact name only and
+    returns every candidate, so we can try each and check.
+    """
+    want = str(dev.get("name") or "").strip()
     ar.activate_window(win)
     time.sleep(0.5)
-    match = str(dev.get("chat") or dev.get("name") or "").strip()
-    item = ar.find_chat_item(win, match) if match else None
-    if item is not None and ar.open_chat(item):
-        time.sleep(1.3)
-        return True
-    # fallback: Ctrl+N search by the search term (email)
-    search = str(dev.get("search") or dev.get("name") or "")
+
+    match = str(dev.get("chat") or want).strip()
+    if match:
+        for item in ar.find_chat_items(win, match):
+            if not ar.open_chat(item):
+                continue
+            time.sleep(1.5)
+            here = (ar.chat_partner(win) or "").strip()
+            if here and dev_names.resolve(here) == want:
+                return True
+            log("chat click landed on '%s', not %s - trying next" % (here, want))
+
+    # fallback: Ctrl+N search by login, still verified before we accept it
+    search = str(dev.get("search") or want)
     auto.SendKeys("{Ctrl}n", waitTime=0.1)
     time.sleep(1.5)
     auto.SendKeys("{Ctrl}a", waitTime=0.05)
@@ -178,8 +197,12 @@ def open_chat_with(win, dev):
     auto.SendKeys("{Enter}", waitTime=0.1)
     time.sleep(1.1)
     auto.SendKeys("{Enter}", waitTime=0.1)
-    time.sleep(1.1)
-    return True
+    time.sleep(1.4)
+    here = (ar.chat_partner(win) or "").strip()
+    if here and dev_names.resolve(here) == want:
+        return True
+    log("search fallback landed on '%s', not %s - refusing to send" % (here, want))
+    return False
 
 
 def main():
@@ -201,7 +224,11 @@ def main():
             s = str(d.get("search", "")).strip()
             n = str(d.get("name", "")).strip()
             if s:
-                devs.append({"search": s, "name": n or s})
+                # KEEP "chat". Dropping it here is why every send failed on
+                # 2026-07-27: open_chat_with looks for dev["chat"], found
+                # nothing, and fell back to matching on the short name.
+                devs.append({"search": s, "name": n or s,
+                             "chat": str(d.get("chat", "")).strip()})
         elif str(d).strip():
             s = str(d).strip()
             devs.append({"search": s, "name": s})
@@ -252,7 +279,13 @@ def main():
 
     sent = 0
     try:
-        open_chat_with(win, d)
+        if not open_chat_with(win, d):
+            # Could not prove we are in the right chat. Sending anyway would
+            # put a reminder meant for one colleague into somebody else's
+            # conversation; the old code ignored this return value entirely.
+            log("could not reach %s's chat - not sending, will retry next run" % name)
+            print("could not reach %s" % name)
+            return 0
         if ar.send_reply(win, msg, human=False):
             sent = 1
             _bump_state(now, who=name)
