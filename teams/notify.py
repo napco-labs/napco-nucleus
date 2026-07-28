@@ -29,7 +29,9 @@ def send(search, message):
     time.sleep(0.9)
     auto.SendKeys("{Enter}", waitTime=0.1)           # focus message box
     time.sleep(1.0)
-    return ar.send_reply(win, message, human=False)  # paste (emoji/Bangla ok)
+    # Type rather than paste. Pasting is a Loop-component route, and with
+    # ascii_only the text is guaranteed typeable anyway.
+    return ar.send_reply(win, message, human=True)
 
 
 def main():

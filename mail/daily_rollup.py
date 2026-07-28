@@ -115,6 +115,21 @@ def _split_addresses(raw: str) -> list[str]:
     return [a.strip() for a in (raw or "").split(",") if a.strip()]
 
 
+# Standing recording disclosure appended to every rollup. Plain operational
+# language, no jargon — this is read by the AEL team and by the client rep on
+# Cc, not by developers. Kept as a module constant so there is exactly one
+# wording to review and change.
+_DISCLOSURE = (
+    "How this was prepared: NAPCO Nucleus records and transcribes the AEL "
+    "project team's MS Teams calls, and reads the project chats, email, and "
+    "Google Drive files, so that what you ask for is captured accurately and "
+    "nothing is missed. Recordings and transcripts are stored on AEL's "
+    "internal server and are used only to prepare these requirement "
+    "documents. If you would prefer any call not to be recorded, just say so "
+    "and we will switch it off for that call."
+)
+
+
 # Matches the verification-doc requirement line. Primary format (Titu's spec):
 #   "Requirement#1: Title - summary"
 # Also tolerates the older "1. [P1/S2 ~4h] Title - summary" so prior docs still
@@ -278,6 +293,15 @@ def _build_message(day: str, to_addrs: list[str], cc_addrs: list[str],
     if flair:
         lines.append(flair)
         lines.append("")
+
+    # Standing recording disclosure. Goes out on EVERY rollup, including the
+    # "nothing found" and coverage-note branches, so that everyone on this
+    # thread — the AEL team and the client rep on Cc — has a continuing,
+    # dated written record that calls are recorded. Deliberately not
+    # env-gated: an opt-out switch would defeat the purpose of a disclosure.
+    lines.append(_DISCLOSURE)
+    lines.append("")
+
     lines.append("— NAPCO Nucleus")
     msg.set_content("\n".join(lines))
 
@@ -292,6 +316,41 @@ def _build_message(day: str, to_addrs: list[str], cc_addrs: list[str],
             filename=path.name,
         )
     return msg
+
+
+def _drop_sent_marker(day: str, to_addrs: list[str], cc_addrs: list[str],
+                      reqs: list, attachments: list) -> None:
+    """Leave a breadcrumb on central saying the requirements email went out.
+
+    The pipeline runs on the Linux central host, which has no Teams. The
+    assistant on the Windows box watches this directory and announces the send
+    to the team (teams/announce_rollup.py). Best-effort by design: failing to
+    write a notification marker must never turn a successful send into a
+    failure.
+    """
+    try:
+        central = (os.environ.get("NUCLEUS_CENTRAL_PATH")
+                   or "/data/nucleus-central").strip()
+        out = Path(central) / ".rollup_sent"
+        out.mkdir(parents=True, exist_ok=True)
+        stamp = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
+        payload = {
+            "day": day,
+            "sent_at": dt.datetime.now().isoformat(timespec="seconds"),
+            "to": to_addrs,
+            "cc": cc_addrs,
+            "requirements": len(reqs),
+            "attachments": [Path(a).name for a in attachments],
+            "announced": False,
+        }
+        tmp = out / f".{stamp}.json.tmp"
+        dst = out / f"{stamp}.json"
+        tmp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        os.replace(str(tmp), str(dst))
+        print(f"[rollup] notification marker written: {dst.name}")
+    except Exception as e:
+        print(f"[rollup] could not write notification marker: {e}",
+              file=sys.stderr)
 
 
 def _send(msg: EmailMessage, all_recipients: list[str]) -> None:
@@ -432,6 +491,7 @@ def main() -> int:
             print(f"[rollup] sent to {len(to_addrs)} TO + {len(cc_addrs)} CC "
                   f"recipients.")
             _record_emailed(day, [_req_key(r) for r in reqs])
+            _drop_sent_marker(day, to_addrs, cc_addrs, reqs, attachments)
             return 0
         except Exception as e:
             if _attempt == 0:

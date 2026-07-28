@@ -115,7 +115,13 @@ def _write_failed_transcript(calls_dir: Path, session: str) -> None:
 # sync survives 500-800 MB recordings); older calls are raw WAV. Resolve
 # whichever exists, preferring Opus. google_stt feeds the file straight to
 # ffmpeg, which reads either format.
-_TRACK_EXTS = (".opus", ".wav")
+# WAV FIRST. Opus is a ~30:1 lossy encode of the same audio (22MB -> 730KB
+# on a 2-minute call), and feeding that to STT throws away detail before
+# it ever reaches the model, which hurts most on the noisy mic track.
+# Now that the WAVs mirror to central live, the lossless source is there,
+# so use it. Opus stays as the fallback for off-net devs who upload the
+# small files via Drive, and for older sessions.
+_TRACK_EXTS = (".wav", ".opus")
 
 
 def _track_path(calls_dir: Path, session: str, kind: str) -> Path | None:

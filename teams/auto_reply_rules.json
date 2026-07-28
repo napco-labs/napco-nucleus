@@ -2,27 +2,93 @@
   "settings": {
     "poll_seconds": 1.0,
     "use_claude": true,
-    "claude_model": "claude-haiku-4-5-20251001",
+    "claude_model": "claude-sonnet-5",
     "claude_timeout_s": 45,
     "diagnose": false,
     "human_typing": true,
-    "type_speed": 0.012,
-    "think_min": 0.1,
-    "think_max": 0.25,
+    "type_speed": 0.02,
+    "think_min": 0.4,
+    "think_max": 1.0,
     "reply_cooldown_s": 8,
     "reply_gap_s": 5,
-    "repeat_window_s": 1800,
+    "repeat_window_s": 90,
     "keep_alive": true,
     "keep_alive_seconds": 50,
-    "own_names": ["Napco Nucleus"]
+    "own_names": [
+      "Napco Nucleus",
+      "Nucleus"
+    ],
+    "ascii_only": false,
+    "max_reply_chars": 400,
+    "single_sentence": false,
+    "sdk_pool_size": 0,
+    "keep_alive_hours": "11:00-23:00",
+    "active_hours": "11:00-23:00",
+    "presence_active_minutes": 999999
   },
   "commands": [
     {
-      "contains": ["check pipeline health", "pipeline health", "pipeline status", "is the pipeline ok", "is the pipeline running", "check the pipeline", "health check", "pipeline healthy", "check requirement status", "requirement status", "requirements status", "check requirements", "check the requirement", "check email status", "email status", "check email", "check the email", "system status", "check status", "status check", "is everything ok", "is everything working", "everything running"],
-      "report_cmd": "ssh -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new ubuntu@172.16.205.123 \"echo '== containers =='; docker ps --format '{{.Names}}: {{.Status}}'; echo '== latest transcripts =='; ls -t /srv/nucleus-central/napco-nucleus/*/calls/*_transcript.md 2>/dev/null | head -3; echo '== latest emails =='; ls -t /srv/nucleus-central/email/ 2>/dev/null | head -3\""
+      "contains": [
+        "check pipeline health",
+        "pipeline health",
+        "pipeline status",
+        "is the pipeline ok",
+        "is the pipeline running",
+        "check the pipeline",
+        "health check",
+        "pipeline healthy",
+        "check requirement status",
+        "requirement status",
+        "requirements status",
+        "check requirements",
+        "check the requirement",
+        "check email status",
+        "email status",
+        "check email",
+        "check the email",
+        "system status",
+        "check status",
+        "status check",
+        "is everything ok",
+        "is everything working",
+        "everything running",
+        "why did i not receive",
+        "why i did not receive",
+        "did not receive the email",
+        "didn't receive the email",
+        "no email",
+        "did not get the email",
+        "didn't get the email",
+        "email pai nai",
+        "email asheni",
+        "mail pai nai",
+        "you did nothing",
+        "nothing happened",
+        "nothing came",
+        "did you process",
+        "did you get my call",
+        "what happened to my call"
+      ],
+      "report_cmd": "ssh -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new ubuntu@172.16.205.123 \"echo '== containers =='; docker ps --format '{{.Names}}: {{.Status}}'; echo '== latest transcripts =='; ls -t /srv/nucleus-central/*/*/calls/*_transcript.md 2>/dev/null | head -3; echo '== last email decision =='; docker logs --tail 400 nucleus-daily-draft 2>&1 | grep -E '^.rollup.' | tail -4; echo '== last pipeline run =='; docker logs --tail 400 nucleus-daily-draft 2>&1 | grep -E 'draft-loop. (running|collect)' | tail -3\""
     },
     {
-      "contains": ["run the pipeline", "run pipeline", "run the requirement", "send email", "email me the report", "email the report", "email me the requirements", "email the requirements", "send the requirements", "send me the requirements", "send me the report", "email me the notes", "send report", "email report", "generate the report"],
+      "contains": [
+        "run the pipeline",
+        "run pipeline",
+        "run the requirement",
+        "send email",
+        "email me the report",
+        "email the report",
+        "email me the requirements",
+        "email the requirements",
+        "send the requirements",
+        "send me the requirements",
+        "send me the report",
+        "email me the notes",
+        "send report",
+        "email report",
+        "generate the report"
+      ],
       "ack": "Okay {sender} bhai",
       "task": "run-pipeline-email",
       "dedup": true
@@ -30,46 +96,210 @@
   ],
   "rules": [
     {
-      "contains": ["who are you", "who r u", "who is this", "your name", "introduce yourself", "what are you", "who u"],
-      "reply": ["I am Napco Nucleus :)", "Napco Nucleus, your requirements buddy on the team", "I'm Napco Nucleus bhai", "আমি Napco Nucleus ভাই :)", "Napco Nucleus here bhai"]
+      "contains": [
+        "who are you",
+        "who r u",
+        "who is this",
+        "your name",
+        "introduce yourself",
+        "what are you",
+        "who u",
+        "tumi ke",
+        "apni ke",
+        "আপনি কে",
+        "তুমি কে"
+      ],
+      "reply": [
+        "I am Napco Nucleus, Nucleus for short.",
+        "I am Napco Nucleus, you can call me Nucleus.",
+        "Napco Nucleus here, Nucleus is fine too.",
+        "আমি Napco Nucleus, সংক্ষেপে Nucleus বলতে পারেন।"
+      ]
     },
     {
       "contains": [
-        "who created you", "who built you", "who made you", "who developed you",
-        "who designed you", "who coded you", "who programmed you",
-        "who invented you", "who owns you", "who is behind you",
-        "your creator", "your builder", "your maker", "your developer",
-        "your designer", "your owner", "your inventor", "your author",
-        "who is your creator", "who is your builder", "who is your maker",
-        "who is your developer", "who is your designer", "who is your owner",
-        "who's your creator", "who's your developer", "who's your maker",
-        "made you", "built you", "created you"
+        "who created you",
+        "who built you",
+        "who made you",
+        "who developed you",
+        "who designed you",
+        "who coded you",
+        "who programmed you",
+        "who invented you",
+        "who owns you",
+        "who is behind you",
+        "your creator",
+        "your builder",
+        "your maker",
+        "your developer",
+        "your designer",
+        "your owner",
+        "your inventor",
+        "your author",
+        "who is your creator",
+        "who is your builder",
+        "who is your maker",
+        "who is your developer",
+        "who is your designer",
+        "who is your owner",
+        "who's your creator",
+        "who's your developer",
+        "who's your maker",
+        "made you",
+        "built you",
+        "created you"
       ],
-      "reply": ["I was created by Mohammad Kamrul Hasan.", "Mohammad Kamrul Hasan made me :)", "My creator is Mohammad Kamrul Hasan bhai", "আমাকে বানিয়েছেন Mohammad Kamrul Hasan ভাই"]
+      "reply": [
+        "I was created by Mohammad Kamrul Hasan (Titu).",
+        "My creator is Mohammad Kamrul Hasan (Titu).",
+        "I was built by Mohammad Kamrul Hasan (Titu).",
+        "আমাকে তৈরি করেছেন Mohammad Kamrul Hasan (Titu)।"
+      ]
     },
     {
-      "contains": ["hi", "hello", "hey", "helo", "hii", "good morning", "good afternoon", "good evening", "assalamu alaikum", "salam", "yo"],
-      "reply": ["Hey bhai! What's up?", "Hi bhai :)", "Hello! Kemon achen?", "Hey! Ki khobor?", "Hi there!", "আরে ভাই, বলুন :)", "Hey bhai, kichu lagbe?", "Hey, ki obostha bhai?", "Assalamu alaikum bhai"],
+      "contains": [
+        "assalamu alaikum",
+        "assalamualaikum",
+        "asalamualaikum",
+        "salamualaikum",
+        "as salamu alaikum",
+        "salam alaikum",
+        "slm",
+        "salam",
+        "আসসালামু আলাইকুম",
+        "সালাম"
+      ],
+      "reply": [
+        "Walaikum assalam {first} bhai, how can I help?",
+        "Walaikum assalam {first} bhai.",
+        "Walaikum assalam {first} bhai, how may I help you?",
+        "ওয়ালাইকুম আসসালাম {first} ভাই, আপনাকে কিভাবে সাহায্য করতে পারি?"
+      ],
       "always": true
     },
     {
-      "contains": ["how are you", "how r u", "how are u", "how ru", "kemon acho", "kemon achen", "kemon aco", "how you doing", "how is it going", "hows it going", "what's up", "whats up", "sup", "ki khobor", "ki obostha"],
-      "reply": ["I'm good bhai, tumi kemon acho?", "Doing great :) tumi bolo", "Bhalo achi bhai! Ki obostha?", "All good here, apni bolen", "ভালো আছি ভাই, আপনি কেমন আছেন?", "Cholche bhai :) tumi?", "Alhamdulillah bhai, you?"],
+      "contains": [
+        "hi",
+        "hello",
+        "hey",
+        "helo",
+        "hii",
+        "good morning",
+        "good afternoon",
+        "good evening",
+        "yo",
+        "হাই"
+      ],
+      "reply": [
+        "Hello {first} bhai, how can I help?",
+        "{first} bhai, how may I help you?",
+        "Assalamu alaikum {first} bhai, how can I help?",
+        "আসসালামু আলাইকুম {first} ভাই, আপনাকে কিভাবে সাহায্য করতে পারি?"
+      ],
       "always": true
     },
     {
-      "contains": ["thank you", "thanks", "thx", "tnx", "appreciate it", "appreciated", "dhonnobad"],
-      "reply": ["You're welcome!", "Anytime bhai :)", "Kono bepar na!", "Happy to help!", "Welcome bhai!", "আরে, ধন্যবাদের কিছু নেই :)", "Always here for you bhai"],
+      "contains": [
+        "how are you",
+        "how r u",
+        "how are u",
+        "how ru",
+        "kemon acho",
+        "kemon achen",
+        "kemon aco",
+        "how you doing",
+        "how is it going",
+        "hows it going",
+        "what's up",
+        "whats up",
+        "sup",
+        "ki khobor",
+        "ki obostha",
+        "কেমন আছ",
+        "কি খবর",
+        "কি অবস্থা"
+      ],
+      "reply": [
+        "Alhamdulillah, I am well {first} bhai. How may I help?",
+        "Alhamdulillah {first} bhai, all good here. How can I help you?",
+        "Alhamdulillah, doing well {first} bhai. Thank you for asking.",
+        "আলহামদুলিল্লাহ, ভালো আছি {first} ভাই। আপনি কেমন আছেন?"
+      ],
       "always": true
     },
     {
-      "contains": ["welcome", "sorry", "it's okay", "its okay", "okay", "no problem", "no worries", "alright", "all right", "cool", "great", "nice", "well done", "good job", "got it", "sure thing", "my pleasure", "fine", "hmm", "ok bhai"],
-      "reply": ["Sure bhai :)", "Thik ache bhai", "No worries!", "Achha :)", "Okay bhai", "Alright!", "আচ্ছা ভাই :)", "Got it bhai"],
+      "contains": [
+        "thank you",
+        "thanks",
+        "thx",
+        "tnx",
+        "appreciate it",
+        "appreciated",
+        "dhonnobad",
+        "ধন্যবাদ"
+      ],
+      "reply": [
+        "You are welcome {first} bhai.",
+        "Happy to help {first} bhai.",
+        "My pleasure {first} bhai.",
+        "আপনাকে স্বাগতম {first} ভাই।"
+      ],
       "always": true
     },
     {
-      "contains": ["bye", "goodbye", "good night", "goodnight", "ttyl", "talk later", "see you", "cya", "take care", "shubho ratri", "allah hafez", "khoda hafez", "gtg"],
-      "reply": ["Bye bhai, take care :)", "Later bhai!", "See you bhai", "Take care ভাই :)", "Allah hafez bhai", "Abar kotha hobe bhai", "Bye bye :)"],
+      "contains": [
+        "welcome",
+        "sorry",
+        "it's okay",
+        "its okay",
+        "okay",
+        "no problem",
+        "no worries",
+        "alright",
+        "all right",
+        "cool",
+        "great",
+        "nice",
+        "well done",
+        "good job",
+        "got it",
+        "sure thing",
+        "my pleasure",
+        "fine",
+        "hmm",
+        "ok bhai"
+      ],
+      "reply": [
+        "Understood {first} bhai.",
+        "Noted {first} bhai, thank you.",
+        "That is quite alright {first} bhai.",
+        "আচ্ছা {first} ভাই, বুঝেছি।"
+      ],
+      "always": true
+    },
+    {
+      "contains": [
+        "bye",
+        "goodbye",
+        "good night",
+        "goodnight",
+        "ttyl",
+        "talk later",
+        "see you",
+        "cya",
+        "take care",
+        "shubho ratri",
+        "allah hafez",
+        "khoda hafez",
+        "gtg",
+        "আল্লাহ হাফেজ"
+      ],
+      "reply": [
+        "Allah hafez {first} bhai, take care.",
+        "Allah hafez {first} bhai.",
+        "Thank you {first} bhai, Allah hafez.",
+        "আল্লাহ হাফেজ {first} ভাই, ভালো থাকবেন।"
+      ],
       "always": true
     }
   ]
