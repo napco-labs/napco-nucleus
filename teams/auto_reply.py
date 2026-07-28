@@ -35,7 +35,7 @@ from pathlib import Path
 
 import uiautomation as auto
 
-from teams import chat_intake, dev_names
+from teams import chat_intake, civility, dev_names
 
 # ---------------------------------------------------------------------------
 # Force EVERY child process this daemon spawns to be windowless.
@@ -1663,6 +1663,26 @@ def main():
                 send_reply(win, rep, human=human_typing, think=think,
                            type_speed=type_speed)
                 self_sent.append(rep.strip().lower())
+                last_reply_at[clow] = time.time()
+                return
+
+            # Never carry an insult. The mediator is useful because it relays
+            # faithfully, and that same faithfulness would deliver abuse with
+            # the sender's name on it in our voice. Decline to the asker, and
+            # do NOT warn the target: telling somebody "he tried to insult
+            # you" does the harm the refusal just prevented.
+            # check the payload AND the whole request: "tell Titu something
+            # hard" hides the intent in the wording around the message, not
+            # in the message itself
+            bad = (civility.hurtful_reason(relay_what)
+                   or civility.hurtful_reason(msg))
+            if bad:
+                rep = civility.refusal(first, rtarget["name"])
+                send_reply(win, rep, human=human_typing, think=think,
+                           type_speed=type_speed)
+                self_sent.append(rep.strip().lower())
+                log(f"RELAY REFUSED ({bad}): '{first}' -> "
+                    f"'{rtarget['name']}'")
                 last_reply_at[clow] = time.time()
                 return
 
