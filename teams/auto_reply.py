@@ -35,6 +35,8 @@ from pathlib import Path
 
 import uiautomation as auto
 
+from teams import chat_intake, dev_names
+
 # ---------------------------------------------------------------------------
 # Force EVERY child process this daemon spawns to be windowless.
 #
@@ -325,7 +327,14 @@ def load_allowlist():
 
 def is_allowed(who, allow):
     w = (who or "").strip().lower()
-    if not w or not allow:
+    if not w:
+        return False
+    # The roster resolver knows display names and aliases ("Md. Ahsan Habib
+    # Rocky" is Rocky), so ask it first. The substring pass below stays as a
+    # fallback for anyone matched by a raw dev_list value.
+    if dev_names.is_known(who):
+        return True
+    if not allow:
         return False
     return any(a and (a in w or w in a) for a in allow)
 
@@ -1053,6 +1062,41 @@ def _within_window(spec) -> bool:
     return cur >= start or cur < end
 
 
+# ---------------------------------------------------------------------------
+# Knock relay (Titu, 2026-07-28): "please knock Zaman bhai" makes the assistant
+# open Zaman's chat and say "Hello Zaman bhai, Titu bhai asked me to knock you.
+# How can I help you?", then come back and confirm to whoever asked.
+#
+# Only devs on the roster can ask, and only devs on the roster can be knocked.
+# Relaying a stranger's message to the team is how an assistant gets used as a
+# spam relay, and a knock we cannot attribute to a real person is not a knock
+# worth passing on.
+# ---------------------------------------------------------------------------
+_KNOCK_RE = re.compile(
+    r"(?:^|\b)(?:please\s+|plz\s+|pls\s+|can\s+you\s+|could\s+you\s+|"
+    r"would\s+you\s+|kindly\s+)*"
+    r"(?:knock|poke|nudge|ping)\s+(?:to\s+|up\s+)?"
+    r"(?P<who>[A-Za-z][A-Za-z.\s]{0,30}?)"
+    r"(?:\s+bhai)?(?:\s+for\s+me)?(?:\s+(?:please|plz|pls))?\s*[.!?]*$",
+    re.I)
+
+# Words that follow "knock" but are not a person.
+_KNOCK_NOT_A_NAME = {"me", "you", "him", "her", "them", "us", "someone",
+                     "somebody", "anyone", "everyone", "all", "the team",
+                     "team", "it", "that", "this", "off", "out"}
+
+
+def parse_knock(msg):
+    """The raw name in a knock request, or '' when this is not one."""
+    m = _KNOCK_RE.search((msg or "").strip())
+    if not m:
+        return ""
+    who = (m.group("who") or "").strip(" .!?\t")
+    if not who or who.lower() in _KNOCK_NOT_A_NAME:
+        return ""
+    return who
+
+
 # Compose-toolbar buttons that must NEVER be mistaken for Send. Clicking the
 # Loop one is what created the Loop Paragraphs that blocked sending all evening.
 _NOT_SEND = ("loop", "format", "emoji", "giphy", "sticker", "attach", "file",
@@ -1258,6 +1302,11 @@ def main():
     keep_alive = bool(settings.get("keep_alive", True))
     keep_alive_s = int(settings.get("keep_alive_seconds", 50))
     keep_alive_hours = str(settings.get("keep_alive_hours", "")).strip()
+    # The hours NN is awake. Outside them it answers nobody (Titu, 2026-07-28:
+    # "I asked you to go away from 11 PM to 11 AM. You did not and you
+    # responded at 1:00 AM"). keep_alive_hours only ever governed the presence
+    # nudge, so it never stopped a single reply -- this is the actual gate.
+    active_hours = str(settings.get("active_hours", "")).strip()
     keep_alive_jitter = max(0.0, min(0.9, float(
         settings.get("keep_alive_jitter", 0.4))))
     presence_active_s = max(0.0, float(
@@ -1275,7 +1324,8 @@ def main():
         f"model={claude_model or 'default'}; human_typing={human_typing}; "
         f"keep_alive={keep_alive}; cooldown={cooldown}s; "
         f"presence_active={presence_active_s/60:.0f}min; "
-        f"wake_pause={wake_pause}s")
+        f"wake_pause={wake_pause}s; "
+        f"active_hours={active_hours or 'always'}")
     canned_texts = _canned_texts(rules)
     cmd_allow = load_allowlist()   # who may trigger commands (from dev_list)
     self_sent = deque(maxlen=15)   # our own recent replies (echo guard)
@@ -1286,6 +1336,7 @@ def main():
     # 0.0 = "no activity yet", so NN starts Away and only becomes Available
     # when someone actually messages or a call starts.
     last_activity = 0.0
+    away_logged_at = 0.0                 # rate-limit the "staying silent" log
     rules_mtime = _mtime(RULES_FILE)
 
     # pre-warm the SDK client at startup so the FIRST reply is already fast
@@ -1308,13 +1359,28 @@ def main():
 
     def handle_open_chat(win):
         """Read the currently-open chat and reply once (if a new partner msg)."""
-        nonlocal answered_at, last_activity
+        nonlocal answered_at, last_activity, away_logged_at
         msg, sender = get_incoming(win, own_names, self_sent)
         low = msg.strip().lower()
         if not low or low in canned_texts or low in self_sent or low in PLACEHOLDER_TEXTS:
             return
+        # Away hours: stay completely silent, exactly like a colleague who is
+        # asleep. No canned reply, no Claude answer, no command execution -- an
+        # "I am away" auto-response at 1 AM is still answering at 1 AM. Nothing
+        # is lost: the message sits in the chat and the chat push still ships
+        # it to central, so any requirement in it is picked up regardless.
+        if not _within_window(active_hours):
+            if (time.time() - away_logged_at) > 1800:
+                away_logged_at = time.time()
+                log(f"AWAY ({active_hours}) - staying silent, message from "
+                    f"'{dev_names.resolve(sender or chat_partner(win))}' left unanswered")
+            return
         who = sender or chat_partner(win)
-        first = who.split()[0] if who else ""
+        # Never address anyone by the first token of their Teams display name:
+        # "Md. Ahsan Habib Rocky" is Rocky, not "Md", and "Kamrul Hasan" is
+        # Titu, not "Kamrul" (both reported live by Titu, 2026-07-28). The
+        # roster in dev_list.json is the only source for what we call people.
+        first = dev_names.resolve(who) if who else ""
         clow = who.strip().lower()
         norm = re.sub(r"\s+\S.*?today at .+$", "", low, flags=re.I).strip() or low
         key = f"{clow}|{norm}"                       # repeat key is PER CONTACT
@@ -1402,6 +1468,110 @@ def main():
             last_reply_at[clow] = time.time()
             return
 
+        # A developer handing over a pile of chats. File it to central under
+        # THEIR name so the requirements it yields are attributable to them,
+        # then say so plainly -- a silent swallow leaves them wondering whether
+        # it landed (Titu, 2026-07-28).
+        if dev_names.is_known(who) and chat_intake.looks_like_chat_dump(msg):
+            ok, detail = chat_intake.file_handover(first, msg)
+            if ok:
+                rep = (f"Got them {first} bhai, I have filed your chats to the "
+                       f"central store. They will be counted when I identify "
+                       f"requirements.")
+                log(f"CHAT HANDOVER from '{first}' -> {detail}")
+            else:
+                rep = (f"{first} bhai, I have kept your chats but could not "
+                       f"reach the central store just now. I will not lose "
+                       f"them, and I am flagging it.")
+                log(f"CHAT HANDOVER from '{first}' FAILED: {detail}")
+            send_reply(win, rep, human=human_typing, think=think,
+                       type_speed=type_speed)
+            self_sent.append(rep.strip().lower())
+            last_reply_at[clow] = time.time()
+            return
+
+        # "Please knock Zaman bhai" -> go and knock him, then report back here.
+        knock_raw = parse_knock(msg)
+        if knock_raw:
+            target = dev_names.find(knock_raw)
+            if not is_allowed(who, cmd_allow):
+                rep = (f"Sorry {first} bhai, I can only pass a knock along for "
+                       f"someone on the dev team.")
+                send_reply(win, rep, human=human_typing, think=think,
+                           type_speed=type_speed)
+                self_sent.append(rep.strip().lower())
+                log(f"KNOCK refused (not allowlisted): '{who}'")
+                last_reply_at[clow] = time.time()
+                return
+            if target is None:
+                names = ", ".join(d["name"] for d in dev_names.roster())
+                rep = (f"Sorry {first} bhai, I do not have {knock_raw} on my "
+                       f"list. I can knock {names}.")
+                send_reply(win, rep, human=human_typing, think=think,
+                           type_speed=type_speed)
+                self_sent.append(rep.strip().lower())
+                log(f"KNOCK unknown target '{knock_raw}' asked by '{first}'")
+                last_reply_at[clow] = time.time()
+                return
+            if target["name"] == first:
+                rep = f"That is you {first} bhai, I am right here."
+                send_reply(win, rep, human=human_typing, think=think,
+                           type_speed=type_speed)
+                self_sent.append(rep.strip().lower())
+                last_reply_at[clow] = time.time()
+                return
+
+            body = (f"Hello {target['name']} bhai, {first} bhai asked me to "
+                    f"knock you. How can I help you?")
+            log(f"KNOCK '{target['name']}' requested by '{first}'")
+            last_activity = time.time()
+            nudge_input()
+            ok = False
+            try:
+                item = find_chat_item(win, target.get("chat") or target["name"])
+                if item is not None and open_chat(item):
+                    time.sleep(1.0)
+                    ok = send_reply(win, body, human=human_typing, think=think,
+                                    type_speed=type_speed, single=False)
+                    if ok:
+                        self_sent.append(body.strip().lower())
+                        log(f"KNOCK delivered to '{target['name']}' in their chat")
+            except Exception as e:
+                log(f"knock in-place send failed: {str(e)[:100]}")
+            if not ok:
+                try:
+                    from teams import notify   # lazy: circular import
+                    ok = notify.send(target["search"], body)
+                    log(f"KNOCK fell back to a new chat for "
+                        f"'{target['name']}': {ok}")
+                except Exception as e:
+                    log(f"knock fallback failed: {str(e)[:100]}")
+
+            # Come back to whoever asked and confirm. Only speak here once we
+            # can SEE we are back in their chat -- posting "done" into the
+            # chat we just knocked would tell the wrong person.
+            back_ok = False
+            try:
+                back = find_chat_item(win, who)
+                if back is not None and open_chat(back):
+                    time.sleep(0.8)
+                    here = (chat_partner(win) or "").strip().lower()
+                    back_ok = bool(here) and dev_names.resolve(here) == first
+            except Exception as e:
+                log(f"knock return-to-requester failed: {str(e)[:100]}")
+            if back_ok:
+                rep = (f"Done {first} bhai, I have knocked {target['name']} bhai."
+                       if ok else
+                       f"Sorry {first} bhai, I could not reach "
+                       f"{target['name']} bhai just now.")
+                send_reply(win, rep, human=human_typing, think=think,
+                           type_speed=type_speed)
+                self_sent.append(rep.strip().lower())
+            else:
+                log(f"KNOCK done but could not get back to '{first}' to confirm")
+            last_reply_at[clow] = time.time()
+            return
+
         cmd = match_command(msg, commands)
         if cmd and not is_allowed(who, cmd_allow):
             log(f"command from non-allowed '{who}' ignored -> normal reply")
@@ -1480,6 +1650,7 @@ def main():
                 keep_alive_s = int(settings.get("keep_alive_seconds", 50))
                 keep_alive_hours = str(
                     settings.get("keep_alive_hours", "")).strip()
+                active_hours = str(settings.get("active_hours", "")).strip()
                 keep_alive_jitter = max(0.0, min(0.9, float(
                     settings.get("keep_alive_jitter", 0.4))))
                 presence_active_s = max(0.0, float(

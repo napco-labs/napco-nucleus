@@ -111,7 +111,7 @@ def main() -> int:
         log("no devs in dev_list - nothing to announce to")
         return 1
 
-    from teams import notify
+    from teams import dev_names, notify
 
     for mpath in pending:
         try:
@@ -134,7 +134,7 @@ def main() -> int:
 
         sent, failed = [], []
         for d in devs:
-            first = d["name"].split()[0] if d["name"] else "bhai"
+            first = dev_names.resolve(d["name"], default="bhai") or "bhai"
             text = _message(marker, first)
             if dry:
                 print("  -> %-22s %s" % (d["search"], text))
