@@ -809,8 +809,24 @@ def main() -> int:
     if args.allow_any_call:
         print("[voice] Teams-only gate DISABLED (--allow-any-call).")
     else:
-        print("[voice] Teams-only gate ON: recording starts when a Teams "
+        print("[voice] Teams gate ON: recording starts when a Teams "
               "call is CONNECTED (Active audio), not on idle/ringing.")
+    # Say out loud whether Meet is armed. Without this the startup banner
+    # reads identically whether or not NUCLEUS_ENABLE_MEET is set, and the
+    # log is the only way to tell what a running daemon is watching.
+    try:
+        from teams import meet as _meet
+        if _meet.meet_enabled():
+            allow = os.environ.get("NUCLEUS_MEET_TITLE_ALLOW", "").strip()
+            print("[voice] Google Meet gate ON: browser mic-hold + a Meet "
+                  "window. Teams is checked first and wins.")
+            print("[voice] Meet title allowlist: "
+                  + (allow if allow else "(none - every Meet call)"))
+        else:
+            print("[voice] Google Meet gate OFF (set NUCLEUS_ENABLE_MEET=1 "
+                  "to arm it).")
+    except Exception as e:
+        print(f"[voice] Google Meet gate unavailable: {e}")
     print(f"[voice] trigger mode: {args.trigger_mode}")
     if need_phrase_listener:
         print('[voice] listening for start/stop phrases. Ctrl+C to quit.')
