@@ -29,6 +29,16 @@ Teams-only gate
     if any recording is in progress, the stop phrase always halts it.
     Pass --allow-any-call to disable the gate (phrase mode only).
 
+Google Meet (opt-in, OFF by default)
+    With NUCLEUS_ENABLE_MEET=1 the daemon ALSO triggers on Google Meet
+    calls — see teams/meet.py for the detection (browser mic hold +
+    a Meet window). Teams is evaluated first and wins, so the Teams
+    behaviour above is unchanged whether or not Meet is enabled. There
+    is one soundcard and one recording per machine: if a Teams and a
+    Meet call genuinely overlap, the single recording holds both and the
+    sidecar's `overlap` field records that instead of attributing the
+    whole mix to one client. Greenlit by Titu 2026-07-29.
+
 Hard cap (--max-call-seconds, default 7200)
     Any single recording is auto-stopped after this many seconds even
     if the call continues. Guards against a stuck audio-session state.
@@ -213,6 +223,63 @@ def _teams_in_call() -> tuple[bool, str]:
     return (state >= 0, reason)
 
 
+def _call_audio_state() -> tuple[int, str, str]:
+    """Combined call state across sources: (state, reason, source).
+
+    States are the Teams codes (1 Active / 0 Inactive / -1 None) so every
+    caller keeps working unchanged; `source` is "teams" or "meet".
+
+    TEAMS WINS. Teams is evaluated first and, when it is Active, Meet is
+    not consulted at all. There is one recording per machine and one
+    soundcard behind it, so a Teams call is never pre-empted by a Meet
+    window that happens to be open. (Loopback capture is device-wide: if
+    both calls really are live, the single recording contains both, and
+    the sidecar's `overlap` field says so rather than silently
+    misattributing it.)
+
+    Meet is consulted only when NUCLEUS_ENABLE_MEET=1. Off = this
+    function is exactly _teams_audio_state with a "teams" tag, which is
+    what every machine that hasn't opted in will see.
+    """
+    st, reason = _teams_audio_state()
+    if st == 1:
+        return (st, reason, "teams")
+    try:
+        from teams import meet as _meet
+        if not _meet.meet_enabled():
+            return (st, reason, "teams")
+        m_st, m_reason, _title = _meet.meet_call_state()
+    except Exception as e:
+        # Fail-closed on the Meet side: fall back to whatever Teams said.
+        return (st, f"{reason} (meet check failed: {e})", "teams")
+    if m_st > st:
+        return (m_st, m_reason, "meet")
+    return (st, reason, "teams")
+
+
+def _overlapping_sources() -> list[str]:
+    """Sources that look live at the same instant, for the sidecar.
+
+    One soundcard means one mixed recording. When a Teams call and a Meet
+    call genuinely overlap we can't separate them, so we record the fact
+    and let the requirement pass know the transcript may hold two
+    conversations. Empty list when only one source is live.
+    """
+    out = []
+    try:
+        if _teams_audio_state()[0] >= 0:
+            out.append("ms-teams")
+    except Exception:
+        pass
+    try:
+        from teams import meet as _meet
+        if _meet.meet_enabled() and _meet.meet_call_state()[0] >= 0:
+            out.append("google-meet")
+    except Exception:
+        pass
+    return out if len(out) > 1 else []
+
+
 def _normalize(s: str) -> str:
     """Lowercase, drop punctuation, collapse whitespace.
 
@@ -279,13 +346,39 @@ def _excluded_active_call() -> tuple[bool, str]:
     return (False, f"active call cid={cid} is not excluded")
 
 
-def _start_recording(state: dict) -> None:
+def _start_recording(state: dict, source: str | None = None) -> None:
+    """Spawn the recorder. `source` is "teams", "meet", or None to detect.
+
+    None is what the phrase/wake-word path passes: the speaker said
+    "start" and we work out which kind of call is actually up rather than
+    assuming Teams (which would gate a legitimate Meet call out).
+    """
     with state["lock"]:
         proc = state.get("proc")
         if proc and proc.poll() is None:
             print("[voice] already recording, ignoring start.")
             return
-        if not state.get("allow_any_call", False):
+        meeting_title = ""
+        if source is None:
+            _st, _reason, source = _call_audio_state()
+        if source == "meet":
+            # Meet gate: mic held by a browser + a Meet window. Deliberately
+            # re-checked here (not trusted from the watcher's last poll) so
+            # the phrase path gets the same gate as the auto path. The title
+            # is read either way — with the gate disabled we still want the
+            # meeting name for attribution.
+            from teams import meet as _meet
+            m_st, m_reason, meeting_title = _meet.meet_call_state()
+            if not state.get("allow_any_call", False):
+                if m_st != 1:
+                    print(f"[voice] start gated: no Meet call up ({m_reason}).")
+                    return
+                if not _meet.title_allowed(meeting_title):
+                    print(f"[voice] start gated: Meet title not on "
+                          f"NUCLEUS_MEET_TITLE_ALLOW ({meeting_title!r}).")
+                    return
+                print(f"[voice] Meet gate OK: {m_reason}")
+        elif not state.get("allow_any_call", False):
             # Gate: record only a CONNECTED call — Teams audio ACTIVE (state 1).
             # A standing/idle 'Inactive' session (Teams merely open, or a silent
             # ring) is REJECTED. Triggering on Inactive was tried for "record
@@ -307,12 +400,22 @@ def _start_recording(state: dict) -> None:
             STOP_FILE.unlink()
         except FileNotFoundError:
             pass
-        print("[voice] starting recorder...")
-        proc = subprocess.Popen(
-            [sys.executable, "-m", "teams.record_call"],
-            cwd=str(_HERE),
-        )
+        print(f"[voice] starting recorder (source={source})...")
+        argv = [sys.executable, "-m", "teams.record_call"]
+        if source == "meet":
+            argv += ["--source", "meet"]
+            if meeting_title:
+                argv += ["--meeting-title", meeting_title]
+        overlap = _overlapping_sources()
+        if overlap:
+            # One soundcard, one recording: say so in the sidecar instead of
+            # letting the whole mix be attributed to a single client.
+            argv += ["--overlap", ",".join(overlap)]
+            print(f"[voice] NOTE: {' + '.join(overlap)} both look live; "
+                  f"one mixed recording, flagged as overlap.")
+        proc = subprocess.Popen(argv, cwd=str(_HERE))
         state["proc"] = proc
+        state["source"] = source
         state["call_started_at"] = time.monotonic()
         print(f"[voice] recorder PID {proc.pid}")
 
@@ -380,25 +483,27 @@ def _audio_session_watcher(state: dict, stop_evt: threading.Event,
     # zero recordings, empty requirement rollups). See
     # teams._include.call_matches_allowlist.
 
-    def _audio_state() -> tuple[int, str]:
+    def _audio_state() -> tuple[int, str, str]:
+        # (-1 None, 0 Inactive, 1 Active), reason, source ("teams"/"meet").
+        # Teams first; Meet only when NUCLEUS_ENABLE_MEET=1.
         try:
-            return _teams_audio_state()  # (-1 None, 0 Inactive, 1 Active)
+            return _call_audio_state()
         except Exception as e:
-            return (-1, f"watcher exception: {e}")
+            return (-1, f"watcher exception: {e}", "teams")
 
     # Auto-resume on restart ONLY for a genuine in-progress call (Active).
     # A standing Inactive session (Teams just open) must NOT auto-resume —
     # that caused false 0KB recordings + missed real calls (2026-06-08).
-    st, reason = _audio_state()
+    st, reason, source = _audio_state()
     if st == 1:
-        print(f"[voice] watcher: Teams ACTIVE on startup — auto-resuming "
+        print(f"[voice] watcher: {source} ACTIVE on startup — auto-resuming "
               f"recording ({reason})")
-        _start_recording(state)
+        _start_recording(state, source)
         recording = True
         on_streak = start_confirm
 
     while not stop_evt.is_set():
-        st, reason = _audio_state()
+        st, reason, source = _audio_state()
         is_active = (st == 1)
 
         if not recording:
@@ -408,9 +513,9 @@ def _audio_session_watcher(state: dict, stop_evt: threading.Event,
             if is_active:
                 on_streak += 1
                 if on_streak >= start_confirm:
-                    print(f"[voice] watcher: call received — recording "
+                    print(f"[voice] watcher: {source} call received — recording "
                           f"(Active confirmed {on_streak} polls) — {reason}")
-                    _start_recording(state)
+                    _start_recording(state, source)
                     recording = True
                     off_streak = 0
             else:

@@ -570,8 +570,23 @@ def main() -> int:
                 p.get("name", "?")
                 for p in (md.get("client_info") or {}).get("participants", [])
             ),
-            "",
         ]
+        # Meet calls carry no participant list (no local store to read), so
+        # say which app the call was on and name the meeting instead.
+        if md.get("source") and md.get("source") != "ms-teams":
+            body_lines.append(f"Call source: {md.get('source')}")
+        if md.get("meeting_title"):
+            body_lines.append(f"Meeting: {md.get('meeting_title')}")
+        if md.get("overlap"):
+            # One soundcard: a Teams and a Meet call were live together, so
+            # this audio is a mix. Warn the requirement pass rather than let
+            # it attribute both conversations to one client.
+            body_lines.append(
+                "WARNING: " + " + ".join(md["overlap"]) + " were both live "
+                "during this recording, so it may contain two separate "
+                "conversations. Attribute requirements per speaker/topic, "
+                "not wholesale to the client named above.")
+        body_lines.append("")
         body_lines += _transcribe_call(
             c["mic_path"], c["speaker_path"], stamp)
 

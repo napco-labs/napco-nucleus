@@ -18,6 +18,16 @@ After stop, this script:
      <central>/<dev>/<YYYY-MM-DD>/calls/  for the agent host to identify.
 
 Run: python -m teams.record_call
+
+Capture is app-agnostic: it taps the default output device and the default
+mic, not any particular program, so a Google Meet call in a browser is
+captured by the same code as a Teams call. What differs is attribution —
+step 1 above has no Meet equivalent, since Meet keeps no local participant
+store. Pass --source meet (the daemon does this automatically when
+NUCLEUS_ENABLE_MEET=1) to skip that lookup and attribute from the meeting
+name instead:
+
+    python -m teams.record_call --source meet --client "NAPCO Security"
 """
 from __future__ import annotations
 
@@ -1025,39 +1035,21 @@ def _maybe_drive_upload(mic_path: Path, spk_path: Path,
     return False
 
 
-def _write_metadata_and_upload(
-    *,
-    out_dir: Path,
-    stamp: str,
-    started_dt: datetime.datetime,
-    ended_dt: datetime.datetime,
-    spk_path: Path,
-    mic_path: Path,
-) -> None:
-    """Resolve client info, write the JSON sidecar, optionally push to central.
+def _resolve_teams_client(started_at_ms: int) -> dict:
+    """Resolve the other party on a TEAMS call from Teams' IndexedDB.
 
-    Best-effort everywhere — never raises. If client resolution fails,
-    metadata.client_name = "(unknown)". If upload fails, log + continue.
+    Retries while the lookup is incomplete. Teams writes the callEnded
+    partlist to IndexedDB slightly AFTER the call ends, so the first
+    resolve right at hangup often finds the call event but no participants
+    (client_name "(unknown)" — the intermittent "Salman shows as unknown").
+    Re-resolving a few times lets that write land, which recovers correct
+    attribution AND lets the allowlist make a real keep/discard decision
+    instead of always falling through to fail-open. This runs in the
+    DETACHED finalizer, so the wait never blocks the next call. Tunables
+    (0 retries = old behaviour):
+        NUCLEUS_RESOLVE_RETRIES=3         attempts after the first
+        NUCLEUS_RESOLVE_RETRY_WAIT_S=5    seconds between attempts
     """
-    started_at_ms = int(started_dt.timestamp() * 1000)
-    ended_at_ms = int(ended_dt.timestamp() * 1000)
-    duration_s = round((ended_at_ms - started_at_ms) / 1000.0, 1)
-
-    # Resolve client via Teams IndexedDB FIRST — before compression — so the
-    # allowlist filter below can (a) act on the raw WAV names the live mirror
-    # left on central and (b) skip the CPU cost of compressing a call we're
-    # about to discard. Best-effort.
-    #
-    # Retry while the lookup is incomplete. Teams writes the callEnded partlist
-    # to IndexedDB slightly AFTER the call ends, so the first resolve right at
-    # hangup often finds the call event but no participants (client_name
-    # "(unknown)" — the intermittent "Salman shows as unknown"). Re-resolving a
-    # few times lets that write land, which recovers correct attribution AND
-    # lets the allowlist make a real keep/discard decision instead of always
-    # falling through to fail-open. This runs in the DETACHED finalizer, so the
-    # wait never blocks the next call. Tunables (0 retries = old behaviour):
-    #   NUCLEUS_RESOLVE_RETRIES=3         attempts after the first
-    #   NUCLEUS_RESOLVE_RETRY_WAIT_S=5    seconds between attempts
     try:
         _retries = max(0, int(os.environ.get("NUCLEUS_RESOLVE_RETRIES", "3")))
     except (ValueError, TypeError):
@@ -1091,13 +1083,86 @@ def _write_metadata_and_upload(
         if _nxt.get("participants") or (
                 _nxt.get("matched") and not client_info.get("matched")):
             client_info = _nxt
+    return client_info
 
-    if client_info.get("matched"):
-        print(f"  client: {client_info.get('client_name')} "
-              f"(call_id={client_info.get('call_id')[:8]}..., "
-              f"delta={client_info.get('delta_seconds'):.1f}s)")
+
+def _meet_client_info(meeting_title: str, client_override: str) -> dict:
+    """client_info for a Google Meet call.
+
+    There is nothing to resolve. The Teams path walks Teams' own IndexedDB
+    for the participant list; Meet keeps no such local store, so running
+    that resolver on a Meet call would just burn its retry budget (3 x 5s)
+    and land on "(unknown)". Attribution instead comes from what we knew at
+    capture time: an explicit --client, else the meeting name off the
+    browser window title, else "(unknown)" — which the pipeline already
+    handles.
+
+    Shape matches the Teams resolver's contract (participants / clients /
+    conversation_id / call_id present but empty) so collect_central and the
+    allowlist helpers can read it without special-casing.
+    """
+    name = (client_override or "").strip()
+    why = "client from --client"
+    if not name:
+        from teams.meet import meeting_name_from_title
+        name = meeting_name_from_title(meeting_title)
+        why = ("client from Meet window title" if name
+               else "Meet call with no usable meeting name")
+    return {
+        "matched": bool(name),
+        "source": "google-meet",
+        "meeting_title": meeting_title,
+        "client_name": name or "(unknown)",
+        "participants": [],
+        "clients": [],
+        "conversation_id": "",
+        "call_id": "",
+        "call_type": "google-meet",
+        "reason": why,
+    }
+
+
+def _write_metadata_and_upload(
+    *,
+    out_dir: Path,
+    stamp: str,
+    started_dt: datetime.datetime,
+    ended_dt: datetime.datetime,
+    spk_path: Path,
+    mic_path: Path,
+    source: str = "teams",
+    meeting_title: str = "",
+    client_override: str = "",
+    overlap: str = "",
+) -> None:
+    """Resolve client info, write the JSON sidecar, optionally push to central.
+
+    Best-effort everywhere — never raises. If client resolution fails,
+    metadata.client_name = "(unknown)". If upload fails, log + continue.
+    """
+    started_at_ms = int(started_dt.timestamp() * 1000)
+    ended_at_ms = int(ended_dt.timestamp() * 1000)
+    duration_s = round((ended_at_ms - started_at_ms) / 1000.0, 1)
+
+    # Resolve the client FIRST — before compression — so the allowlist filter
+    # below can (a) act on the raw WAV names the live mirror left on central
+    # and (b) skip the CPU cost of compressing a call we're about to discard.
+    # Best-effort. Which resolver depends on where the call came from: Teams
+    # has a local participant store to walk, Meet has none.
+    if source == "meet":
+        client_info = _meet_client_info(meeting_title, client_override)
+        print(f"  meet: client={client_info.get('client_name')} "
+              f"[{client_info.get('reason')}]"
+              + (f", title={meeting_title!r}" if meeting_title else ""))
     else:
-        print(f"  client: (unknown) [{client_info.get('reason')}]")
+        client_info = _resolve_teams_client(started_at_ms)
+
+        if client_info.get("matched"):
+            print(f"  client: {client_info.get('client_name')} "
+                  f"(call_id={client_info.get('call_id')[:8]}..., "
+                  f"delta={client_info.get('delta_seconds'):.1f}s)")
+        else:
+            print(f"  client: (unknown) [{client_info.get('reason')}]")
 
     # Allowlist filter (record-then-filter). The daemon records EVERY call;
     # here at end-of-call we keep only calls that resolve to an allowlisted
@@ -1115,12 +1180,19 @@ def _write_metadata_and_upload(
     # the local dev is on every one of their own calls, so an allowlist that
     # names them would match every call through self and filter nothing. The
     # question is "who ELSE was on this call", and `clients` answers it.
+    #
+    # MEET IS EXEMPT, and not by choice: the allowlist matches Teams MRIs and
+    # display names from Teams' own participant list, and a Meet call has no
+    # participant list to match against. Every Meet call is therefore kept.
+    # NUCLEUS_MEET_TITLE_ALLOW (checked at START, in voice_daemon) is Meet's
+    # only narrowing mechanism. Flagged to Titu 2026-07-29 as a real gap in
+    # the 7-person recording boundary, not an oversight.
     from teams._include import allowlist_active, call_matches_allowlist
     conv_id = client_info.get("conversation_id") or ""
     participants = client_info.get("participants") or []
     others = client_info.get("clients") or []
     identified = bool(client_info.get("matched")) and bool(participants)
-    if (allowlist_active() and identified
+    if (source != "meet" and allowlist_active() and identified
             and not call_matches_allowlist(conv_id, others)):
         client = client_info.get("client_name") or "(unknown)"
         cid = conv_id
@@ -1158,7 +1230,18 @@ def _write_metadata_and_upload(
         },
         "client_info": client_info,
         "client_name": client_info.get("client_name", "(unknown)"),
+        # Which app the call was on. Central reads client_name and is
+        # source-agnostic; this is for attribution and for the transcript
+        # header, so a reader can tell a Meet call from a Teams one.
+        "source": "google-meet" if source == "meet" else "ms-teams",
     }
+    if meeting_title:
+        metadata["meeting_title"] = meeting_title
+    if overlap:
+        # One soundcard, one recording. Both call apps were live at capture
+        # time, so this transcript may hold two conversations and should not
+        # be attributed wholesale to client_name.
+        metadata["overlap"] = [s for s in overlap.split(",") if s]
 
     meta_path = out_dir / f"{stamp}.json"
     try:
@@ -1360,8 +1443,16 @@ def _mirror_raw_to_central(spk_path: Path, mic_path: Path,
 
 
 def _write_marker(stamp: str, out_dir: Path, started_dt: datetime.datetime,
-                  spk_path: Path, mic_path: Path) -> None:
-    """Record that a capture is in progress so a crash can be recovered."""
+                  spk_path: Path, mic_path: Path,
+                  capture: dict | None = None) -> None:
+    """Record that a capture is in progress so a crash can be recovered.
+
+    `capture` carries what we knew at capture time (source, meeting title,
+    client override, overlap). It MUST live in the marker: the slow
+    post-processing runs in a DETACHED child that only gets this file, so
+    anything not written here is lost to the finalizer — a Meet call would
+    come out the far end labelled as Teams.
+    """
     try:
         MARKER_FILE.parent.mkdir(parents=True, exist_ok=True)
         MARKER_FILE.write_text(json.dumps({
@@ -1372,6 +1463,7 @@ def _write_marker(stamp: str, out_dir: Path, started_dt: datetime.datetime,
             "mic_path": str(mic_path),
             "started_at": started_dt.isoformat(timespec="seconds"),
             "started_at_ms": int(started_dt.timestamp() * 1000),
+            **(capture or {}),
         }, indent=2), encoding="utf-8")
     except Exception as e:
         print(f"  [marker] write failed (crash recovery disabled "
@@ -1425,7 +1517,11 @@ def _repair_wav_header(path: Path) -> bool:
 def _postprocess_and_upload(*, out_dir: Path, stamp: str,
                             started_dt: datetime.datetime,
                             ended_dt: datetime.datetime,
-                            spk_path: Path, mic_path: Path) -> int:
+                            spk_path: Path, mic_path: Path,
+                            source: str = "teams",
+                            meeting_title: str = "",
+                            client_override: str = "",
+                            overlap: str = "") -> int:
     """Mic denoise/normalize, min-duration discard, then metadata + upload.
 
     Shared by the normal end-of-call path and the crash-recovery finalize
@@ -1475,6 +1571,8 @@ def _postprocess_and_upload(*, out_dir: Path, stamp: str,
         out_dir=out_dir, stamp=stamp,
         started_dt=started_dt, ended_dt=ended_dt,
         spk_path=spk_path, mic_path=mic_path,
+        source=source, meeting_title=meeting_title,
+        client_override=client_override, overlap=overlap,
     )
     return 0
 
@@ -1546,14 +1644,49 @@ def finalize_orphan(marker_path: Path = MARKER_FILE) -> int:
     except Exception:
         ended_dt = datetime.datetime.now()
 
+    # Capture-time context, written by _write_marker. A finalizer that
+    # ignored these would relabel a Meet call as Teams and then waste the
+    # Teams resolver's retry budget looking for it in IndexedDB.
     _postprocess_and_upload(
         out_dir=out_dir, stamp=stamp,
         started_dt=started_dt, ended_dt=ended_dt,
         spk_path=spk_path, mic_path=mic_path,
+        source=(m.get("source") or "teams"),
+        meeting_title=(m.get("meeting_title") or ""),
+        client_override=(m.get("client_override") or ""),
+        overlap=(m.get("overlap") or ""),
     )
     _clear()
     print(f"[finalize] recording {stamp} finalized.")
     return 0
+
+
+def _parse_capture_args(argv: list[str]) -> dict:
+    """Capture-time context from the command line.
+
+    Hand-rolled to match the rest of this module's sys.argv handling
+    (--finalize / --finalize-orphan above) rather than pulling argparse
+    into a hot startup path.
+
+      --source teams|meet      which app the call is on (default teams)
+      --meeting-title "..."    Meet window title, for attribution
+      --client "..."           explicit client name, wins over the title
+      --overlap a,b            both call apps were live at capture time
+    """
+    out = {"source": "teams", "meeting_title": "",
+           "client_override": "", "overlap": ""}
+    flags = {"--source": "source", "--meeting-title": "meeting_title",
+             "--client": "client_override", "--overlap": "overlap"}
+    for i, a in enumerate(argv):
+        key = flags.get(a)
+        if key and i + 1 < len(argv):
+            out[key] = argv[i + 1].strip()
+    out["source"] = (out["source"] or "teams").lower()
+    if out["source"] not in ("teams", "meet"):
+        print(f"[record] unknown --source {out['source']!r}, "
+              f"treating as teams.", file=sys.stderr)
+        out["source"] = "teams"
+    return out
 
 
 def main() -> int:
@@ -1567,6 +1700,10 @@ def main() -> int:
         i = sys.argv.index("--finalize")
         marker = sys.argv[i + 1] if i + 1 < len(sys.argv) else ""
         return finalize_orphan(Path(marker)) if marker else finalize_orphan()
+    cap = _parse_capture_args(sys.argv[1:])
+    if cap["source"] == "meet":
+        print(f"[record] source=google-meet "
+              f"title={cap['meeting_title'] or '(none)'}")
     out_dir = Path(__file__).parent.parent / "data" / "teams" / "calls"
     out_dir.mkdir(parents=True, exist_ok=True)
     started_dt = datetime.datetime.now()
@@ -1586,7 +1723,7 @@ def main() -> int:
 
     # Drop the in-progress marker BEFORE the first sample is written so a
     # crash at any point after this is recoverable on the next daemon boot.
-    _write_marker(stamp, out_dir, started_dt, spk_path, mic_path)
+    _write_marker(stamp, out_dir, started_dt, spk_path, mic_path, capture=cap)
 
     stop = threading.Event()
     threads = [
@@ -1694,6 +1831,9 @@ def main() -> int:
                 out_dir=out_dir, stamp=stamp,
                 started_dt=started_dt, ended_dt=ended_dt,
                 spk_path=spk_path, mic_path=mic_path,
+                source=cap["source"], meeting_title=cap["meeting_title"],
+                client_override=cap["client_override"],
+                overlap=cap["overlap"],
             )
         finally:
             _clear_marker()
