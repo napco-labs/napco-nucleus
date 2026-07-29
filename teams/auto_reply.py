@@ -96,6 +96,44 @@ MAX_REPLY_CHARS = 800          # overridden by settings.max_reply_chars
 ASCII_ONLY = True              # overridden by settings.ascii_only
 SINGLE_SENTENCE = True         # overridden by settings.single_sentence
 
+# ---------------------------------------------------------------------------
+# Short per-contact conversation memory.
+#
+# Every Claude reply used to be generated from the incoming message ALONE, with
+# the prompt explicitly ordering the model to ignore anything earlier. That was
+# a guard against the warm SDK pool bleeding one person's chat into another's,
+# but it also meant Nucleus could not see what IT had just said. On 2026-07-29
+# it told Titu "my call recording only covers MS Teams, not Google Meet" and
+# then, thirty seconds later, answered "join the meeting" with "On it, once the
+# call starts I'll pick up the audio automatically" -- a promise it had just
+# said it could not keep.
+#
+# The fix keeps the isolation and drops the amnesia: history is stored PER
+# CONTACT (same key as last_reply_at) and only that contact's turns are ever
+# put in a prompt, so cross-person leakage is still impossible.
+# ---------------------------------------------------------------------------
+TURN_MEMORY = {}               # contact key -> deque[(role, text)]
+TURNS_KEPT = 6                 # last 3 exchanges; keeps the prompt small
+
+
+def remember_turn(contact, role, text):
+    """Record one turn of this contact's chat. role is 'them' or 'me'."""
+    if not contact or not text:
+        return
+    d = TURN_MEMORY.get(contact)
+    if d is None:
+        d = TURN_MEMORY[contact] = deque(maxlen=TURNS_KEPT)
+    d.append((role, " ".join(str(text).split())[:300]))
+    # Bound the number of contacts we hold, not just the turns per contact.
+    if len(TURN_MEMORY) > 60:
+        for k in list(TURN_MEMORY)[:20]:
+            TURN_MEMORY.pop(k, None)
+
+
+def recent_turns(contact):
+    """This contact's last few turns, oldest first. Never another contact's."""
+    return list(TURN_MEMORY.get(contact) or ())
+
 
 def _tidy_reply(text, limit=None, single=None):
     """Make a reply safe to type into Teams, and human to read.
@@ -120,6 +158,24 @@ def _tidy_reply(text, limit=None, single=None):
 
     if ASCII_ONLY:
         t = "".join(c if ord(c) < 128 else " " for c in t)
+        t = " ".join(t.split())
+    else:
+        # ascii_only is OFF on .72 because replies have to be able to come back
+        # in Bangla script. That lets emoji through too, and emoji do NOT
+        # survive the SendKeys path: on 2026-07-29 a reply to Titu arrived
+        # ending in a bare U+FFFD. Bangla, Hindi, Urdu and Arabic all live in
+        # the BMP, emoji almost all live above it, so dropping astral
+        # characters keeps every language and loses only the thing that was
+        # arriving broken anyway. U+FFFD itself is stripped whatever the
+        # source, and so are the invisible joiners Teams leaves in the box.
+        t = "".join(
+            "" if (ord(c) > 0xFFFF                      # emoji / pictographs
+                   or c == "�"                     # already-mangled char
+                   or c in "️︎‍⁠​"  # VS/ZWJ/joiners
+                   or 0x2190 <= ord(c) <= 0x27BF        # arrows, dingbats
+                   or 0x2B00 <= ord(c) <= 0x2BFF)
+            else c
+            for c in t)
         t = " ".join(t.split())
 
     for dash in ("—", "–", " -- ", "--", " - "):
@@ -660,17 +716,31 @@ def run_report(report_cmd, model, timeout_s=25):
             "result into words just now.")
 
 
-def claude_answer(message, timeout_s, model="", sender=""):
-    """Answer AS Napco Nucleus. FAST path = warm SDK; fallback = CLI."""
+def claude_answer(message, timeout_s, model="", sender="", history=None):
+    """Answer AS Napco Nucleus. FAST path = warm SDK; fallback = CLI.
+
+    `history` is THIS contact's own recent turns (see remember_turn). It is
+    scoped by the caller, so the old "ignore everything earlier" instruction is
+    no longer needed to keep one person's chat out of another's: there is
+    nothing in the prompt but this one conversation.
+    """
     try:
         persona = PERSONA_FILE.read_text(encoding="utf-8")
     except Exception:
         persona = ("You are Napco Nucleus, an AI meeting assistant. Reply "
                    "briefly and politely. Output only the reply text.")
     who = f"You are replying to {sender}. " if sender else ""
-    user = (f"{who}Reply ONLY to this one Teams message below. Ignore any earlier "
-            f"messages in this session - they may be from a DIFFERENT person, so "
-            f"never reference them or say 'as I told you'.\n\n"
+    convo = ""
+    if history:
+        lines = [("You: " if r == "me" else f"{sender or 'They'}: ") + t
+                 for r, t in history]
+        convo = ("Here is what the two of you have already said in THIS chat, "
+                 "oldest first. It is only this one conversation, nobody "
+                 "else's:\n" + "\n".join(lines) + "\n\n"
+                 "Stay consistent with it. Never contradict something you "
+                 "already told this person, and never agree to do something "
+                 "you just said you cannot do.\n\n")
+    user = (f"{who}{convo}Reply to this new Teams message.\n\n"
             f"Message: {message}\n\n"
             f"Reply with the reply text ONLY, 1-3 short sentences.")
     out = _warm_ask(persona, user, model, timeout_s)   # warm SDK, no cold-start
@@ -1717,6 +1787,7 @@ def main():
             rep = _addr(random.choice(ALREADY_ANSWERED), first)
             send_reply(win, rep, human=human_typing, think=think, type_speed=type_speed)
             self_sent.append(rep.strip().lower())
+            remember_turn(clow, "me", rep)
             repeat_noticed.add(key)
             last_reply_at[clow] = time.time()
             log(f"REPEAT notice to '{first}'")
@@ -1994,10 +2065,13 @@ def main():
             self_sent.append(ack.strip().lower())
             log(f"COMMAND '{cmd.get('task')}' by '{first}'")
         else:
+            remember_turn(clow, "them", msg)
             reply = _addr(match_reply(msg, rules), first)
             src = "canned"
             if reply is None and use_claude:
-                reply = claude_answer(msg, claude_timeout, claude_model, sender=first)
+                reply = claude_answer(msg, claude_timeout, claude_model,
+                                      sender=first,
+                                      history=recent_turns(clow)[:-1])
                 src = "claude"
             # If the persona committed to checking something, strip the marker
             # (the colleague must never see it) and record the promise so the
@@ -2009,6 +2083,7 @@ def main():
             if reply and send_reply(win, reply, human=human_typing,
                                     think=think, type_speed=type_speed):
                 self_sent.append(reply.strip().lower())
+                remember_turn(clow, "me", reply)
                 log(f"REPLIED[{src}] to '{msg[:40]}' -> '{reply[:60]}'")
                 if promised and followups.enqueue(who, promised):
                     log(f"FOLLOWUP queued: {promised} for '{who}'")
