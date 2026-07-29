@@ -1133,11 +1133,13 @@ def _write_metadata_and_upload(
         _discard_from_central((mic_path.name, spk_path.name))
         return
 
-    # Compress the finalized tracks to Opus before metadata + upload. Raw call
-    # WAVs (500-800 MB) choke the off-net Drive sync; Opus is ~15-20x smaller
-    # and central reads it natively via ffmpeg. Opt out with
-    # NUCLEUS_COMPRESS_OPUS=0; falls back to raw WAV if ffmpeg is unavailable.
-    if os.environ.get("NUCLEUS_COMPRESS_OPUS", "1") != "0":
+    # Opus encoding is OFF (Titu, 2026-07-29 — "I don't need that file type").
+    # It was opt-OUT via NUCLEUS_COMPRESS_OPUS=0, which meant every machine
+    # that never set the var kept producing .opus alongside the mirrored WAVs.
+    # Default off so no machine needs the env at all. STT reads the WAV, so
+    # the only thing lost is the small Drive-upload artifact — set
+    # NUCLEUS_COMPRESS_OPUS=1 on an off-net machine that needs it.
+    if os.environ.get("NUCLEUS_COMPRESS_OPUS", "0") == "1":
         mic_path = _compress_track(mic_path)
         spk_path = _compress_track(spk_path)
 

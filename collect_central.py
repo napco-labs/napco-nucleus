@@ -356,9 +356,21 @@ def _transcribe_call(mic: Path | None, speaker: Path | None,
     except ValueError:
         started = None
 
+    # Speaker-only by default (Titu, 2026-07-29). Requirements live on the
+    # CLIENT's voice — the `Other`/speaker track — and the dev mic adds
+    # nothing but cost: it doubles Google STT usage and, when the mic chain
+    # is degraded, injects looping garbage ("<phrase>," repeated 25x) into
+    # the session doc that the identify pass then has to read past. The mic
+    # WAV is still captured and mirrored, so set NUCLEUS_TRANSCRIBE_MIC=1 to
+    # bring it back for a specific machine or a one-off re-run.
+    transcribe_mic = os.environ.get("NUCLEUS_TRANSCRIBE_MIC", "0") == "1"
+
     try:
         from tools.google_stt import google_transcribe  # lazy
-        mic_segs = google_transcribe(mic, "You") if mic else []
+        if mic and not transcribe_mic:
+            print("  mic track skipped (speaker-only; "
+                  "NUCLEUS_TRANSCRIBE_MIC=1 to include)")
+        mic_segs = google_transcribe(mic, "You") if (mic and transcribe_mic) else []
         spk_segs = google_transcribe(speaker, "Other") if speaker else []
         all_segs = sorted(mic_segs + spk_segs, key=lambda s: s["start"])
         if all_segs:
