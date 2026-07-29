@@ -108,15 +108,33 @@ while true; do
     # transcribed-but-never-processed for days and no requirement email went
     # out. So also fire when any transcript on central is newer than the
     # watermark, no matter which process wrote it.
+    #
+    # Compare on ctime (-cnewer), NOT mtime (-newer). normalize_central_mtimes
+    # resets every call file's mtime to the call-START stamp so Explorer sorts
+    # them sensibly, which means a long or late-transcribed call is BORN with
+    # an mtime older than the watermark and the old -newer test could never
+    # see it. On 2026-07-29 exactly that happened: two calls landed a minute
+    # apart, the watchdog fired on the short one at 19:34:58, and the 12-min
+    # call (transcript mtime stamped 19:33:53) stayed invisible forever.
+    # ctime is the real write time and os.utime() cannot rewrite it, which is
+    # the same reason collect_central._scan_central scopes on st_ctime.
+    #
+    # The watermark is also stamped BEFORE the scan, not after the trigger:
+    # anything written while the pipeline runs (a run takes ~10 min) then has
+    # a ctime newer than the watermark and gets picked up on the next tick,
+    # instead of falling into the gap between find and touch.
     if [ "$EVENT_EMAIL" != 0 ]; then
         [ -f "$WATERMARK" ] || touch "$WATERMARK"
+        touch "${WATERMARK}.scan"
         newer=$(find "$CENTRAL" -name .deleted -prune -o \
-                     -name '*_transcript.md' -newer "$WATERMARK" -print -quit 2>/dev/null)
+                     -name '*_transcript.md' -cnewer "$WATERMARK" -print -quit 2>/dev/null)
         if [ -n "$newer" ]; then
             echo "[draft-loop] watchdog: untriggered transcript $newer"
-            touch "$WATERMARK"
+            mv -f "${WATERMARK}.scan" "$WATERMARK"
             run_pipeline "watchdog:new-transcript" "--require-new" \
                 "--calls-within-minutes ${DAILY_DRAFT_EVENT_CALLS_WITHIN:-45}"
+        else
+            rm -f "${WATERMARK}.scan"
         fi
     fi
 done
