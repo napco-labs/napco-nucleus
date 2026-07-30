@@ -9,6 +9,14 @@ process is auto-cleared either when the recorded holder PID is dead
 fallback (default 30 min). The lock writes a small `holder.txt`
 inside for diagnostics ("who's holding this and since when?").
 
+A holder also heartbeats the lock's mtime once a minute while it runs,
+so silence is evidence of death and a contender need only wait 5 minutes
+rather than 30. This is what rescues a lock left by a container that was
+recreated mid-run: holder.txt records the container id as the host, so
+the PID check sees a "different host" it cannot inspect and defers to the
+mtime path. Holders that predate the heartbeat keep the 30-minute window,
+which they announce by the absence of `hb=1` in holder.txt.
+
 PID-liveness check matters: a SIGKILL (e.g. OOM-killer) skips the
 finally-block that would normally rmdir the lock, so the directory
 lingers. Without the liveness check, the next scheduled run could
@@ -40,6 +48,7 @@ import os
 import re
 import socket
 import sys
+import threading
 import time
 from contextlib import contextmanager
 from pathlib import Path
@@ -56,8 +65,26 @@ def _lock_dir(name: str) -> Path:
 
 
 def _holder_info() -> str:
-    return (f"pid={os.getpid()} host={socket.gethostname()} "
+    # hb=1 advertises that this holder runs the heartbeat below, which lets a
+    # contender apply the short stale window instead of the 30-minute one.
+    return (f"pid={os.getpid()} host={socket.gethostname()} hb=1 "
             f"started={dt.datetime.now().isoformat(timespec='seconds')}")
+
+
+# How long a heartbeating holder may go silent before it is presumed dead.
+# Generous next to the 60s beat: a paused container or a slow NFS touch
+# should not cost us the lock.
+_HEARTBEAT_S = 60
+_HEARTBEAT_STALE_S = 300
+
+
+def _heartbeats(lock_dir: Path) -> bool:
+    """True if the recorded holder advertises the mtime heartbeat."""
+    try:
+        raw = (lock_dir / "holder.txt").read_text(encoding="utf-8")
+    except OSError:
+        return False
+    return "hb=1" in raw
 
 
 def _parse_holder(lock_dir: Path) -> tuple[int, str] | None:
@@ -103,6 +130,16 @@ def _holder_dead(lock_dir: Path) -> bool:
 def _stale(lock_dir: Path, stale_after_s: int) -> bool:
     if _holder_dead(lock_dir):
         return True
+    # A heartbeating holder refreshes the mtime every _HEARTBEAT_S for as long
+    # as it lives, so silence is real evidence of death and we need not wait
+    # out the full window. This is what makes a lock left by a DEAD CONTAINER
+    # recoverable: holder.txt records the container id as the host, a
+    # recreated container has a different one, so _holder_dead can't peek at
+    # the process table and bails out as "cross-host". On 2026-07-30 that cost
+    # a recovery run 30 minutes on a lock whose holder had died seconds
+    # earlier, when the container was recreated mid-run.
+    if _heartbeats(lock_dir):
+        stale_after_s = min(stale_after_s, _HEARTBEAT_STALE_S)
     try:
         age = time.time() - lock_dir.stat().st_mtime
     except OSError:
@@ -163,10 +200,29 @@ def file_lock(name: str, *, block: bool = True, poll_s: float = 0.5,
                     f"{wait_max_s}s; another run is holding it.")
             time.sleep(poll_s)
 
+    # Keep the mtime moving while we hold the lock, so "not touched recently"
+    # means the holder is gone rather than merely slow. Daemon thread: it must
+    # never keep the process alive, and it stops at release either way.
+    beat_stop = threading.Event()
+
+    def _beat() -> None:
+        while got and not beat_stop.wait(_HEARTBEAT_S):
+            try:
+                os.utime(lock_dir, None)
+            except OSError:
+                return
+
+    beat_thread: threading.Thread | None = None
+    if got:
+        beat_thread = threading.Thread(
+            target=_beat, name="file-lock-heartbeat", daemon=True)
+        beat_thread.start()
+
     try:
         yield got
     finally:
         if got:
+            beat_stop.set()
             try:
                 holder_file.unlink(missing_ok=True)
             except Exception:
