@@ -313,7 +313,18 @@ def _transcribe_session_via_google_stt(session: str, calls_dir: Path,
         raise FileNotFoundError(
             f"Missing mic and/or speaker track for {session}")
 
-    mic_segs = google_transcribe(mic, "You")
+    # Speaker-only by default, matching collect_central._transcribe_call.
+    # That change (2026-07-29) only covered the pipeline's own STT pass, so
+    # this worker kept sending the mic to Google anyway: the saving was half
+    # what it looked like, and the transcript a human opens still filled with
+    # the degraded mic's looping garbage — 20260729-211735 is minutes of
+    # "আমার কাছে আসতে হবে" repeated under a perfectly readable client track.
+    # NUCLEUS_TRANSCRIBE_MIC=1 brings the mic back for a one-off re-run.
+    transcribe_mic = os.environ.get("NUCLEUS_TRANSCRIBE_MIC", "0") == "1"
+    if not transcribe_mic:
+        print(f"  [{session}] mic track skipped (speaker-only; "
+              f"NUCLEUS_TRANSCRIBE_MIC=1 to include)")
+    mic_segs = google_transcribe(mic, "You") if transcribe_mic else []
     spk_segs = google_transcribe(spk, "Other")
     all_segs = sorted(mic_segs + spk_segs, key=lambda s: s["start"])
     all_segs = _post_correct_segments(all_segs)
@@ -328,7 +339,8 @@ def _transcribe_session_via_google_stt(session: str, calls_dir: Path,
     with out.open("w", encoding="utf-8") as f:
         f.write(f"# Call transcript — {session}\n\n")
         f.write(f"_Started_: {started:%Y-%m-%d %H:%M}  \n")
-        f.write(f"_Source_: {mic.name}, {spk.name}  \n")
+        sources = f"{mic.name}, {spk.name}" if transcribe_mic else spk.name
+        f.write(f"_Source_: {sources}  \n")
         f.write(f"_Transcribed by Google STT_\n\n")
         f.write("---\n\n")
         for s in all_segs:
