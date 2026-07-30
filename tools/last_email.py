@@ -71,7 +71,11 @@ def describe() -> str:
     when = info["sent_at"] or "unknown time"
     try:
         sent = dt.datetime.fromisoformat(when)
-        days = (dt.datetime.now() - sent).days
+        # Compare CALENDAR days, not elapsed 24h periods. A mail sent 21:11
+        # last night is 16 hours old at lunchtime, which timedelta.days rounds
+        # to 0 -- so NN would call yesterday's email "today" and sound wrong
+        # about the one fact it was asked for.
+        days = (dt.datetime.now().date() - sent.date()).days
         ago = ("today" if days == 0 else
                "yesterday" if days == 1 else f"{days} days ago")
         when = f"{sent:%d %b %Y %H:%M} ({ago})"
