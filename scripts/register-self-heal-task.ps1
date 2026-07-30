@@ -6,7 +6,9 @@ at every user logon.
 .DESCRIPTION
   Task name : "NAPCO Nucleus - Self-Heal at Logon"
   Trigger   : At logon (current user), 60s delay so the voice-daemon
-              task fires first and the network is settled.
+              task fires first and the network is settled -- PLUS daily
+              at 07:30, because a recording machine stays logged in for
+              weeks and would otherwise never re-run the git pull.
   Action    : wscript scripts\fix-nucleus-runner.vbs
               -> cmd /c scripts\fix-nucleus.bat --quiet
               -> logs\fix-nucleus.log
@@ -82,8 +84,20 @@ $domainUser = if ($env:USERDOMAIN -and $env:USERDOMAIN -ne $env:COMPUTERNAME) {
 
 # 60s delay after logon so voice-daemon's own At-Logon task fires first,
 # and the network is fully up before we test the central share.
-$trigger = New-ScheduledTaskTrigger -AtLogOn -User $domainUser
-$trigger.Delay = 'PT1M'
+$logonTrigger = New-ScheduledTaskTrigger -AtLogOn -User $domainUser
+$logonTrigger.Delay = 'PT1M'
+
+# At-logon alone is not enough. A recording machine must stay logged in and
+# unlocked for the Teams UI automation to work, so it can run for weeks
+# without a logon event -- and step 1 of the heal pass is the git pull. On
+# 2026-07-30 that is exactly how .72 was found 4 commits behind main, still
+# writing .opus and still resolving clients with the old call-history
+# reader, days after both were fixed and pushed. A daily pass means new code
+# reaches every recorder within a day whether or not anyone signs in.
+# 07:30 is before the working day; StartWhenAvailable catches a machine
+# that was off at the time.
+$dailyTrigger = New-ScheduledTaskTrigger -Daily -At '7:30AM'
+$trigger = @($logonTrigger, $dailyTrigger)
 
 # Short-running heal pass. 5-min ceiling stops a stuck git pull from
 # hanging the task forever.
@@ -100,7 +114,7 @@ try {
         -Action $action `
         -Trigger $trigger `
         -Settings $settings `
-        -Description "At every logon, run the NAPCO Nucleus self-heal pass: confirm central share is reachable, re-register voice + chat scheduled tasks if missing, start the voice daemon if not already running. Logs to logs\fix-nucleus.log." `
+        -Description "At every logon AND daily at 07:30, run the NAPCO Nucleus self-heal pass: git pull --ff-only, confirm central share is reachable, re-register voice + chat scheduled tasks if missing, start the voice daemon if not already running. The daily trigger matters because a recording machine stays logged in for weeks, so at-logon alone lets its code drift. Logs to logs\fix-nucleus.log." `
         -RunLevel Limited `
         -ErrorAction Stop `
         | Out-Null
@@ -110,6 +124,6 @@ try {
 }
 
 Write-Host "Registered: $taskName"
-Write-Host "  Trigger:  At logon of $domainUser  (+1 min delay)"
+Write-Host "  Trigger:  At logon of $domainUser  (+1 min delay), and daily at 07:30"
 Write-Host "  Action:   wscript $vbsPath"
 Write-Host "  Logs:     $repoRoot\logs\fix-nucleus.log"
