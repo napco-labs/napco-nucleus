@@ -93,6 +93,37 @@ def _day_for_call(stamp: str, metadata: dict) -> str | None:
         return None
 
 
+def _already_on_central(central: Path, dev: str, stamp: str,
+                        skip_day: str) -> str | None:
+    """Day folder (other than `skip_day`) that already holds this call.
+
+    Looks for any artifact of the session: the json, the transcript, or either
+    track in either format. A transcript is the strongest signal -- central has
+    not merely received the call, it has finished with it.
+    """
+    try:
+        day_dirs = [d for d in (central / dev).iterdir() if d.is_dir()]
+    except OSError:
+        return None
+    wanted = [f"{stamp}.json", f"{stamp}_transcript.md"]
+    for kind in ("mic", "speaker"):
+        for ext in (".wav", ".opus"):
+            wanted.append(f"{stamp}_{kind}{ext}")
+    for day_dir in sorted(day_dirs, reverse=True):
+        if day_dir.name == skip_day:
+            continue
+        calls = day_dir / "calls"
+        if not calls.is_dir():
+            continue
+        for name in wanted:
+            try:
+                if (calls / name).exists():
+                    return day_dir.name
+            except OSError:
+                continue
+    return None
+
+
 def _needs_copy(src: Path, dst: Path, force: bool) -> bool:
     if force:
         return True
@@ -165,12 +196,27 @@ def main() -> int:
         calls_seen += 1
         dst_dir = central / dev / day / "calls"
 
-        # Capture writes WAV only (the Opus encode was removed 2026-07-30).
-        # The .opus entries stay so a backfill can still pick up a call
-        # recorded before that; the .exists() filter keeps whichever landed.
+        # Is this call already on central under SOME other day? Pre-2026-07-30
+        # the live mirror filed by date.today(), re-evaluated per tick, so a
+        # call that crossed midnight landed under the following day while
+        # backfill computes the day it STARTED. Checking only dst_dir made
+        # backfill think the call was missing and push it a second time: on
+        # 2026-07-30 that re-created 20260729-211735 under 2026-07-29 next to
+        # the real copy in 2026-07-30, and the transcribe worker immediately
+        # queued the duplicate for its own transcript and its own requirements.
+        elsewhere = _already_on_central(central, dev, stamp, day)
+        if elsewhere:
+            skipped += 1
+            print(f"  ok    {dev}/{day}/{stamp}  (already on central under "
+                  f"{elsewhere})")
+            continue
+
+        # Push WAV + json only. Opus is never produced any more (the encoder
+        # was removed 2026-07-30) and central reads the WAV for STT, so
+        # pushing a leftover local .opus just re-litters central with the
+        # files Titu asked to be rid of -- which is exactly what happened on
+        # the first self-heal run after they were cleaned off.
         srcs = [meta_path,
-                LOCAL_CALLS_DIR / f"{stamp}_mic.opus",
-                LOCAL_CALLS_DIR / f"{stamp}_speaker.opus",
                 LOCAL_CALLS_DIR / f"{stamp}_mic.wav",
                 LOCAL_CALLS_DIR / f"{stamp}_speaker.wav"]
         present = [s for s in srcs if s.exists()]

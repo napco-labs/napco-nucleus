@@ -192,13 +192,17 @@ if "%QUIET%"=="0" (
     )
     echo.
 ) else (
-    echo [8/8] Skipping 4h chat backfill in --quiet mode (scheduled tasks handle it).
+    echo [8/8] Skipping 4h chat backfill in --quiet mode ^(scheduled tasks handle it^).
     echo.
 )
 
 echo ============================================================
+REM `warning(s)` unescaped: inside a parenthesised block those parens close
+REM the block early, so cmd chokes on the remainder with ". was unexpected at
+REM this time." -- meaning the SUMMARY crashed on exactly the runs that had a
+REM warning worth reading. Escape them.
 if !FAIL_COUNT! GTR 0 (
-    echo   Self-heal finished with !FAIL_COUNT! warning(s) above.
+    echo   Self-heal finished with !FAIL_COUNT! warning^(s^) above.
     if "%QUIET%"=="0" echo   Send a screenshot of this window to Titu if unsure.
 ) else (
     echo   Self-heal complete. All systems healthy.
