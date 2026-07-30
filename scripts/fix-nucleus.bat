@@ -77,10 +77,41 @@ pushd "%NN%" >nul
 set "FAIL_COUNT=0"
 
 REM ── 1/7 git pull ────────────────────────────────────────────
+REM A plain --ff-only aborts the moment ANY tracked file is locally
+REM modified, and this used to just print WARN and carry on. That is how
+REM every recorder quietly stopped updating: on 2026-07-30 .72 was 6
+REM commits behind with two hand-edited files, ROCKY-PRO was 94 behind
+REM and .209 was 180 behind -- all of them pulling on every logon, all of
+REM them failing on the same error nobody reads in a --quiet log.
+REM So: retry once behind an auto-stash. The stash is kept (never
+REM dropped), named with a timestamp, so a real local edit is recoverable
+REM with `git stash list`; code advancing matters more than a working
+REM tree nobody meant to edit.
 echo [1/7] Updating repo (git pull --ff-only)...
 git pull --ff-only
 if errorlevel 1 (
-    echo       WARN: git pull failed -- continuing with current code.
+    echo       pull blocked -- stashing local changes and retrying once...
+    for /f "tokens=* delims=" %%S in ('powershell -NoProfile -Command "Get-Date -Format yyyyMMdd-HHmmss"') do set "NN_STAMP=%%S"
+    git stash push -m "self-heal auto-stash !NN_STAMP!"
+    git pull --ff-only
+    if errorlevel 1 (
+        echo       WARN: git pull STILL failed -- continuing with current code.
+        echo       Run `git status` and `git stash list` in %NN% by hand.
+        set /a FAIL_COUNT+=1
+    ) else (
+        echo       OK: pulled after stashing. Local edits kept in the stash --
+        echo       recover with: git stash list ^&^& git stash show -p stash@{0}
+    )
+)
+
+REM Say out loud if this machine is still behind. A recorder running old
+REM code produces silently wrong output -- stale .opus files, the old
+REM client resolver returning (unknown) -- rather than an error, so the
+REM only way anyone notices is a line like this.
+for /f "tokens=* delims=" %%B in ('git rev-list --count HEAD..origin/main 2^>nul') do set "NN_BEHIND=%%B"
+if not "!NN_BEHIND!"=="0" if not "!NN_BEHIND!"=="" (
+    echo       *** WARNING: this machine is !NN_BEHIND! commit^(s^) BEHIND origin/main.
+    echo       *** It is recording with old code. Fix before trusting its output.
     set /a FAIL_COUNT+=1
 )
 echo.

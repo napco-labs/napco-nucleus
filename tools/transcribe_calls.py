@@ -146,8 +146,11 @@ def _pending_sessions(calls_dir: Path) -> list[str]:
         seen.add(session)
         if (calls_dir / f"{session}_transcript.md").exists():
             continue
-        if _track_path(calls_dir, session, "mic") is None:
-            continue
+        # SPEAKER is the required track; mic is optional. A machine with
+        # NUCLEUS_RECORD_MIC=0 (the meeting-assistant PC, where nobody speaks
+        # into the mic) never produces one, and demanding both would have
+        # skipped every one of its calls silently and forever -- the same
+        # never-processed failure as the 07-24 and 07-29 calls.
         if _track_path(calls_dir, session, "speaker") is None:
             continue
         pending.append(session)
@@ -165,9 +168,11 @@ def _pending_sessions(calls_dir: Path) -> list[str]:
     # could hand a half-written file to ffmpeg.
     now = time.time()
     orphan_sessions: set[str] = set()
+    # Scan on the SPEAKER track: it is the one every machine produces, mic or
+    # no mic. Globbing *_mic would make a speaker-only call invisible here too.
     for ext in _TRACK_EXTS:
-        for mic in calls_dir.glob(f"*_mic{ext}"):
-            session = mic.name[: -len(f"_mic{ext}")]
+        for spk_file in calls_dir.glob(f"*_speaker{ext}"):
+            session = spk_file.name[: -len(f"_speaker{ext}")]
             orphan_sessions.add(session)
     for session in sorted(orphan_sessions):
         if session in seen or session in pending:
@@ -176,7 +181,7 @@ def _pending_sessions(calls_dir: Path) -> list[str]:
             continue
         mic = _track_path(calls_dir, session, "mic")
         spk = _track_path(calls_dir, session, "speaker")
-        if mic is None or spk is None:
+        if spk is None:
             continue
         # A lingering *.part sibling means an upload is still in progress for
         # this session -- don't touch it yet even if the completed track's
@@ -184,7 +189,8 @@ def _pending_sessions(calls_dir: Path) -> list[str]:
         if any(calls_dir.glob(f"{session}_*.part")):
             continue
         try:
-            mtime = max(mic.stat().st_mtime, spk.stat().st_mtime)
+            tracks = [t for t in (mic, spk) if t is not None]
+            mtime = max(t.stat().st_mtime for t in tracks)
         except OSError:
             continue
         if now - mtime < ORPHAN_STABLE_MINUTES * 60:
@@ -309,9 +315,8 @@ def _transcribe_session_via_google_stt(session: str, calls_dir: Path,
     from tools.google_stt import google_transcribe  # lazy
     mic = _track_path(calls_dir, session, "mic")
     spk = _track_path(calls_dir, session, "speaker")
-    if mic is None or spk is None:
-        raise FileNotFoundError(
-            f"Missing mic and/or speaker track for {session}")
+    if spk is None:
+        raise FileNotFoundError(f"Missing speaker track for {session}")
 
     # Speaker-only by default, matching collect_central._transcribe_call.
     # That change (2026-07-29) only covered the pipeline's own STT pass, so
@@ -320,8 +325,11 @@ def _transcribe_session_via_google_stt(session: str, calls_dir: Path,
     # the degraded mic's looping garbage — 20260729-211735 is minutes of
     # "আমার কাছে আসতে হবে" repeated under a perfectly readable client track.
     # NUCLEUS_TRANSCRIBE_MIC=1 brings the mic back for a one-off re-run.
-    transcribe_mic = os.environ.get("NUCLEUS_TRANSCRIBE_MIC", "0") == "1"
-    if not transcribe_mic:
+    transcribe_mic = (os.environ.get("NUCLEUS_TRANSCRIBE_MIC", "0") == "1"
+                      and mic is not None)
+    if mic is None:
+        print(f"  [{session}] no mic track (recorded speaker-only)")
+    elif not transcribe_mic:
         print(f"  [{session}] mic track skipped (speaker-only; "
               f"NUCLEUS_TRANSCRIBE_MIC=1 to include)")
     mic_segs = google_transcribe(mic, "You") if transcribe_mic else []
@@ -339,7 +347,7 @@ def _transcribe_session_via_google_stt(session: str, calls_dir: Path,
     with out.open("w", encoding="utf-8") as f:
         f.write(f"# Call transcript — {session}\n\n")
         f.write(f"_Started_: {started:%Y-%m-%d %H:%M}  \n")
-        sources = f"{mic.name}, {spk.name}" if transcribe_mic else spk.name
+        sources = f"{mic.name}, {spk.name}" if (transcribe_mic and mic) else spk.name
         f.write(f"_Source_: {sources}  \n")
         f.write(f"_Transcribed by Google STT_\n\n")
         f.write("---\n\n")

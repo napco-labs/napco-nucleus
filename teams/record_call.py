@@ -1447,10 +1447,25 @@ def main() -> int:
     if STOP_FILE.exists():
         STOP_FILE.unlink()
 
+    # Speaker-only machines: NUCLEUS_RECORD_MIC=0 skips mic CAPTURE outright.
+    # On the meeting-assistant PC nobody ever speaks into the mic, so the mic
+    # track was a 4 GB recording of an empty room per call -- mirrored over
+    # SMB and stored on central for nothing (20260729-211735_mic.wav was
+    # 4.17 GB). Skipping the STT read was not enough; this stops the capture
+    # (Titu, 2026-07-30). Leave it unset on a dev's PC, where the dev's own
+    # voice is half the conversation.
+    #
+    # Nothing downstream needs a branch: every consumer of mic_path already
+    # guards on .exists() (metadata files.mic, the central copy, the live
+    # mirror, the discard sweep, the denoise chain), so an uncreated mic file
+    # is handled the same as a failed one.
+    record_mic = (os.environ.get("NUCLEUS_RECORD_MIC", "1") != "0")
+
     # Clear exclusive mode for the headset up front. Each track now owns
     # its own PyAudio instance and re-resolves its device on reconnect, so
     # a mid-call USB port change is recovered inside record() itself.
-    _disable_exclusive_mode_for_mic()
+    if record_mic:
+        _disable_exclusive_mode_for_mic()
 
     # Drop the in-progress marker BEFORE the first sample is written so a
     # crash at any point after this is recoverable on the next daemon boot.
@@ -1459,8 +1474,14 @@ def main() -> int:
     stop = threading.Event()
     threads = [
         threading.Thread(target=record, args=(spk_path, stop, "speaker"), daemon=True),
-        threading.Thread(target=record, args=(mic_path, stop, "mic"), daemon=True),
     ]
+    if record_mic:
+        threads.append(
+            threading.Thread(target=record, args=(mic_path, stop, "mic"),
+                             daemon=True))
+    else:
+        print("  mic: capture DISABLED (NUCLEUS_RECORD_MIC=0) — "
+              "speaker track only")
 
     print(f"Recording -> {out_dir.resolve()}")
     print(f"Stop with Ctrl+C, or `touch {STOP_FILE}`\n")
