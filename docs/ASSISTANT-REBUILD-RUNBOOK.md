@@ -44,7 +44,7 @@ Central `.123` (Ubuntu) transcribes (Google STT) and runs the requirement-manage
 2. **Python 3.13** (per-user, into `C:\Users\assad\AppData\Local\Programs\Python\Python313\`). Add to PATH.
 3. **Node.js 22 LTS** (for Claude Code + SDK).
 4. **Claude Code CLI:** `npm i -g @anthropic-ai/claude-code`.
-5. **ffmpeg** — download Gyan release, extract to `C:\Tools\ffmpeg\...\bin\ffmpeg.exe` (needed for call mirroring).
+5. ~~**ffmpeg**~~ — no longer needed on a recording PC. It existed only for the Opus encode, which was removed 2026-07-30; calls mirror to central as raw WAV and central's `google_stt` does the converting.
 6. **Microsoft Teams** (new client) + **Git** + **OpenSSH client** (built into Win10/11).
 7. WinRM reachable from Titu's PC: `Enable-PSRemoting -Force`; on Titu PC `Set-Item WSMan:\localhost\Client\TrustedHosts '172.16.205.*'`.
 
@@ -58,7 +58,7 @@ Or restore the backup: `scp ubuntu@172.16.205.123:/home/ubuntu/nn-assistant-back
 
 **Step 2 — Python deps.** `cd E:\napco-nucleus ; py -3 -m pip install -r requirements.txt` then `py -3 -m pip install uiautomation claude_agent_sdk python-dotenv`.
 
-**Step 3 — ffmpeg.** Install to `C:\Tools\ffmpeg\...\bin\ffmpeg.exe`; confirm `.env` has `NUCLEUS_FFMPEG=` that exact path.
+**Step 3 — ~~ffmpeg~~ (skip).** Not required any more: the Opus encode it served was removed 2026-07-30. `NUCLEUS_FFMPEG` and `NUCLEUS_OPUS_BITRATE` are dead keys — drop them from `.env` rather than carrying them forward.
 
 **Step 4 — Restore `.env`** (see Section 6 for the exact keys). **Write it WITHOUT a BOM** (`[IO.File]::WriteAllText(path,text,(New-Object Text.UTF8Encoding($false)))`). A BOM corrupts the first key — this bit us once.
 
@@ -118,7 +118,6 @@ NUCLEUS_DEV_NAME=napco-nucleus
 NUCLEUS_CENTRAL_PATH=\\172.16.205.123\nucleus-central
 NUCLEUS_SAMBA_USER=nucleus
 NUCLEUS_SAMBA_PASSWORD=
-NUCLEUS_FFMPEG=C:\Tools\ffmpeg\<ver>\bin\ffmpeg.exe
 GOOGLE_CREDENTIALS_PATH=<path if used>
 ```
 

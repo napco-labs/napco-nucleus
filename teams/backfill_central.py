@@ -165,8 +165,9 @@ def main() -> int:
         calls_seen += 1
         dst_dir = central / dev / day / "calls"
 
-        # Tracks are Opus once compressed at capture; raw WAV if ffmpeg was
-        # unavailable. List both — the .exists() filter keeps whichever landed.
+        # Capture writes WAV only (the Opus encode was removed 2026-07-30).
+        # The .opus entries stay so a backfill can still pick up a call
+        # recorded before that; the .exists() filter keeps whichever landed.
         srcs = [meta_path,
                 LOCAL_CALLS_DIR / f"{stamp}_mic.opus",
                 LOCAL_CALLS_DIR / f"{stamp}_speaker.opus",

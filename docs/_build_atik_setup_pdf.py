@@ -51,17 +51,17 @@ story.append(Paragraph(
     "message (never on group chat).", BODY))
 
 # Step 1
-story.append(Paragraph("Step 1 &mdash; Install Git, Python and ffmpeg", STEP))
-story.append(Paragraph("Open <b>PowerShell</b> and run these three lines "
+story.append(Paragraph("Step 1 &mdash; Install Git and Python", STEP))
+story.append(Paragraph("Open <b>PowerShell</b> and run these two lines "
                        "(accept any prompts):", BODY))
 story.append(code(
     "winget install --id Git.Git -e --source winget\n"
-    "winget install --id Python.Python.3.12 -e --source winget\n"
-    "winget install --id Gyan.FFmpeg -e --source winget"))
-story.append(Paragraph("ffmpeg is important &mdash; it shrinks each recording "
-                       "about 15&times; so your disk stays small. After this, "
-                       "<b>close and reopen PowerShell</b> so the new tools are "
-                       "found.", NOTE))
+    "winget install --id Python.Python.3.12 -e --source winget"))
+story.append(Paragraph("After this, <b>close and reopen PowerShell</b> so the "
+                       "new tools are found. ffmpeg is no longer needed on a "
+                       "recording PC &mdash; recordings are copied to the "
+                       "server as-is and the server does the converting.",
+                       NOTE))
 
 # Step 2
 story.append(Paragraph("Step 2 &mdash; Download the project to your C: drive", STEP))

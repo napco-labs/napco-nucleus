@@ -870,161 +870,6 @@ def _expander_mic_wav(path: Path, range_db: float = 14.0,
         print(f"  mic expander FAILED: {e}", file=sys.stderr)
 
 
-def _ffmpeg_bin() -> str | None:
-    """Locate ffmpeg WITHOUT relying on the daemon's PATH (which is stale right
-    after a fresh install until reboot). Order: NUCLEUS_FFMPEG env, PATH, then
-    common Windows install dirs (manual C:\\ffmpeg, winget). Returns the exe
-    path or None. This is why no reboot/daemon-restart is needed after install."""
-    import glob
-    cand = os.environ.get("NUCLEUS_FFMPEG")
-    if cand and Path(cand).exists():
-        return cand
-    found = shutil.which("ffmpeg")
-    if found:
-        return found
-    patterns = [
-        r"C:\ffmpeg\ffmpeg.exe",
-        r"C:\ffmpeg\bin\ffmpeg.exe",
-        os.path.expandvars(r"%LOCALAPPDATA%\Microsoft\WinGet\Packages\Gyan.FFmpeg*\**\ffmpeg.exe"),
-        os.path.expandvars(r"%ProgramFiles%\ffmpeg\bin\ffmpeg.exe"),
-    ]
-    for pat in patterns:
-        for m in glob.glob(pat, recursive=True):
-            if Path(m).exists():
-                return m
-    return None
-
-
-def _encode_opus(wav_path: Path) -> Path | None:
-    """Encode a finalized WAV track to Opus (.opus, Ogg container) via ffmpeg.
-
-    Raw call WAVs run 500-800 MB and choke the off-net Google Drive sync. Opus
-    mono at ~48 kbps is speech-transparent and ~15-20x smaller. ffmpeg reads
-    Opus natively on central (google_stt re-encodes for STT anyway), so no
-    decode step is needed downstream. Returns the .opus path on success, or
-    None if ffmpeg is missing / the encode fails (caller keeps the raw WAV).
-    """
-    ffmpeg = _ffmpeg_bin()
-    if not ffmpeg:
-        print("  opus: ffmpeg not found (NUCLEUS_FFMPEG / PATH / common dirs)"
-              " — keeping raw WAV", file=sys.stderr)
-        return None
-    out = wav_path.with_suffix(".opus")
-    bitrate = (os.environ.get("NUCLEUS_OPUS_BITRATE") or "48k").strip()
-    cmd = [ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
-           "-i", str(wav_path), "-ac", "1",
-           "-c:a", "libopus", "-b:a", bitrate, str(out)]
-    try:
-        subprocess.run(cmd, check=True)
-    except FileNotFoundError:
-        print("  opus: ffmpeg failed to launch — keeping raw WAV",
-              file=sys.stderr)
-        return None
-    except subprocess.CalledProcessError as e:
-        print(f"  opus: encode FAILED ({e}) — keeping raw WAV", file=sys.stderr)
-        return None
-    if out.exists() and out.stat().st_size > 0:
-        return out
-    return None
-
-
-def _compress_track(wav_path: Path) -> Path:
-    """Swap a WAV track for its Opus version for upload, deleting the raw WAV on
-    success to reclaim space. Any failure returns the original WAV unchanged so
-    a recording is never lost."""
-    if not (wav_path.exists() and wav_path.stat().st_size > 0):
-        return wav_path
-    opus = _encode_opus(wav_path)
-    if opus is None:
-        return wav_path
-    raw_mb = wav_path.stat().st_size / 1024 / 1024
-    opus_mb = opus.stat().st_size / 1024 / 1024
-    print(f"  opus: {wav_path.name} ({raw_mb:.0f} MB) -> "
-          f"{opus.name} ({opus_mb:.1f} MB)")
-    try:
-        wav_path.unlink()
-    except Exception as e:
-        print(f"  opus: could not remove raw {wav_path.name}: {e}",
-              file=sys.stderr)
-    return opus
-
-
-def _drive_upload_files(files: list[Path], folder_id: str,
-                        creds_path: str) -> int:
-    """Upload the small finalized call artifacts (Opus tracks + JSON sidecar)
-    straight to a Drive **Shared Drive** folder via a service account.
-
-    This is the off-net alternative to the Samba push: a one-shot ~2 MB
-    upload per call so an off-net dev does NOT need the always-on Google
-    Drive Desktop sync client (which loads the PC). Central's drive ingester
-    already reads Shared Drives. Best-effort — logs and returns the count
-    actually uploaded; never raises.
-    """
-    try:
-        from google.oauth2 import service_account  # lazy
-        from googleapiclient.discovery import build  # lazy
-        from googleapiclient.http import MediaFileUpload  # lazy
-    except Exception as e:
-        print(f"  drive upload: google libs unavailable ({e})", file=sys.stderr)
-        return 0
-    try:
-        creds = service_account.Credentials.from_service_account_file(
-            creds_path, scopes=["https://www.googleapis.com/auth/drive"])
-        drive = build("drive", "v3", credentials=creds, cache_discovery=False)
-    except Exception as e:
-        print(f"  drive upload: auth failed ({e})", file=sys.stderr)
-        return 0
-    n = 0
-    for src in files:
-        if not src.exists():
-            continue
-        try:
-            media = MediaFileUpload(str(src), resumable=False)
-            drive.files().create(
-                body={"name": src.name, "parents": [folder_id]},
-                media_body=media, supportsAllDrives=True, fields="id",
-            ).execute()
-            n += 1
-            size_mb = src.stat().st_size / 1024 / 1024
-            print(f"  -> Drive {src.name}  ({size_mb:.1f} MB)")
-        except Exception as e:
-            print(f"  drive upload FAILED for {src.name}: {e}", file=sys.stderr)
-    return n
-
-
-def _maybe_drive_upload(mic_path: Path, spk_path: Path,
-                        meta_path: Path) -> bool:
-    """Upload the call (opus tracks + json) to the configured Drive Shared
-    Drive folder, if Drive upload is configured. Returns True on success.
-
-    Config (set on off-net dev PCs instead of NUCLEUS_CENTRAL_PATH):
-        NUCLEUS_DRIVE_UPLOAD_FOLDER_ID   target Shared Drive folder id
-        NUCLEUS_DRIVE_UPLOAD_CREDENTIALS service-account JSON (defaults to
-                                         GOOGLE_CREDENTIALS_PATH)
-    """
-    folder_id = (os.environ.get("NUCLEUS_DRIVE_UPLOAD_FOLDER_ID") or "").strip()
-    if not folder_id:
-        return False
-    creds_path = (os.environ.get("NUCLEUS_DRIVE_UPLOAD_CREDENTIALS")
-                  or os.environ.get("GOOGLE_CREDENTIALS_PATH") or "").strip()
-    if not creds_path:
-        print("  drive upload: configured (folder id set) but no creds — set "
-              "NUCLEUS_DRIVE_UPLOAD_CREDENTIALS or GOOGLE_CREDENTIALS_PATH",
-              file=sys.stderr)
-        return False
-    cp = Path(creds_path)
-    if not cp.is_absolute():
-        cp = Path(__file__).resolve().parent.parent / creds_path
-    if not cp.exists():
-        print(f"  drive upload: creds file not found at {cp}", file=sys.stderr)
-        return False
-    n = _drive_upload_files([mic_path, spk_path, meta_path], folder_id, str(cp))
-    if n:
-        print(f"  drive upload: OK ({n} file(s) -> folder {folder_id[:14]}...)")
-        return True
-    return False
-
-
 def _write_metadata_and_upload(
     *,
     out_dir: Path,
@@ -1133,15 +978,16 @@ def _write_metadata_and_upload(
         _discard_from_central((mic_path.name, spk_path.name), started_dt)
         return
 
-    # Opus encoding is OFF (Titu, 2026-07-29 — "I don't need that file type").
-    # It was opt-OUT via NUCLEUS_COMPRESS_OPUS=0, which meant every machine
-    # that never set the var kept producing .opus alongside the mirrored WAVs.
-    # Default off so no machine needs the env at all. STT reads the WAV, so
-    # the only thing lost is the small Drive-upload artifact — set
-    # NUCLEUS_COMPRESS_OPUS=1 on an off-net machine that needs it.
-    if os.environ.get("NUCLEUS_COMPRESS_OPUS", "0") == "1":
-        mic_path = _compress_track(mic_path)
-        spk_path = _compress_track(spk_path)
+    # No Opus is written, ever. The encode existed for exactly one reason: to
+    # get a call small enough to upload to Google Drive from an off-net PC.
+    # Central mirroring replaced that, so there is nothing left for a .opus to
+    # be for — it was pure duplication of audio already on central, and STT
+    # reads the WAV. Defaulting the env off (2026-07-29) was not enough: an
+    # env still invites the file back. The encoder and the Drive uploader are
+    # both gone (Titu, 2026-07-30 — "Opus type never should write as it is
+    # mirroring now ... no upload needed now. Expecting a permanent fix").
+    # Reading .opus is still supported for the handful of historical
+    # opus-only calls on central; only writing is removed.
 
     metadata = {
         "session": stamp,
@@ -1174,13 +1020,13 @@ def _write_metadata_and_upload(
     # Optional central push — same start-date folder the live mirror used.
     central_dir = _central_calls_dir(started_dt)
     if central_dir is None:
-        # Off-net dev (no Samba reach): upload the small opus+json straight to
-        # the Drive Shared Drive instead, so central's drive ingester picks it
-        # up — no always-on Drive Desktop sync client needed.
-        if _maybe_drive_upload(mic_path, spk_path, meta_path):
-            return
-        print("  central upload: skipped (NUCLEUS_CENTRAL_PATH not set; "
-              "no Drive upload configured)")
+        # No Drive fallback any more — it only ever worked because the tracks
+        # had been shrunk to Opus first, and raw WAVs are far too big to push
+        # that way. The call is safe locally in out_dir; the next logon runs
+        # teams/backfill_central.py, which pushes anything central is missing.
+        print("  central upload: skipped — NUCLEUS_CENTRAL_PATH not set. The "
+              "call is kept locally and backfill_central.py will push it once "
+              "the share is reachable.", file=sys.stderr)
         return
     from teams._central import ensure_smb_auth, reset_smb_auth
     central_root = os.environ.get("NUCLEUS_CENTRAL_PATH", "")
@@ -1227,13 +1073,8 @@ def _write_metadata_and_upload(
                       "access. Add the shared 'nucleus' share credential (same "
                       "as a working dev's .env), then re-run "
                       "`py -3 -m teams.backfill_central`.", file=sys.stderr)
-            # Last resort: if Drive upload is configured, push the small
-            # opus+json there so the call still reaches central off-net.
-            if _maybe_drive_upload(mic_path, spk_path, meta_path):
-                print("  fell back to Drive upload: OK")
-            else:
-                print(f"  WAVs + metadata are still local at {out_dir} "
-                      f"(run: py -3 -m teams.backfill_central)", file=sys.stderr)
+            print(f"  WAVs + metadata are still local at {out_dir} "
+                  f"(run: py -3 -m teams.backfill_central)", file=sys.stderr)
 
 
 def _dev_name() -> str:
