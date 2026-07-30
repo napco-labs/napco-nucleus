@@ -74,11 +74,11 @@ def _dev_name() -> str:
 def _day_for_call(stamp: str, metadata: dict) -> str | None:
     """Return YYYY-MM-DD for a call, preferring metadata over the stamp.
 
-    The live push files a call under the day it ENDED (date.today() at
-    upload). We don't have that here, so we use the call's start instead:
-    metadata.started_at if it parses, else the date embedded in the stamp.
-    For all non-midnight-straddling calls these are identical, and
-    collect_central scans yesterday too, so straddles are still caught.
+    Both this and the live push now file a call under the day it STARTED
+    (record_call._central_calls_dir takes started_dt as of 2026-07-30), so
+    a backfilled call lands in the same folder the live mirror used. We
+    read metadata.started_at if it parses, else the date embedded in the
+    stamp — identical for every call that does not straddle midnight.
     """
     started = (metadata or {}).get("started_at")
     if isinstance(started, str) and started:

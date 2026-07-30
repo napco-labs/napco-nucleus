@@ -1130,7 +1130,7 @@ def _write_metadata_and_upload(
         # The live mirror already streamed the raw WAVs to central; remove them
         # so no non-allowlisted audio lingers there. Local WAVs stay in out_dir
         # (gitignored) for audit; without a json central won't pick them up.
-        _discard_from_central((mic_path.name, spk_path.name))
+        _discard_from_central((mic_path.name, spk_path.name), started_dt)
         return
 
     # Opus encoding is OFF (Titu, 2026-07-29 — "I don't need that file type").
@@ -1171,8 +1171,8 @@ def _write_metadata_and_upload(
         print(f"  metadata write FAILED: {e}", file=sys.stderr)
         return
 
-    # Optional central push
-    central_dir = _central_calls_dir()
+    # Optional central push — same start-date folder the live mirror used.
+    central_dir = _central_calls_dir(started_dt)
     if central_dir is None:
         # Off-net dev (no Samba reach): upload the small opus+json straight to
         # the Drive Shared Drive instead, so central's drive ingester picks it
@@ -1244,15 +1244,31 @@ def _dev_name() -> str:
             or socket.gethostname() or "unknown").strip()
 
 
-def _central_calls_dir() -> Path | None:
+def _central_calls_dir(started: datetime.datetime | None = None) -> Path | None:
+    """Central folder for a call, keyed on the date the call STARTED.
+
+    It used to key on date.today(), re-evaluated per mirror tick. A call
+    that ran across midnight therefore changed folders underneath itself:
+    on 2026-07-29 call 20260729-211735 left a frozen 1.46 GB mic.wav in
+    2026-07-29/calls (whatever had been copied by 00:00) while the live
+    copy carried on into 2026-07-30/calls, and the json landed next to
+    the second one. Three things broke at once — a half WAV that looks
+    like a real call, a call filed under a date it did not happen on, and
+    (worse) _discard_from_central looking only at today's folder, so a
+    non-allowlisted call's audio stayed on central in the start folder.
+
+    Pass the call's start; only callers with no call in hand fall back to
+    today.
+    """
     raw = (os.environ.get("NUCLEUS_CENTRAL_PATH") or "").strip()
     if not raw:
         return None
-    day = datetime.date.today().strftime("%Y-%m-%d")
-    return Path(raw) / _dev_name() / day / "calls"
+    day = (started.date() if started else datetime.date.today())
+    return Path(raw) / _dev_name() / day.strftime("%Y-%m-%d") / "calls"
 
 
-def _discard_from_central(central_wav_names) -> None:
+def _discard_from_central(central_wav_names,
+                          started: datetime.datetime | None = None) -> None:
     """Delete a non-allowlisted call's mirrored raw WAVs from central.
 
     _mirror_raw_to_central streams the raw WAVs to central DURING the call,
@@ -1262,28 +1278,37 @@ def _discard_from_central(central_wav_names) -> None:
     audio is retained on central. No opus/json is ever written on the discard
     path, so there is nothing else to clean. Best-effort; never raises.
     """
-    central_dir = _central_calls_dir()
-    if central_dir is None:
+    # Sweep the start-date folder AND today's. They differ for a call that
+    # crossed midnight, and for one mirrored by a machine still running the
+    # pre-fix code that changed folders mid-call. Missing either leaves
+    # non-allowlisted audio on central, which is the one thing this must not do.
+    dirs = []
+    for d in (_central_calls_dir(started), _central_calls_dir()):
+        if d is not None and d not in dirs:
+            dirs.append(d)
+    if not dirs:
         return
     try:
         from teams._central import ensure_smb_auth
         ensure_smb_auth(os.environ.get("NUCLEUS_CENTRAL_PATH", ""))
     except Exception:
         pass
-    for name in central_wav_names:
-        for target in (central_dir / name, central_dir / f"{name}.part"):
-            try:
-                if target.exists():
-                    target.unlink()
-                    print(f"  allowlist: removed mirrored {target.name} "
-                          f"from central.")
-            except OSError as e:
-                print(f"  allowlist: could not remove {target.name} from "
-                      f"central ({e}).", file=sys.stderr)
+    for central_dir in dirs:
+        for name in central_wav_names:
+            for target in (central_dir / name, central_dir / f"{name}.part"):
+                try:
+                    if target.exists():
+                        target.unlink()
+                        print(f"  allowlist: removed mirrored {target.name} "
+                              f"from central ({central_dir}).")
+                except OSError as e:
+                    print(f"  allowlist: could not remove {target.name} from "
+                          f"central ({e}).", file=sys.stderr)
 
 
 def _mirror_raw_to_central(spk_path: Path, mic_path: Path,
-                           stop_mirror: threading.Event) -> None:
+                           stop_mirror: threading.Event,
+                           started: datetime.datetime | None = None) -> None:
     """Stream the growing raw WAVs to central DURING the call.
 
     This makes central the primary sink instead of relying on a single
@@ -1307,7 +1332,7 @@ def _mirror_raw_to_central(spk_path: Path, mic_path: Path,
     """
     if os.environ.get("NUCLEUS_CENTRAL_LIVE_MIRROR", "1") == "0":
         return
-    if _central_calls_dir() is None:
+    if _central_calls_dir(started) is None:
         return
     try:
         interval = float(
@@ -1322,7 +1347,7 @@ def _mirror_raw_to_central(spk_path: Path, mic_path: Path,
     last_size: dict[str, int] = {}
 
     def _tick() -> None:
-        central_dir = _central_calls_dir()
+        central_dir = _central_calls_dir(started)
         if central_dir is None:
             return
         ensure_smb_auth(central_root)
@@ -1607,7 +1632,7 @@ def main() -> int:
     mirror_stop = threading.Event()
     mirror_thread = threading.Thread(
         target=_mirror_raw_to_central,
-        args=(spk_path, mic_path, mirror_stop), daemon=True)
+        args=(spk_path, mic_path, mirror_stop, started_dt), daemon=True)
     mirror_thread.start()
 
     try:
