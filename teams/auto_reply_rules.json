@@ -69,7 +69,7 @@
         "did you get my call",
         "what happened to my call"
       ],
-      "report_cmd": "ssh -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new ubuntu@172.16.205.123 \"echo '== containers =='; docker ps --format '{{.Names}}: {{.Status}}'; echo '== latest transcripts =='; ls -t /srv/nucleus-central/*/*/calls/*_transcript.md 2>/dev/null | head -3; echo '== last email decision =='; docker logs --tail 400 nucleus-daily-draft 2>&1 | grep -E '^.rollup.' | tail -4; echo '== last pipeline run =='; docker logs --tail 400 nucleus-daily-draft 2>&1 | grep -E 'draft-loop. (running|collect)' | tail -3\""
+      "report_cmd": "ssh -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new ubuntu@172.16.205.123 \"echo '== containers =='; docker ps --format '{{.Names}}: {{.Status}}'; echo '== latest transcripts =='; ls -t /srv/nucleus-central/*/*/calls/*_transcript.md 2>/dev/null | head -3; echo '== last email actually sent =='; docker exec nucleus-daily-draft python3 -m tools.last_email; echo '== last pipeline run =='; docker logs --tail 400 nucleus-daily-draft 2>&1 | grep -E 'draft-loop. (running|collect)' | tail -3\""
     },
     {
       "contains": [
