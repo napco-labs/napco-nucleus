@@ -294,9 +294,23 @@ def _norm_title(title: str) -> str:
     return n
 
 
+_FTS_WORD = re.compile(r"[^\W_]+", re.UNICODE)
+
+
 def _fts_escape(query: str) -> str:
-    q = (query or "").strip()
-    return '""' if not q else '"' + q.replace('"', '""') + '"'
+    """Turn a natural-language query into an FTS5 MATCH expression.
+
+    Each word is quoted on its own and OR-ed together, so a long dedup
+    question ("enable Save button on DVR config") still recalls rows
+    that share only part of that wording; bm25 floats the closest ones
+    to the top. Quoting the whole string made every search a phrase
+    match, so anything past a few words silently returned nothing and
+    the "have I seen this?" check always said no.
+    """
+    words = _FTS_WORD.findall(query or "")
+    if not words:
+        return '""'
+    return " OR ".join('"' + w + '"' for w in words)
 
 
 # ─── Writes: activity_logs ──────────────────────────────────────────
