@@ -96,6 +96,22 @@ CALL_WINDOW_HINTS = (
 )
 HANGUP_HINTS = ("hang up", "leave call", "leave meeting", "end call")
 
+# Titu, 2026-07-31: when a meeting finishes Teams puts up a "meeting has ended"
+# screen with a Dismiss button, and until somebody clicks Dismiss the main
+# window stays covered -- so NN cannot read or answer chat, same silence as the
+# leftover-window bug above. close_stale_call_window() cannot help here: Teams
+# often draws this screen INSIDE the main window, which that sweep is forbidden
+# to touch. So click Dismiss instead, which is what a person does. Three guards
+# before we click anything: the call must really be over (no recording marker),
+# the button must be named exactly Dismiss, and the same window must still be
+# showing end-of-meeting wording.
+DISMISS_HINTS = ("dismiss",)
+ENDED_TEXT_HINTS = (
+    "meeting has ended", "meeting ended", "call has ended", "call ended",
+    "left the meeting", "left the call", "meeting is over",
+    "no one else is here", "everyone else has left",
+)
+
 BUSY_MESSAGE = ("Sorry {name}bhai, I am in a call right now. Let me finish it "
                 "first and I will come back to you.")
 
@@ -263,6 +279,98 @@ def close_stale_call_window() -> bool:
     return False
 
 
+def _is_dismiss(ctrl):
+    """Exactly the Dismiss button -- never a substring match.
+
+    Loose matching is how a click lands on the wrong control: "Dismiss all
+    notifications" and the like live in the same tree, and this function is
+    allowed to run against the MAIN Teams window, where a wrong click is
+    expensive. Whole-name equality keeps the target to one button.
+    """
+    try:
+        if ctrl.ControlType != auto.ControlType.ButtonControl:
+            return False
+        nm = (ctrl.Name or "").strip().lower()
+        return nm in DISMISS_HINTS
+    except Exception:
+        return False
+
+
+def _says_meeting_ended(win) -> bool:
+    """True if this window is showing Teams' end-of-meeting wording.
+
+    Bounded by a node budget rather than a tight depth limit: Teams renders in
+    WebView2, so chrome-level text still sits a dozen panes down, and a shallow
+    walk would simply never see the notice. Affordable because this only runs
+    once a Dismiss button has already been found in the window, which is rare.
+    """
+    hit = [False]
+    budget = [400]
+
+    def walk(c, d):
+        if hit[0] or d > 16 or budget[0] <= 0:
+            return
+        budget[0] -= 1
+        try:
+            nm = (c.Name or "").strip().lower()
+            if nm and any(h in nm for h in ENDED_TEXT_HINTS):
+                hit[0] = True
+                return
+            for ch in c.GetChildren():
+                walk(ch, d + 1)
+        except Exception:
+            return
+
+    try:
+        walk(win, 0)
+    except Exception:
+        pass
+    return hit[0]
+
+
+def dismiss_meeting_ended() -> bool:
+    """Click Dismiss on a finished meeting so the chat surface comes back.
+
+    Runs before the leftover-window sweep because this is the gentler of the
+    two: Dismiss is Teams' own way out of that screen, it works whether the
+    notice is its own window or drawn over the main one, and it closes nothing
+    we might still need.
+    """
+    if in_call():
+        return False
+    root = auto.GetRootControl()
+    try:
+        windows = root.GetChildren()
+    except Exception:
+        return False
+    for win in windows:
+        try:
+            btn = win.Control(searchDepth=0xFFFFFFFF,
+                              Compare=lambda c, d: _is_dismiss(c))
+            if not btn.Exists(0, 0):
+                continue
+            # A Dismiss button alone proves nothing -- Teams uses that word on
+            # ordinary notifications too. Only the end-of-meeting wording in
+            # the same window earns the click.
+            if not _says_meeting_ended(win):
+                continue
+            nm = (win.Name or "").strip() or "(unnamed window)"
+            try:
+                btn.GetInvokePattern().Invoke()
+            except Exception:
+                try:
+                    btn.Click(simulateMove=False)
+                except Exception as e:
+                    log(f"could not click Dismiss on '{nm}': {str(e)[:80]}")
+                    continue
+            log(f"clicked Dismiss on the ended-meeting notice in '{nm}' so "
+                f"chat replies can reach the UI again")
+            return True
+        except Exception:
+            continue
+    return False
+
+
 def _top_window(ctrl):
     """Walk up to the top-level window holding `ctrl`."""
     seen = 0
@@ -364,9 +472,11 @@ def main():
                 log(f"muting our mic ~{_MUTE_AFTER_S:.0f}s into the call: "
                     f"{mute_self()}")
 
-            # Sweep away a call window that outlived its call. Cheap, and the
-            # only thing standing between a finished call and NN answering
-            # chat again.
+            # Clear whatever a finished meeting left on screen. Both are cheap
+            # and both stand between a finished call and NN answering chat
+            # again: the "meeting has ended" notice (Dismiss) first, then a
+            # whole call window that outlived its call.
+            dismiss_meeting_ended()
             close_stale_call_window()
 
             if now - last_accept > 8:  # de-bounce: don't re-accept same call
