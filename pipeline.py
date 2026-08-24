@@ -286,7 +286,10 @@ async def _claude_call_with_tools(system_prompt: str, user_prompt: str, *,
         tools=ALL_TOOLS,
     )
     allowed = [f"mcp__napco-nucleus__{n}" for n in TOOL_NAMES]
-    allowed.extend(["WebSearch", "WebFetch"])
+    # No web egress here: the draft stage handles content derived from
+    # untrusted client input (session doc -> extract -> critique), and
+    # the stage prompts never need the web. Removing WebSearch/WebFetch
+    # closes the injection-driven exfiltration path.
 
     options = _build_options(
         system_prompt, model=model,
